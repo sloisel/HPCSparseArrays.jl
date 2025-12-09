@@ -1,0 +1,11 @@
+*.jl.cov
+*.jl.*.cov
+*.jl.mem
+[Dd]eps/
+Plots/
+*.DS_Store
+.DS_Store
+.vscode/
+
+# Julia
+Manifest.toml
