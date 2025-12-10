@@ -1012,8 +1012,10 @@ function VectorPlan(A::SparseMatrixMPI{T}, x::VectorMPI{T}) where T
     needed_from = [Tuple{Int,Int}[] for _ in 1:nranks]
     for (dst_idx, global_idx) in enumerate(col_indices)
         owner = searchsortedlast(x.partition, global_idx) - 1
-        # Clamp owner to valid range [0, nranks-1] to handle edge cases
-        owner = clamp(owner, 0, nranks - 1)
+        # Clamp to handle edge case where index equals last partition boundary
+        if owner >= nranks
+            owner = nranks - 1
+        end
         push!(needed_from[owner+1], (global_idx, dst_idx))
     end
 
@@ -1119,8 +1121,10 @@ function VectorPlan(target_partition::Vector{Int}, source::VectorMPI{T}) where T
     needed_from = [Tuple{Int,Int}[] for _ in 1:nranks]
     for (dst_idx, global_idx) in enumerate(col_indices)
         owner = searchsortedlast(source.partition, global_idx) - 1
-        # Clamp owner to valid range [0, nranks-1] to handle edge cases
-        owner = clamp(owner, 0, nranks - 1)
+        # Clamp to handle edge case where index equals last partition boundary
+        if owner >= nranks
+            owner = nranks - 1
+        end
         push!(needed_from[owner+1], (global_idx, dst_idx))
     end
 

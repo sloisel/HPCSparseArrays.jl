@@ -305,7 +305,12 @@ end
     custom_partition = [1, 3, 6, 9, 13]
     v_hash = LinearAlgebraMPI.compute_partition_hash(custom_partition)
     local_v_range = custom_partition[rank+1]:(custom_partition[rank+2]-1)
-    vdist = VectorMPI{Float64}(v_hash, custom_partition, v_global[local_v_range])
+    vdist = VectorMPI{Float64}(v_hash, copy(custom_partition), v_global[local_v_range])
+
+    # Debug output
+    println("Rank $rank: udist.partition=$(udist.partition), vdist.partition=$(vdist.partition)")
+    println("Rank $rank: udist.v length=$(length(udist.v)), vdist.v length=$(length(vdist.v))")
+    flush(stdout)
 
     # Verify partitions are different
     @test udist.partition != vdist.partition
