@@ -1280,3 +1280,567 @@ function Base.:*(A::SparseMatrixMPI{T}, Bt::TransposedSparseMatrixMPI{T}) where 
     B_transposed = execute_plan!(plan, B)
     return A * B_transposed
 end
+
+# ============================================================================
+# Extended SparseMatrixCSC API - Structural Queries
+# ============================================================================
+
+"""
+    nnz(A::SparseMatrixMPI)
+
+Return the total number of stored entries in the distributed sparse matrix.
+Uses MPI.Allreduce to sum local counts across all ranks.
+"""
+function nnz(A::SparseMatrixMPI)
+    comm = MPI.COMM_WORLD
+    local_nnz = length(A.AT.nzval)
+    return MPI.Allreduce(local_nnz, MPI.SUM, comm)
+end
+
+"""
+    issparse(::SparseMatrixMPI)
+
+Return `true` (SparseMatrixMPI is always sparse).
+"""
+issparse(::SparseMatrixMPI) = true
+
+# ============================================================================
+# Extended SparseMatrixCSC API - Copy
+# ============================================================================
+
+"""
+    Base.copy(A::SparseMatrixMPI{T}) where T
+
+Create a deep copy of the distributed sparse matrix.
+"""
+function Base.copy(A::SparseMatrixMPI{T}) where T
+    new_AT = SparseMatrixCSC(
+        A.AT.m, A.AT.n,
+        copy(A.AT.colptr),
+        copy(A.AT.rowval),
+        copy(A.AT.nzval)
+    )
+    return SparseMatrixMPI{T}(
+        A.structural_hash,
+        copy(A.row_partition),
+        copy(A.col_partition),
+        copy(A.col_indices),
+        new_AT
+    )
+end
+
+# ============================================================================
+# Extended SparseMatrixCSC API - Element-wise Operations
+# ============================================================================
+
+# Helper function for zero-preserving element-wise operations
+function _map_nzval(f, A::SparseMatrixMPI{T}) where T
+    new_nzval = f.(A.AT.nzval)
+    RT = eltype(new_nzval)
+    new_AT = SparseMatrixCSC(A.AT.m, A.AT.n, A.AT.colptr, A.AT.rowval, new_nzval)
+    return SparseMatrixMPI{RT}(A.structural_hash, A.row_partition, A.col_partition,
+        A.col_indices, new_AT)
+end
+
+"""
+    Base.abs(A::SparseMatrixMPI{T}) where T
+
+Return a new SparseMatrixMPI with absolute values of all stored elements.
+"""
+Base.abs(A::SparseMatrixMPI) = _map_nzval(abs, A)
+
+"""
+    Base.abs2(A::SparseMatrixMPI{T}) where T
+
+Return a new SparseMatrixMPI with squared absolute values of all stored elements.
+"""
+Base.abs2(A::SparseMatrixMPI) = _map_nzval(abs2, A)
+
+"""
+    Base.real(A::SparseMatrixMPI{T}) where T
+
+Return a new SparseMatrixMPI containing the real parts of all stored elements.
+"""
+Base.real(A::SparseMatrixMPI) = _map_nzval(real, A)
+
+"""
+    Base.imag(A::SparseMatrixMPI{T}) where T
+
+Return a new SparseMatrixMPI containing the imaginary parts of all stored elements.
+"""
+Base.imag(A::SparseMatrixMPI) = _map_nzval(imag, A)
+
+"""
+    Base.floor(A::SparseMatrixMPI)
+
+Return a new SparseMatrixMPI with floor applied to all stored elements.
+"""
+Base.floor(A::SparseMatrixMPI) = _map_nzval(floor, A)
+
+"""
+    Base.ceil(A::SparseMatrixMPI)
+
+Return a new SparseMatrixMPI with ceil applied to all stored elements.
+"""
+Base.ceil(A::SparseMatrixMPI) = _map_nzval(ceil, A)
+
+"""
+    Base.round(A::SparseMatrixMPI)
+
+Return a new SparseMatrixMPI with round applied to all stored elements.
+"""
+Base.round(A::SparseMatrixMPI) = _map_nzval(round, A)
+
+"""
+    Base.map(f, A::SparseMatrixMPI{T}) where T
+
+Apply function `f` to each stored (nonzero) element of A.
+Returns a new SparseMatrixMPI. The function `f` should be zero-preserving (f(0) ≈ 0)
+for the result to maintain proper sparse semantics.
+"""
+Base.map(f, A::SparseMatrixMPI) = _map_nzval(f, A)
+
+# ============================================================================
+# Extended SparseMatrixCSC API - Reductions
+# ============================================================================
+
+"""
+    Base.sum(A::SparseMatrixMPI{T}; dims=nothing) where T
+
+Compute the sum of elements in the distributed sparse matrix.
+
+- `dims=nothing` (default): Sum all stored elements
+- `dims=1`: Sum over rows, returns a VectorMPI of length n (column sums)
+- `dims=2`: Sum over columns, returns a VectorMPI of length m (row sums)
+
+Note: When dims=nothing, only stored (nonzero) values contribute to the sum.
+"""
+function Base.sum(A::SparseMatrixMPI{T}; dims=nothing) where T
+    comm = MPI.COMM_WORLD
+    rank = MPI.Comm_rank(comm)
+    nranks = MPI.Comm_size(comm)
+
+    m, n = size(A)
+
+    if dims === nothing
+        # Sum all elements
+        local_sum = sum(A.AT.nzval; init=zero(T))
+        return MPI.Allreduce(local_sum, MPI.SUM, comm)
+    elseif dims == 1
+        # Sum over rows: result is length-n vector (column sums)
+        local_col_sums = zeros(T, n)
+        for (idx, col) in enumerate(A.AT.rowval)
+            local_col_sums[col] += A.AT.nzval[idx]
+        end
+        global_col_sums = MPI.Allreduce(local_col_sums, MPI.SUM, comm)
+        return VectorMPI(global_col_sums, comm)
+    elseif dims == 2
+        # Sum over columns: result is length-m vector (row sums)
+        local_nrows = size(A.AT, 2)
+        local_row_sums = zeros(T, local_nrows)
+
+        for local_col in 1:local_nrows
+            for nz_idx in A.AT.colptr[local_col]:(A.AT.colptr[local_col+1]-1)
+                local_row_sums[local_col] += A.AT.nzval[nz_idx]
+            end
+        end
+
+        # Result has A's row partition
+        hash = compute_partition_hash(A.row_partition)
+        return VectorMPI{T}(hash, copy(A.row_partition), local_row_sums)
+    else
+        throw(ArgumentError("dims must be nothing, 1, or 2"))
+    end
+end
+
+"""
+    Base.maximum(A::SparseMatrixMPI{T}) where T
+
+Compute the maximum stored element of the distributed sparse matrix.
+Warning: Only considers stored values. If the matrix has implicit zeros and all
+stored values are negative, the true maximum (zero) may not be returned.
+"""
+function Base.maximum(A::SparseMatrixMPI{T}) where T
+    comm = MPI.COMM_WORLD
+    local_max = isempty(A.AT.nzval) ? typemin(real(T)) : maximum(real, A.AT.nzval)
+    return MPI.Allreduce(local_max, MPI.MAX, comm)
+end
+
+"""
+    Base.minimum(A::SparseMatrixMPI{T}) where T
+
+Compute the minimum stored element of the distributed sparse matrix.
+Warning: Only considers stored values. If the matrix has implicit zeros and all
+stored values are positive, the true minimum (zero) may not be returned.
+"""
+function Base.minimum(A::SparseMatrixMPI{T}) where T
+    comm = MPI.COMM_WORLD
+    local_min = isempty(A.AT.nzval) ? typemax(real(T)) : minimum(real, A.AT.nzval)
+    return MPI.Allreduce(local_min, MPI.MIN, comm)
+end
+
+"""
+    mean(A::SparseMatrixMPI{T}) where T
+
+Compute the mean of all elements (including implicit zeros) in the distributed sparse matrix.
+"""
+function mean(A::SparseMatrixMPI{T}) where T
+    m, n = size(A)
+    total_elements = m * n
+    return sum(A) / total_elements
+end
+
+"""
+    tr(A::SparseMatrixMPI{T}) where T
+
+Compute the trace (sum of main diagonal elements) of A.
+"""
+function tr(A::SparseMatrixMPI{T}) where T
+    comm = MPI.COMM_WORLD
+    rank = MPI.Comm_rank(comm)
+
+    m, n = size(A)
+    my_row_start = A.row_partition[rank+1]
+    my_row_end = A.row_partition[rank+2] - 1
+
+    local_trace = zero(T)
+    for local_row in 1:(my_row_end - my_row_start + 1)
+        global_row = my_row_start + local_row - 1
+        # Diagonal element is at (global_row, global_row) if within bounds
+        if global_row <= n
+            # Search for column global_row in A.AT[:, local_row]
+            for nz_idx in A.AT.colptr[local_row]:(A.AT.colptr[local_row+1]-1)
+                if A.AT.rowval[nz_idx] == global_row
+                    local_trace += A.AT.nzval[nz_idx]
+                    break
+                end
+            end
+        end
+    end
+
+    return MPI.Allreduce(local_trace, MPI.SUM, comm)
+end
+
+# ============================================================================
+# Extended SparseMatrixCSC API - Structural Operations
+# ============================================================================
+
+"""
+    dropzeros(A::SparseMatrixMPI{T}) where T
+
+Return a copy of A with explicitly stored zeros removed.
+"""
+function dropzeros(A::SparseMatrixMPI{T}) where T
+    comm = MPI.COMM_WORLD
+
+    # Use SparseArrays.dropzeros on local AT
+    new_AT = dropzeros(A.AT)
+
+    # Recompute col_indices since structure may have changed
+    new_col_indices = isempty(new_AT.rowval) ? Int[] : unique(sort(new_AT.rowval))
+
+    # Recompute structural hash since structure changed
+    structural_hash = compute_structural_hash(A.row_partition, new_col_indices, new_AT, comm)
+
+    return SparseMatrixMPI{T}(structural_hash, copy(A.row_partition), copy(A.col_partition),
+        new_col_indices, new_AT)
+end
+
+# ============================================================================
+# Extended SparseMatrixCSC API - Diagonal and Triangular Operations
+# ============================================================================
+
+"""
+    diag(A::SparseMatrixMPI{T}, k::Integer=0) where T
+
+Extract the k-th diagonal of A as a VectorMPI.
+- k=0: main diagonal
+- k>0: k-th superdiagonal
+- k<0: |k|-th subdiagonal
+
+The result is distributed across ranks with an even partition.
+"""
+function diag(A::SparseMatrixMPI{T}, k::Integer=0) where T
+    comm = MPI.COMM_WORLD
+    rank = MPI.Comm_rank(comm)
+    nranks = MPI.Comm_size(comm)
+
+    m, n = size(A)
+
+    # Compute diagonal length
+    if k >= 0
+        diag_len = min(m, n - k)
+        row_offset = 0
+        col_offset = k
+    else
+        diag_len = min(m + k, n)
+        row_offset = -k
+        col_offset = 0
+    end
+
+    if diag_len <= 0
+        # Empty diagonal
+        partition = ones(Int, nranks + 1)
+        hash = compute_partition_hash(partition)
+        return VectorMPI{T}(hash, partition, T[])
+    end
+
+    # Each rank extracts diagonal elements from its rows
+    my_row_start = A.row_partition[rank+1]
+    my_row_end = A.row_partition[rank+2] - 1
+
+    # Build full diagonal using Allreduce (each rank contributes its portion)
+    full_diag = zeros(T, diag_len)
+    for d in 1:diag_len
+        global_row = row_offset + d
+        global_col = col_offset + d
+
+        if global_row >= my_row_start && global_row <= my_row_end
+            local_row = global_row - my_row_start + 1
+            # Search for column global_col in A.AT[:, local_row]
+            for nz_idx in A.AT.colptr[local_row]:(A.AT.colptr[local_row+1]-1)
+                if A.AT.rowval[nz_idx] == global_col
+                    full_diag[d] = A.AT.nzval[nz_idx]
+                    break
+                end
+            end
+        end
+    end
+
+    # Allreduce combines contributions (only one rank has each element)
+    global_diag = MPI.Allreduce(full_diag, MPI.SUM, comm)
+
+    # Create VectorMPI from the global diagonal
+    return VectorMPI(global_diag, comm)
+end
+
+"""
+    triu(A::SparseMatrixMPI{T}, k::Integer=0) where T
+
+Return the upper triangular part of A, starting from the k-th diagonal.
+- k=0: include main diagonal
+- k>0: exclude k-1 diagonals below the k-th superdiagonal
+- k<0: include |k| subdiagonals
+"""
+function triu(A::SparseMatrixMPI{T}, k::Integer=0) where T
+    comm = MPI.COMM_WORLD
+    rank = MPI.Comm_rank(comm)
+
+    my_row_start = A.row_partition[rank+1]
+
+    # Build new sparse structure keeping only upper triangular entries
+    # Entry (i, j) is kept if j >= i + k, i.e., j - i >= k
+
+    new_colptr = Vector{Int}(undef, size(A.AT, 2) + 1)
+    new_colptr[1] = 1
+
+    # First pass: count entries per column
+    nnz_per_col = zeros(Int, size(A.AT, 2))
+    for local_col in 1:size(A.AT, 2)
+        global_row = my_row_start + local_col - 1
+        for nz_idx in A.AT.colptr[local_col]:(A.AT.colptr[local_col+1]-1)
+            j = A.AT.rowval[nz_idx]  # column in original A
+            # Keep if j >= global_row + k
+            if j >= global_row + k
+                nnz_per_col[local_col] += 1
+            end
+        end
+    end
+
+    # Build colptr
+    for col in 1:length(nnz_per_col)
+        new_colptr[col+1] = new_colptr[col] + nnz_per_col[col]
+    end
+
+    total_nnz = new_colptr[end] - 1
+    new_rowval = Vector{Int}(undef, total_nnz)
+    new_nzval = Vector{T}(undef, total_nnz)
+
+    # Second pass: fill entries
+    idx = 1
+    for local_col in 1:size(A.AT, 2)
+        global_row = my_row_start + local_col - 1
+        for nz_idx in A.AT.colptr[local_col]:(A.AT.colptr[local_col+1]-1)
+            j = A.AT.rowval[nz_idx]
+            if j >= global_row + k
+                new_rowval[idx] = j
+                new_nzval[idx] = A.AT.nzval[nz_idx]
+                idx += 1
+            end
+        end
+    end
+
+    new_AT = SparseMatrixCSC(A.AT.m, A.AT.n, new_colptr, new_rowval, new_nzval)
+    new_col_indices = isempty(new_rowval) ? Int[] : unique(sort(new_rowval))
+
+    structural_hash = compute_structural_hash(A.row_partition, new_col_indices, new_AT, comm)
+
+    return SparseMatrixMPI{T}(structural_hash, copy(A.row_partition), copy(A.col_partition),
+        new_col_indices, new_AT)
+end
+
+"""
+    tril(A::SparseMatrixMPI{T}, k::Integer=0) where T
+
+Return the lower triangular part of A, starting from the k-th diagonal.
+- k=0: include main diagonal
+- k>0: include k superdiagonals
+- k<0: exclude |k|-1 diagonals above the |k|-th subdiagonal
+"""
+function tril(A::SparseMatrixMPI{T}, k::Integer=0) where T
+    comm = MPI.COMM_WORLD
+    rank = MPI.Comm_rank(comm)
+
+    my_row_start = A.row_partition[rank+1]
+
+    # Keep entry (i, j) if j <= i + k
+
+    new_colptr = Vector{Int}(undef, size(A.AT, 2) + 1)
+    new_colptr[1] = 1
+
+    nnz_per_col = zeros(Int, size(A.AT, 2))
+    for local_col in 1:size(A.AT, 2)
+        global_row = my_row_start + local_col - 1
+        for nz_idx in A.AT.colptr[local_col]:(A.AT.colptr[local_col+1]-1)
+            j = A.AT.rowval[nz_idx]
+            if j <= global_row + k
+                nnz_per_col[local_col] += 1
+            end
+        end
+    end
+
+    for col in 1:length(nnz_per_col)
+        new_colptr[col+1] = new_colptr[col] + nnz_per_col[col]
+    end
+
+    total_nnz = new_colptr[end] - 1
+    new_rowval = Vector{Int}(undef, total_nnz)
+    new_nzval = Vector{T}(undef, total_nnz)
+
+    idx = 1
+    for local_col in 1:size(A.AT, 2)
+        global_row = my_row_start + local_col - 1
+        for nz_idx in A.AT.colptr[local_col]:(A.AT.colptr[local_col+1]-1)
+            j = A.AT.rowval[nz_idx]
+            if j <= global_row + k
+                new_rowval[idx] = j
+                new_nzval[idx] = A.AT.nzval[nz_idx]
+                idx += 1
+            end
+        end
+    end
+
+    new_AT = SparseMatrixCSC(A.AT.m, A.AT.n, new_colptr, new_rowval, new_nzval)
+    new_col_indices = isempty(new_rowval) ? Int[] : unique(sort(new_rowval))
+
+    structural_hash = compute_structural_hash(A.row_partition, new_col_indices, new_AT, comm)
+
+    return SparseMatrixMPI{T}(structural_hash, copy(A.row_partition), copy(A.col_partition),
+        new_col_indices, new_AT)
+end
+
+# ============================================================================
+# Extended SparseMatrixCSC API - Diagonal Matrix Construction
+# ============================================================================
+
+"""
+    _gather_vectormpi(v::VectorMPI{T}) where T
+
+Gather a distributed VectorMPI to a full vector on all ranks.
+"""
+function _gather_vectormpi(v::VectorMPI{T}) where T
+    comm = MPI.COMM_WORLD
+    nranks = MPI.Comm_size(comm)
+
+    # Get counts for each rank
+    counts = Int32[v.partition[r+2] - v.partition[r+1] for r in 0:nranks-1]
+
+    # Use Allgatherv to gather the full vector
+    full_v = Vector{T}(undef, length(v))
+    MPI.Allgatherv!(v.v, MPI.VBuffer(full_v, counts), comm)
+
+    return full_v
+end
+
+"""
+    spdiagm(kv::Pair{<:Integer, <:VectorMPI}...)
+
+Construct a sparse diagonal SparseMatrixMPI from pairs of diagonals and VectorMPI vectors.
+
+# Example
+```julia
+v1 = VectorMPI([1.0, 2.0, 3.0])
+v2 = VectorMPI([4.0, 5.0])
+A = spdiagm(0 => v1, 1 => v2)  # Main diagonal and first superdiagonal
+```
+"""
+function spdiagm(kv::Pair{<:Integer, <:VectorMPI}...)
+    comm = MPI.COMM_WORLD
+
+    # Gather all VectorMPI to full vectors
+    gathered_kv = map(kv) do (k, v)
+        k => _gather_vectormpi(v)
+    end
+
+    # Call standard spdiagm to create global sparse matrix
+    A_global = SparseArrays.spdiagm(gathered_kv...)
+
+    # Create SparseMatrixMPI from the global matrix
+    return SparseMatrixMPI{eltype(A_global)}(A_global)
+end
+
+"""
+    spdiagm(m::Integer, n::Integer, kv::Pair{<:Integer, <:VectorMPI}...)
+
+Construct an m×n sparse diagonal SparseMatrixMPI from pairs of diagonals and VectorMPI vectors.
+
+# Example
+```julia
+v = VectorMPI([1.0, 2.0])
+A = spdiagm(4, 4, 0 => v)  # 4×4 matrix with [1,2] on main diagonal
+```
+"""
+function spdiagm(m::Integer, n::Integer, kv::Pair{<:Integer, <:VectorMPI}...)
+    comm = MPI.COMM_WORLD
+
+    # Gather all VectorMPI to full vectors
+    gathered_kv = map(kv) do (k, v)
+        k => _gather_vectormpi(v)
+    end
+
+    # Call standard spdiagm to create global sparse matrix
+    A_global = SparseArrays.spdiagm(m, n, gathered_kv...)
+
+    # Create SparseMatrixMPI from the global matrix
+    return SparseMatrixMPI{eltype(A_global)}(A_global)
+end
+
+"""
+    spdiagm(v::VectorMPI)
+
+Construct a sparse diagonal SparseMatrixMPI with VectorMPI v on the main diagonal.
+
+# Example
+```julia
+v = VectorMPI([1.0, 2.0, 3.0])
+A = spdiagm(v)  # 3×3 diagonal matrix
+```
+"""
+function spdiagm(v::VectorMPI)
+    return spdiagm(0 => v)
+end
+
+"""
+    spdiagm(m::Integer, n::Integer, v::VectorMPI)
+
+Construct an m×n sparse diagonal SparseMatrixMPI with VectorMPI v on the main diagonal.
+
+# Example
+```julia
+v = VectorMPI([1.0, 2.0])
+A = spdiagm(4, 4, v)  # 4×4 matrix with [1,2,0,0] on main diagonal
+```
+"""
+function spdiagm(m::Integer, n::Integer, v::VectorMPI)
+    return spdiagm(m, n, 0 => v)
+end

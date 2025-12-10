@@ -123,9 +123,8 @@ Aconj = conj(Adist)
 # Adjoint (conjugate transpose) - returns lazy wrapper
 Aadj = Adist'
 
-# Materialize adjoint
-plan = TransposePlan(Aadj.parent)
-Aadj_mat = execute_plan!(plan, Aadj.parent)
+# Using adjoint in multiplication (materializes automatically)
+result = Aadj * Bdist
 
 if rank == 0
     println("Complex matrix operations completed")
@@ -185,7 +184,7 @@ MPI.Finalize()
 
 ### Lazy Transpose
 
-The lazy transpose creates a wrapper without actually transposing the data:
+The `transpose` function creates a lazy wrapper without transposing the data. This is efficient because the actual transpose is only computed when needed:
 
 ```julia
 using MPI
@@ -212,64 +211,17 @@ Cdist = SparseMatrixMPI{Float64}(C)
 Ddist = SparseMatrixMPI{Float64}(D)
 
 # transpose(C) * transpose(D) = transpose(D * C)
-# This is computed lazily
-result_lazy = transpose(Cdist) * transpose(Ddist)
-
-# The result is wrapped in Transpose
-# Materialize to get the actual matrix
-plan = TransposePlan(result_lazy.parent)
-result_dist = execute_plan!(plan, result_lazy.parent)
-
-# Verify
-ref = sparse((D * C)')
-ref_dist = SparseMatrixMPI{Float64}(ref)
-err = norm(result_dist - ref_dist, Inf)
+# This is computed efficiently without explicitly transposing
+result = transpose(Cdist) * transpose(Ddist)
 
 if rank == 0
-    println("Lazy transpose multiplication error: $err")
+    println("Lazy transpose multiplication completed")
 end
 
 MPI.Finalize()
 ```
 
-### Eager Transpose
-
-When you need the transposed data immediately:
-
-```julia
-using MPI
-MPI.Init()
-
-using LinearAlgebraMPI
-using SparseArrays
-
-rank = MPI.Comm_rank(MPI.COMM_WORLD)
-
-m, n = 8, 6
-I = [1, 2, 3, 4, 5, 6, 7, 8, 1, 3, 5, 7]
-J = [1, 2, 3, 4, 5, 6, 1, 2, 3, 4, 5, 6]
-V = Float64.(1:length(I))
-A = sparse(I, J, V, m, n)
-
-Adist = SparseMatrixMPI{Float64}(A)
-
-# Create transpose plan
-plan = TransposePlan(Adist)
-
-# Execute to get transposed matrix
-At_dist = execute_plan!(plan, Adist)
-
-# At_dist is now an SparseMatrixMPI representing A^T
-@assert size(At_dist) == (n, m)
-
-if rank == 0
-    println("Transpose size: $(size(At_dist))")
-end
-
-MPI.Finalize()
-```
-
-### Mixed Transpose Multiplication
+### Transpose in Multiplication
 
 ```julia
 using MPI
@@ -470,6 +422,105 @@ clear_plan_cache!()
 
 if rank == 0
     println("Cached multiplication completed")
+end
+
+MPI.Finalize()
+```
+
+## Dense Matrix Operations with mapslices
+
+The `mapslices` function applies a function to each row or column of a distributed dense matrix. This is useful for computing row-wise or column-wise statistics.
+
+### Row-wise Operations (dims=2)
+
+Row-wise operations are local - no MPI communication is needed since rows are already distributed:
+
+```julia
+using MPI
+MPI.Init()
+
+using LinearAlgebraMPI
+using LinearAlgebra
+
+rank = MPI.Comm_rank(MPI.COMM_WORLD)
+
+# Create a deterministic dense matrix (same on all ranks)
+m, n = 100, 10
+A_global = Float64.([i + 0.1*j for i in 1:m, j in 1:n])
+
+# Distribute
+Adist = MatrixMPI(A_global)
+
+# Compute row statistics: for each row, compute [norm, max, sum]
+# This transforms 100×10 matrix to 100×3 matrix
+row_stats = mapslices(x -> [norm(x), maximum(x), sum(x)], Adist; dims=2)
+
+if rank == 0
+    println("Row statistics shape: $(size(row_stats))")  # (100, 3)
+end
+
+MPI.Finalize()
+```
+
+### Column-wise Operations (dims=1)
+
+Column-wise operations require MPI communication to gather each full column:
+
+```julia
+using MPI
+MPI.Init()
+
+using LinearAlgebraMPI
+using LinearAlgebra
+
+rank = MPI.Comm_rank(MPI.COMM_WORLD)
+
+# Create a deterministic dense matrix
+m, n = 100, 10
+A_global = Float64.([i + 0.1*j for i in 1:m, j in 1:n])
+
+Adist = MatrixMPI(A_global)
+
+# Compute column statistics: for each column, compute [norm, max]
+# This transforms 100×10 matrix to 2×10 matrix
+col_stats = mapslices(x -> [norm(x), maximum(x)], Adist; dims=1)
+
+if rank == 0
+    println("Column statistics shape: $(size(col_stats))")  # (2, 10)
+end
+
+MPI.Finalize()
+```
+
+### Use Case: Replacing vcat(f.(eachrow(A))...)
+
+The standard Julia pattern `vcat(f.(eachrow(A))...)` doesn't work with distributed matrices because the type information is lost after broadcasting. Use `mapslices` instead:
+
+```julia
+using MPI
+MPI.Init()
+
+using LinearAlgebraMPI
+using LinearAlgebra
+
+rank = MPI.Comm_rank(MPI.COMM_WORLD)
+
+# Standard Julia pattern (for comparison):
+# A = randn(5, 2)
+# f(x) = transpose([norm(x), maximum(x)])
+# B = vcat(f.(eachrow(A))...)
+
+# MPI-compatible equivalent:
+A_global = Float64.([i + 0.1*j for i in 1:100, j in 1:10])
+Adist = MatrixMPI(A_global)
+
+# Use mapslices with dims=2 to apply function to each row
+# The function returns a vector, which becomes a row in the result
+g(x) = [norm(x), maximum(x)]
+Bdist = mapslices(g, Adist; dims=2)
+
+if rank == 0
+    println("Result: $(size(Bdist))")  # (100, 2)
 end
 
 MPI.Finalize()

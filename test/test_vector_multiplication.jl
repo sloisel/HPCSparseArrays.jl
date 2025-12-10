@@ -9,295 +9,307 @@ using SparseArrays
 using LinearAlgebra
 using Test
 
+include(joinpath(@__DIR__, "mpi_test_harness.jl"))
+using .MPITestHarness: QuietTestSet
+
 comm = MPI.COMM_WORLD
 rank = MPI.Comm_rank(comm)
 nranks = MPI.Comm_size(comm)
 
 const TOL = 1e-12
 
-@testset "Matrix-Vector Multiplication" begin
-    # Create deterministic test matrix (same on all ranks)
-    n = 8
-    # Matrix A: tridiagonal
-    I_A = [1:n; 1:n-1; 2:n]
-    J_A = [1:n; 2:n; 1:n-1]
-    V_A = [2.0*ones(Float64, n); -0.5*ones(n-1); -0.5*ones(n-1)]
-    A = sparse(I_A, J_A, V_A, n, n)
+ts = @testset QuietTestSet "Matrix-Vector Multiplication" begin
 
-    # Vector x: simple sequence
-    x_global = collect(1.0:n)
-
-    # Create distributed versions
-    Adist = SparseMatrixMPI{Float64}(A)
-    xdist = VectorMPI(x_global)
-
-    # Compute distributed product
-    ydist = Adist * xdist
-
-    # Reference result
-    y_ref = A * x_global
-
-    # Check local portion matches
-    my_start = Adist.row_partition[rank+1]
-    my_end = Adist.row_partition[rank+2] - 1
-    local_ref = y_ref[my_start:my_end]
-
-    err = maximum(abs.(ydist.v .- local_ref))
-    @test err < TOL
-
-    if rank == 0
-        println("  ✓ Matrix-vector multiplication: error = $err")
-    end
+if rank == 0
+    println("[test] Matrix-vector multiplication")
+    flush(stdout)
 end
 
-@testset "Matrix-Vector Multiplication In-Place" begin
-    n = 8
-    I_A = [1:n; 1:n-1; 2:n]
-    J_A = [1:n; 2:n; 1:n-1]
-    V_A = [2.0*ones(Float64, n); -0.5*ones(n-1); -0.5*ones(n-1)]
-    A = sparse(I_A, J_A, V_A, n, n)
+# Create deterministic test matrix (same on all ranks)
+n = 8
+# Matrix A: tridiagonal
+I_A = [1:n; 1:n-1; 2:n]
+J_A = [1:n; 2:n; 1:n-1]
+V_A = [2.0*ones(Float64, n); -0.5*ones(n-1); -0.5*ones(n-1)]
+A = sparse(I_A, J_A, V_A, n, n)
 
-    x_global = collect(1.0:n)
+# Vector x: simple sequence
+x_global = collect(1.0:n)
 
-    Adist = SparseMatrixMPI{Float64}(A)
-    xdist = VectorMPI(x_global)
+# Create distributed versions
+Adist = SparseMatrixMPI{Float64}(A)
+xdist = VectorMPI(x_global)
 
-    # Create output vector with matching partition
-    ydist = VectorMPI(zeros(n))
+# Compute distributed product
+ydist = Adist * xdist
 
-    # In-place multiplication
-    LinearAlgebra.mul!(ydist, Adist, xdist)
+# Reference result
+y_ref = A * x_global
 
-    # Reference result
-    y_ref = A * x_global
+# Check local portion matches
+my_start = Adist.row_partition[rank+1]
+my_end = Adist.row_partition[rank+2] - 1
+local_ref = y_ref[my_start:my_end]
 
-    my_start = Adist.row_partition[rank+1]
-    my_end = Adist.row_partition[rank+2] - 1
-    local_ref = y_ref[my_start:my_end]
+err = maximum(abs.(ydist.v .- local_ref))
+@test err < TOL
 
-    err = maximum(abs.(ydist.v .- local_ref))
-    @test err < TOL
+MPI.Barrier(comm)
 
-    if rank == 0
-        println("  ✓ Matrix-vector multiplication (in-place): error = $err")
-    end
+if rank == 0
+    println("[test] Matrix-vector multiplication (in-place)")
+    flush(stdout)
 end
 
-@testset "Matrix-Vector Multiplication with ComplexF64" begin
-    n = 8
-    I_A = [1:n; 1:n-1; 2:n]
-    J_A = [1:n; 2:n; 1:n-1]
-    V_A = ComplexF64.([2.0*ones(n); -0.5*ones(n-1); -0.5*ones(n-1)]) .+
-          im .* ComplexF64.([0.1*ones(n); 0.2*ones(n-1); -0.2*ones(n-1)])
-    A = sparse(I_A, J_A, V_A, n, n)
+n = 8
+I_A = [1:n; 1:n-1; 2:n]
+J_A = [1:n; 2:n; 1:n-1]
+V_A = [2.0*ones(Float64, n); -0.5*ones(n-1); -0.5*ones(n-1)]
+A = sparse(I_A, J_A, V_A, n, n)
 
-    x_global = ComplexF64.(1:n) .+ im .* ComplexF64.(n:-1:1)
+x_global = collect(1.0:n)
 
-    Adist = SparseMatrixMPI{ComplexF64}(A)
-    xdist = VectorMPI(x_global)
+Adist = SparseMatrixMPI{Float64}(A)
+xdist = VectorMPI(x_global)
 
-    ydist = Adist * xdist
-    y_ref = A * x_global
+# Create output vector with matching partition
+ydist = VectorMPI(zeros(n))
 
-    my_start = Adist.row_partition[rank+1]
-    my_end = Adist.row_partition[rank+2] - 1
-    local_ref = y_ref[my_start:my_end]
+# In-place multiplication
+LinearAlgebra.mul!(ydist, Adist, xdist)
 
-    err = maximum(abs.(ydist.v .- local_ref))
-    @test err < TOL
+# Reference result
+y_ref = A * x_global
 
-    if rank == 0
-        println("  ✓ Matrix-vector multiplication with ComplexF64: error = $err")
-    end
+my_start = Adist.row_partition[rank+1]
+my_end = Adist.row_partition[rank+2] - 1
+local_ref = y_ref[my_start:my_end]
+
+err = maximum(abs.(ydist.v .- local_ref))
+@test err < TOL
+
+MPI.Barrier(comm)
+
+if rank == 0
+    println("[test] Matrix-vector multiplication with ComplexF64")
+    flush(stdout)
 end
 
-@testset "Non-square Matrix-Vector Multiplication" begin
-    # A is 6x8, x is length 8, y should be length 6
-    m, n = 6, 8
-    I_A = [1, 2, 3, 4, 5, 6, 1, 2, 3, 4]
-    J_A = [1, 2, 3, 4, 5, 6, 7, 8, 1, 2]
-    V_A = Float64.(1:length(I_A))
-    A = sparse(I_A, J_A, V_A, m, n)
+n = 8
+I_A = [1:n; 1:n-1; 2:n]
+J_A = [1:n; 2:n; 1:n-1]
+V_A = ComplexF64.([2.0*ones(n); -0.5*ones(n-1); -0.5*ones(n-1)]) .+
+      im .* ComplexF64.([0.1*ones(n); 0.2*ones(n-1); -0.2*ones(n-1)])
+A = sparse(I_A, J_A, V_A, n, n)
 
-    x_global = collect(1.0:n)
+x_global = ComplexF64.(1:n) .+ im .* ComplexF64.(n:-1:1)
 
-    Adist = SparseMatrixMPI{Float64}(A)
-    xdist = VectorMPI(x_global)
+Adist = SparseMatrixMPI{ComplexF64}(A)
+xdist = VectorMPI(x_global)
 
-    ydist = Adist * xdist
-    y_ref = A * x_global
+ydist = Adist * xdist
+y_ref = A * x_global
 
-    my_start = Adist.row_partition[rank+1]
-    my_end = Adist.row_partition[rank+2] - 1
-    local_ref = y_ref[my_start:my_end]
+my_start = Adist.row_partition[rank+1]
+my_end = Adist.row_partition[rank+2] - 1
+local_ref = y_ref[my_start:my_end]
 
-    err = maximum(abs.(ydist.v .- local_ref); init=0.0)
-    @test err < TOL
+err = maximum(abs.(ydist.v .- local_ref))
+@test err < TOL
 
-    if rank == 0
-        println("  ✓ Non-square matrix-vector multiplication: error = $err")
-    end
+MPI.Barrier(comm)
+
+if rank == 0
+    println("[test] Non-square matrix-vector multiplication")
+    flush(stdout)
 end
 
-@testset "Vector Transpose and Adjoint" begin
-    n = 8
-    I_A = [1:n; 1:n-1; 2:n]
-    J_A = [1:n; 2:n; 1:n-1]
-    V_A = ComplexF64.([2.0*ones(n); -0.5*ones(n-1); -0.5*ones(n-1)]) .+
-          im .* ComplexF64.([0.1*ones(n); 0.2*ones(n-1); -0.2*ones(n-1)])
-    A = sparse(I_A, J_A, V_A, n, n)
+# A is 6x8, x is length 8, y should be length 6
+m, n = 6, 8
+I_A = [1, 2, 3, 4, 5, 6, 1, 2, 3, 4]
+J_A = [1, 2, 3, 4, 5, 6, 7, 8, 1, 2]
+V_A = Float64.(1:length(I_A))
+A = sparse(I_A, J_A, V_A, m, n)
 
-    x_global = ComplexF64.(1:n) .+ im .* ComplexF64.(n:-1:1)
+x_global = collect(1.0:n)
 
-    Adist = SparseMatrixMPI{ComplexF64}(A)
-    xdist = VectorMPI(x_global)
+Adist = SparseMatrixMPI{Float64}(A)
+xdist = VectorMPI(x_global)
 
-    # Test conj(v)
-    xconj = conj(xdist)
-    xconj_ref = conj.(x_global)
-    my_start = xdist.partition[rank+1]
-    my_end = xdist.partition[rank+2] - 1
-    err_conj = maximum(abs.(xconj.v .- xconj_ref[my_start:my_end]))
-    @test err_conj < TOL
+ydist = Adist * xdist
+y_ref = A * x_global
 
-    # Test transpose(v) * A = transpose(transpose(A) * v)
-    # This returns a transposed vector
-    yt = transpose(xdist) * Adist
-    y_ref = transpose(transpose(A) * x_global)
+my_start = Adist.row_partition[rank+1]
+my_end = Adist.row_partition[rank+2] - 1
+local_ref = y_ref[my_start:my_end]
 
-    # yt is Transpose{T, VectorMPI{T}}, so yt.parent.v contains the local values
-    # The result should have A's col_partition
-    my_col_start = Adist.col_partition[rank+1]
-    my_col_end = Adist.col_partition[rank+2] - 1
-    local_ref = collect(y_ref)[my_col_start:my_col_end]
-    err_transpose = maximum(abs.(yt.parent.v .- local_ref))
-    @test err_transpose < TOL
+err = maximum(abs.(ydist.v .- local_ref); init=0.0)
+@test err < TOL
 
-    # Test adjoint: v' * A = transpose(conj(v)) * A = transpose(transpose(A) * conj(v))
-    yt_adj = xdist' * Adist
-    y_adj_ref = x_global' * A  # This is a row vector
+MPI.Barrier(comm)
 
-    local_adj_ref = collect(y_adj_ref)[my_col_start:my_col_end]
-    err_adjoint = maximum(abs.(yt_adj.parent.v .- local_adj_ref))
-    @test err_adjoint < TOL
-
-    if rank == 0
-        println("  ✓ Vector transpose and adjoint: errors = $err_conj, $err_transpose, $err_adjoint")
-    end
+if rank == 0
+    println("[test] Vector transpose and adjoint")
+    flush(stdout)
 end
 
-@testset "Vector Norms" begin
-    n = 10
-    x_global = collect(1.0:n)
-    xdist = VectorMPI(x_global)
+n = 8
+I_A = [1:n; 1:n-1; 2:n]
+J_A = [1:n; 2:n; 1:n-1]
+V_A = ComplexF64.([2.0*ones(n); -0.5*ones(n-1); -0.5*ones(n-1)]) .+
+      im .* ComplexF64.([0.1*ones(n); 0.2*ones(n-1); -0.2*ones(n-1)])
+A = sparse(I_A, J_A, V_A, n, n)
 
-    # 2-norm
-    norm2 = norm(xdist)
-    norm2_ref = norm(x_global)
-    @test abs(norm2 - norm2_ref) < TOL
+x_global = ComplexF64.(1:n) .+ im .* ComplexF64.(n:-1:1)
 
-    # 1-norm
-    norm1 = norm(xdist, 1)
-    norm1_ref = norm(x_global, 1)
-    @test abs(norm1 - norm1_ref) < TOL
+Adist = SparseMatrixMPI{ComplexF64}(A)
+xdist = VectorMPI(x_global)
 
-    # Inf-norm
-    norminf = norm(xdist, Inf)
-    norminf_ref = norm(x_global, Inf)
-    @test abs(norminf - norminf_ref) < TOL
+# Test conj(v)
+xconj = conj(xdist)
+xconj_ref = conj.(x_global)
+my_start = xdist.partition[rank+1]
+my_end = xdist.partition[rank+2] - 1
+err_conj = maximum(abs.(xconj.v .- xconj_ref[my_start:my_end]))
+@test err_conj < TOL
 
-    # 3-norm (general p)
-    norm3 = norm(xdist, 3)
-    norm3_ref = norm(x_global, 3)
-    @test abs(norm3 - norm3_ref) < TOL
+# Test transpose(v) * A = transpose(transpose(A) * v)
+# This returns a transposed vector
+yt = transpose(xdist) * Adist
+y_ref = transpose(transpose(A) * x_global)
 
-    # Complex vector norms
-    z_global = ComplexF64.(1:n) .+ im .* ComplexF64.(n:-1:1)
-    zdist = VectorMPI(z_global)
+# yt is Transpose{T, VectorMPI{T}}, so yt.parent.v contains the local values
+# The result should have A's col_partition
+my_col_start = Adist.col_partition[rank+1]
+my_col_end = Adist.col_partition[rank+2] - 1
+local_ref = collect(y_ref)[my_col_start:my_col_end]
+err_transpose = maximum(abs.(yt.parent.v .- local_ref))
+@test err_transpose < TOL
 
-    cnorm2 = norm(zdist)
-    cnorm2_ref = norm(z_global)
-    @test abs(cnorm2 - cnorm2_ref) < TOL
+# Test adjoint: v' * A = transpose(conj(v)) * A = transpose(transpose(A) * conj(v))
+yt_adj = xdist' * Adist
+y_adj_ref = x_global' * A  # This is a row vector
 
-    if rank == 0
-        println("  ✓ Vector norms: 2-norm=$norm2, 1-norm=$norm1, Inf-norm=$norminf")
-    end
+local_adj_ref = collect(y_adj_ref)[my_col_start:my_col_end]
+err_adjoint = maximum(abs.(yt_adj.parent.v .- local_adj_ref))
+@test err_adjoint < TOL
+
+MPI.Barrier(comm)
+
+if rank == 0
+    println("[test] Vector norms")
+    flush(stdout)
 end
 
-@testset "Vector Reductions" begin
-    n = 8
-    x_global = collect(1.0:n)
-    xdist = VectorMPI(x_global)
+n = 10
+x_global = collect(1.0:n)
+xdist = VectorMPI(x_global)
 
-    # sum
-    s = sum(xdist)
-    s_ref = sum(x_global)
-    @test abs(s - s_ref) < TOL
+# 2-norm
+norm2 = norm(xdist)
+norm2_ref = norm(x_global)
+@test abs(norm2 - norm2_ref) < TOL
 
-    # prod
-    p = prod(xdist)
-    p_ref = prod(x_global)
-    @test abs(p - p_ref) < TOL
+# 1-norm
+norm1 = norm(xdist, 1)
+norm1_ref = norm(x_global, 1)
+@test abs(norm1 - norm1_ref) < TOL
 
-    # maximum
-    mx = maximum(xdist)
-    mx_ref = maximum(x_global)
-    @test abs(mx - mx_ref) < TOL
+# Inf-norm
+norminf = norm(xdist, Inf)
+norminf_ref = norm(x_global, Inf)
+@test abs(norminf - norminf_ref) < TOL
 
-    # minimum
-    mn = minimum(xdist)
-    mn_ref = minimum(x_global)
-    @test abs(mn - mn_ref) < TOL
+# 3-norm (general p)
+norm3 = norm(xdist, 3)
+norm3_ref = norm(x_global, 3)
+@test abs(norm3 - norm3_ref) < TOL
 
-    if rank == 0
-        println("  ✓ Vector reductions: sum=$s, prod=$p, max=$mx, min=$mn")
-    end
+# Complex vector norms
+z_global = ComplexF64.(1:n) .+ im .* ComplexF64.(n:-1:1)
+zdist = VectorMPI(z_global)
+
+cnorm2 = norm(zdist)
+cnorm2_ref = norm(z_global)
+@test abs(cnorm2 - cnorm2_ref) < TOL
+
+MPI.Barrier(comm)
+
+if rank == 0
+    println("[test] Vector reductions")
+    flush(stdout)
 end
 
-@testset "Vector Addition and Subtraction" begin
-    n = 8
-    u_global = collect(1.0:n)
-    v_global = collect(n:-1.0:1)
+n = 8
+x_global = collect(1.0:n)
+xdist = VectorMPI(x_global)
 
-    udist = VectorMPI(u_global)
-    vdist = VectorMPI(v_global)
+# sum
+s = sum(xdist)
+s_ref = sum(x_global)
+@test abs(s - s_ref) < TOL
 
-    my_start = udist.partition[rank+1]
-    my_end = udist.partition[rank+2] - 1
+# prod
+p = prod(xdist)
+p_ref = prod(x_global)
+@test abs(p - p_ref) < TOL
 
-    # u + v
-    wdist = udist + vdist
-    w_ref = u_global + v_global
-    err_add = maximum(abs.(wdist.v .- w_ref[my_start:my_end]))
-    @test err_add < TOL
+# maximum
+mx = maximum(xdist)
+mx_ref = maximum(x_global)
+@test abs(mx - mx_ref) < TOL
 
-    # u - v
-    wdist = udist - vdist
-    w_ref = u_global - v_global
-    err_sub = maximum(abs.(wdist.v .- w_ref[my_start:my_end]))
-    @test err_sub < TOL
+# minimum
+mn = minimum(xdist)
+mn_ref = minimum(x_global)
+@test abs(mn - mn_ref) < TOL
 
-    # -v
-    wdist = -vdist
-    w_ref = -v_global
-    err_neg = maximum(abs.(wdist.v .- w_ref[my_start:my_end]))
-    @test err_neg < TOL
+MPI.Barrier(comm)
 
-    if rank == 0
-        println("  ✓ Vector addition/subtraction: add=$err_add, sub=$err_sub, neg=$err_neg")
-    end
+if rank == 0
+    println("[test] Vector addition and subtraction")
+    flush(stdout)
 end
 
-@testset "Vector Operations with Different Partitions" begin
-    # Skip this test if running with fewer than 2 ranks (need different partitions)
-    if nranks < 2
-        @test true  # Pass trivially
-        if rank == 0
-            println("  ✓ Different partition ops: skipped (need >= 2 ranks)")
-        end
-        return
-    end
+n = 8
+u_global = collect(1.0:n)
+v_global = collect(n:-1.0:1)
 
+udist = VectorMPI(u_global)
+vdist = VectorMPI(v_global)
+
+my_start = udist.partition[rank+1]
+my_end = udist.partition[rank+2] - 1
+
+# u + v
+wdist = udist + vdist
+w_ref = u_global + v_global
+err_add = maximum(abs.(wdist.v .- w_ref[my_start:my_end]))
+@test err_add < TOL
+
+# u - v
+wdist = udist - vdist
+w_ref = u_global - v_global
+err_sub = maximum(abs.(wdist.v .- w_ref[my_start:my_end]))
+@test err_sub < TOL
+
+# -v
+wdist = -vdist
+w_ref = -v_global
+err_neg = maximum(abs.(wdist.v .- w_ref[my_start:my_end]))
+@test err_neg < TOL
+
+MPI.Barrier(comm)
+
+if rank == 0
+    println("[test] Vector operations with different partitions")
+    flush(stdout)
+end
+
+# Skip this test if running with fewer than 2 ranks (need different partitions)
+if nranks < 2
+    @test true  # Pass trivially
+else
     # Clear cache to avoid interference from previous tests
     LinearAlgebraMPI.clear_plan_cache!()
 
@@ -360,109 +372,132 @@ end
     w_add_ref = u_global + v_global  # Reset reference for addition
     err_tadd = maximum(abs.(wt.parent.v .- w_add_ref[my_start:my_end]))
     @test err_tadd < TOL
-
-    if rank == 0
-        println("  ✓ Different partition ops: add=$err_add, sub=$err_sub, reverse_add=$err_add2, transpose_add=$err_tadd")
-    end
 end
 
-@testset "Transposed Vector Addition and Subtraction" begin
-    n = 8
-    u_global = collect(1.0:n)
-    v_global = collect(n:-1.0:1)
+MPI.Barrier(comm)
 
-    udist = VectorMPI(u_global)
-    vdist = VectorMPI(v_global)
-
-    my_start = udist.partition[rank+1]
-    my_end = udist.partition[rank+2] - 1
-
-    # transpose(u) + transpose(v)
-    wt = transpose(udist) + transpose(vdist)
-    w_ref = u_global + v_global
-    err_add = maximum(abs.(wt.parent.v .- w_ref[my_start:my_end]))
-    @test err_add < TOL
-
-    # transpose(u) - transpose(v)
-    wt = transpose(udist) - transpose(vdist)
-    w_ref = u_global - v_global
-    err_sub = maximum(abs.(wt.parent.v .- w_ref[my_start:my_end]))
-    @test err_sub < TOL
-
-    # -transpose(v)
-    wt = -transpose(vdist)
-    w_ref = -v_global
-    err_neg = maximum(abs.(wt.parent.v .- w_ref[my_start:my_end]))
-    @test err_neg < TOL
-
-    if rank == 0
-        println("  ✓ Transposed vector add/sub: add=$err_add, sub=$err_sub, neg=$err_neg")
-    end
+if rank == 0
+    println("[test] Transposed vector addition and subtraction")
+    flush(stdout)
 end
 
-@testset "Scalar Multiplication" begin
-    n = 8
-    v_global = collect(1.0:n)
-    vdist = VectorMPI(v_global)
-    a = 3.5
+n = 8
+u_global = collect(1.0:n)
+v_global = collect(n:-1.0:1)
 
-    my_start = vdist.partition[rank+1]
-    my_end = vdist.partition[rank+2] - 1
+udist = VectorMPI(u_global)
+vdist = VectorMPI(v_global)
 
-    # a * v
-    wdist = a * vdist
-    w_ref = a * v_global
-    err_av = maximum(abs.(wdist.v .- w_ref[my_start:my_end]))
-    @test err_av < TOL
+my_start = udist.partition[rank+1]
+my_end = udist.partition[rank+2] - 1
 
-    # v * a
-    wdist = vdist * a
-    err_va = maximum(abs.(wdist.v .- w_ref[my_start:my_end]))
-    @test err_va < TOL
+# transpose(u) + transpose(v)
+wt = transpose(udist) + transpose(vdist)
+w_ref = u_global + v_global
+err_add = maximum(abs.(wt.parent.v .- w_ref[my_start:my_end]))
+@test err_add < TOL
 
-    # v / a
-    wdist = vdist / a
-    w_ref = v_global / a
-    err_div = maximum(abs.(wdist.v .- w_ref[my_start:my_end]))
-    @test err_div < TOL
+# transpose(u) - transpose(v)
+wt = transpose(udist) - transpose(vdist)
+w_ref = u_global - v_global
+err_sub = maximum(abs.(wt.parent.v .- w_ref[my_start:my_end]))
+@test err_sub < TOL
 
-    # a * transpose(v)
-    wt = a * transpose(vdist)
-    w_ref = a * v_global
-    err_avt = maximum(abs.(wt.parent.v .- w_ref[my_start:my_end]))
-    @test err_avt < TOL
+# -transpose(v)
+wt = -transpose(vdist)
+w_ref = -v_global
+err_neg = maximum(abs.(wt.parent.v .- w_ref[my_start:my_end]))
+@test err_neg < TOL
 
-    # transpose(v) * a
-    wt = transpose(vdist) * a
-    err_vta = maximum(abs.(wt.parent.v .- w_ref[my_start:my_end]))
-    @test err_vta < TOL
+MPI.Barrier(comm)
 
-    # transpose(v) / a
-    wt = transpose(vdist) / a
-    w_ref = v_global / a
-    err_vtdiv = maximum(abs.(wt.parent.v .- w_ref[my_start:my_end]))
-    @test err_vtdiv < TOL
-
-    if rank == 0
-        println("  ✓ Scalar multiplication: a*v=$err_av, v*a=$err_va, v/a=$err_div")
-        println("                           a*transpose(v)=$err_avt, transpose(v)*a=$err_vta, transpose(v)/a=$err_vtdiv")
-    end
+if rank == 0
+    println("[test] Scalar multiplication")
+    flush(stdout)
 end
 
-@testset "Vector Size and Eltype" begin
-    n = 8
-    v_global = collect(1.0:n)
-    vdist = VectorMPI(v_global)
+n = 8
+v_global = collect(1.0:n)
+vdist = VectorMPI(v_global)
+a = 3.5
 
-    @test length(vdist) == n
-    @test size(vdist) == (n,)
-    @test size(vdist, 1) == n
-    @test eltype(vdist) == Float64
-    @test eltype(VectorMPI{ComplexF64}) == ComplexF64
+my_start = vdist.partition[rank+1]
+my_end = vdist.partition[rank+2] - 1
 
-    if rank == 0
-        println("  ✓ Vector size/eltype: length=$n, size=$(size(vdist)), eltype=$(eltype(vdist))")
-    end
+# a * v
+wdist = a * vdist
+w_ref = a * v_global
+err_av = maximum(abs.(wdist.v .- w_ref[my_start:my_end]))
+@test err_av < TOL
+
+# v * a
+wdist = vdist * a
+err_va = maximum(abs.(wdist.v .- w_ref[my_start:my_end]))
+@test err_va < TOL
+
+# v / a
+wdist = vdist / a
+w_ref = v_global / a
+err_div = maximum(abs.(wdist.v .- w_ref[my_start:my_end]))
+@test err_div < TOL
+
+# a * transpose(v)
+wt = a * transpose(vdist)
+w_ref = a * v_global
+err_avt = maximum(abs.(wt.parent.v .- w_ref[my_start:my_end]))
+@test err_avt < TOL
+
+# transpose(v) * a
+wt = transpose(vdist) * a
+err_vta = maximum(abs.(wt.parent.v .- w_ref[my_start:my_end]))
+@test err_vta < TOL
+
+# transpose(v) / a
+wt = transpose(vdist) / a
+w_ref = v_global / a
+err_vtdiv = maximum(abs.(wt.parent.v .- w_ref[my_start:my_end]))
+@test err_vtdiv < TOL
+
+MPI.Barrier(comm)
+
+if rank == 0
+    println("[test] Vector size and eltype")
+    flush(stdout)
 end
 
+n = 8
+v_global = collect(1.0:n)
+vdist = VectorMPI(v_global)
+
+@test length(vdist) == n
+@test size(vdist) == (n,)
+@test size(vdist, 1) == n
+@test eltype(vdist) == Float64
+@test eltype(VectorMPI{ComplexF64}) == ComplexF64
+
+MPI.Barrier(comm)
+
+end  # QuietTestSet
+
+# Aggregate counts across ranks
+local_counts = [
+    get(ts.counts, :pass, 0),
+    get(ts.counts, :fail, 0),
+    get(ts.counts, :error, 0),
+    get(ts.counts, :broken, 0),
+    get(ts.counts, :skip, 0),
+]
+global_counts = similar(local_counts)
+MPI.Allreduce!(local_counts, global_counts, +, comm)
+
+if rank == 0
+    println("Test Summary: Matrix-Vector Multiplication | Pass: $(global_counts[1])  Fail: $(global_counts[2])  Error: $(global_counts[3])")
+    flush(stdout)
+end
+
+MPI.Barrier(comm)
 MPI.Finalize()
+
+if global_counts[2] > 0 || global_counts[3] > 0
+    exit(1)
+end

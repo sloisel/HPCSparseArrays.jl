@@ -10,30 +10,11 @@ This page documents the public API of LinearAlgebraMPI.jl.
 SparseMatrixMPI
 ```
 
-The main distributed sparse matrix type. Rows are partitioned across MPI ranks.
-
-**Fields:**
-- `structural_hash::NTuple{32,UInt8}`: 256-bit Blake3 hash of the structural pattern
-- `row_partition::Vector{Int}`: Row partition boundaries (length = nranks + 1)
-- `col_partition::Vector{Int}`: Column partition boundaries (length = nranks + 1)
-- `col_indices::Vector{Int}`: Column indices that appear in the local part
-- `AT::SparseMatrixCSC{T,Int}`: Transpose of local rows
-
-### MatrixPlan
+### MatrixMPI
 
 ```@docs
-MatrixPlan
+MatrixMPI
 ```
-
-A communication plan for gathering rows from an `SparseMatrixMPI` for matrix multiplication.
-
-### TransposePlan
-
-```@docs
-TransposePlan
-```
-
-A communication plan for computing the transpose of an `SparseMatrixMPI`.
 
 ### VectorMPI
 
@@ -41,452 +22,253 @@ A communication plan for computing the transpose of an `SparseMatrixMPI`.
 VectorMPI
 ```
 
-A distributed vector type. Elements are partitioned across MPI ranks.
+## Sparse Matrix Operations
 
-**Fields:**
-- `structural_hash::NTuple{32,UInt8}`: 256-bit Blake3 hash of the partition pattern
-- `partition::Vector{Int}`: Element partition boundaries (length = nranks + 1)
-- `v::Vector{T}`: Local elements owned by this rank
-
-### VectorPlan
-
-```@docs
-VectorPlan
-```
-
-A communication plan for gathering vector elements for matrix-vector multiplication or vector alignment.
-
-## Constructors
-
-### SparseMatrixMPI Constructor
-
-Create a distributed sparse matrix from a global sparse matrix.
-
-**Signature:**
-```julia
-SparseMatrixMPI{T}(A::SparseMatrixCSC{T,Int}) where T
-```
-
-**Arguments:**
-- `A::SparseMatrixCSC{T,Int}`: The global sparse matrix (must be identical on all ranks)
-
-**Returns:**
-- `SparseMatrixMPI{T}`: The distributed matrix
-
-**Example:**
-```julia
-using SparseArrays
-A = sprand(100, 100, 0.01)
-Adist = SparseMatrixMPI{Float64}(A)
-```
-
-### MatrixPlan Constructors
-
-Create communication plans for matrix operations.
-
-**Signatures:**
-```julia
-MatrixPlan(row_indices::Vector{Int}, B::SparseMatrixMPI{T}) where T
-MatrixPlan(A::SparseMatrixMPI{T}, B::SparseMatrixMPI{T}) where T
-```
-
-The second form creates a memoized plan for `A * B` based on structural hashes.
-
-### TransposePlan Constructor
-
-Create a communication plan for transpose.
-
-**Signature:**
-```julia
-TransposePlan(A::SparseMatrixMPI{T}) where T
-```
-
-### VectorMPI Constructor
-
-Create a distributed vector from a global vector.
-
-**Signature:**
-```julia
-VectorMPI(v_global::Vector{T}, comm::MPI.Comm=MPI.COMM_WORLD) where T
-```
-
-**Arguments:**
-- `v_global::Vector{T}`: The global vector (must be identical on all ranks)
-- `comm::MPI.Comm`: MPI communicator (optional, defaults to COMM_WORLD)
-
-**Returns:**
-- `VectorMPI{T}`: The distributed vector
-
-**Example:**
-```julia
-v = collect(1.0:100.0)
-vdist = VectorMPI(v)
-```
-
-### VectorPlan Constructors
-
-Create communication plans for vector operations.
-
-**Signatures:**
-```julia
-VectorPlan(A::SparseMatrixMPI{T}, x::VectorMPI{T}) where T
-VectorPlan(target_partition::Vector{Int}, source::VectorMPI{T}) where T
-```
-
-The first form creates a plan for gathering `x[A.col_indices]` for matrix-vector multiplication.
-The second form creates a plan for aligning a source vector to a target partition.
-
-## Executing Plans
-
-```@docs
-execute_plan!
-```
-
-Execute a pre-computed communication plan.
-
-## Matrix Operations
-
-### Multiplication
+### Arithmetic
 
 ```julia
-*(A::SparseMatrixMPI{T}, B::SparseMatrixMPI{T}) where T
+A * B          # Matrix multiplication
+A + B          # Addition
+A - B          # Subtraction
+a * A          # Scalar multiplication
+A * a          # Scalar multiplication
 ```
 
-Multiply two distributed sparse matrices. Communication plans are automatically cached.
-
-**Example:**
-```julia
-C = A * B
-```
-
-### Addition
+### Transpose and Adjoint
 
 ```julia
-+(A::SparseMatrixMPI{T}, B::SparseMatrixMPI{T}) where T
+transpose(A)   # Lazy transpose
+conj(A)        # Conjugate (new matrix)
+A'             # Adjoint (conjugate transpose, lazy)
 ```
-
-Add two distributed sparse matrices. The result has A's row partition.
-
-**Example:**
-```julia
-C = A + B
-```
-
-### Subtraction
-
-```julia
--(A::SparseMatrixMPI{T}, B::SparseMatrixMPI{T}) where T
-```
-
-Subtract two distributed sparse matrices. The result has A's row partition.
-
-**Example:**
-```julia
-C = A - B
-```
-
-### Scalar Multiplication
-
-```julia
-*(a::Number, A::SparseMatrixMPI{T}) where T
-*(A::SparseMatrixMPI{T}, a::Number) where T
-```
-
-Multiply a distributed matrix by a scalar.
-
-**Example:**
-```julia
-B = 2.0 * A
-B = A * 2.0  # Equivalent
-```
-
-### Transpose
-
-Return a lazy transpose wrapper. The transpose is not computed until needed.
-
-**Signature:**
-```julia
-transpose(A::SparseMatrixMPI{T}) where T
-```
-
-**Example:**
-```julia
-At = transpose(A)  # Lazy, no communication
-```
-
-To materialize:
-```julia
-plan = TransposePlan(A)
-At_materialized = execute_plan!(plan, A)
-```
-
-### Conjugate
-
-Return a new `SparseMatrixMPI` with conjugated values.
-
-**Signature:**
-```julia
-conj(A::SparseMatrixMPI{T}) where T
-```
-
-**Example:**
-```julia
-Aconj = conj(A)
-```
-
-### Adjoint
-
-Return the conjugate transpose (lazy).
-
-**Signature:**
-```julia
-adjoint(A::SparseMatrixMPI{T}) where T
-```
-
-**Example:**
-```julia
-Aadj = A'  # Equivalent to transpose(conj(A))
-```
-
-## Lazy Transpose Operations
-
-The following operations work with lazy transposes:
-
-```julia
-# transpose(A) * transpose(B) = transpose(B * A)
-transpose(A) * transpose(B)
-
-# transpose(A) * B - materializes transpose(A) first
-transpose(A) * B
-
-# A * transpose(B) - materializes transpose(B) first
-A * transpose(B)
-
-# Scalar times lazy transpose
-a * transpose(A)  # Returns transpose(a * A)
-transpose(A) * a  # Returns transpose(a * A)
-```
-
-## Vector Operations
 
 ### Matrix-Vector Multiplication
 
 ```julia
-*(A::SparseMatrixMPI{T}, x::VectorMPI{T}) where T
-mul!(y::VectorMPI{T}, A::SparseMatrixMPI{T}, x::VectorMPI{T}) where T
-```
-
-Multiply a distributed sparse matrix by a distributed vector. The result vector has `A.row_partition` as its partition.
-
-**Example:**
-```julia
-y = A * x
+y = A * x      # Returns VectorMPI
 mul!(y, A, x)  # In-place version
 ```
 
 ### Vector-Matrix Multiplication
 
 ```julia
-*(vt::Transpose{<:Any, VectorMPI{T}}, A::SparseMatrixMPI{T}) where T
+transpose(v) * A   # Row vector times matrix
+v' * A             # Conjugate row vector times matrix
 ```
 
-Multiply a transposed vector by a matrix: `transpose(v) * A = transpose(transpose(A) * v)`.
+### Norms
+
+```julia
+norm(A)        # Frobenius norm (default)
+norm(A, 1)     # Sum of absolute values
+norm(A, Inf)   # Maximum absolute value
+norm(A, p)     # General p-norm
+
+opnorm(A, 1)   # Maximum absolute column sum
+opnorm(A, Inf) # Maximum absolute row sum
+```
+
+### Properties
+
+```julia
+size(A)        # Global dimensions (m, n)
+size(A, d)     # Size along dimension d
+eltype(A)      # Element type
+nnz(A)         # Number of nonzeros
+issparse(A)    # Returns true
+```
+
+### Reductions
+
+```julia
+sum(A)         # Sum of all elements
+sum(A; dims=1) # Column sums (returns VectorMPI)
+sum(A; dims=2) # Row sums (returns VectorMPI)
+maximum(A)     # Maximum of stored values
+minimum(A)     # Minimum of stored values
+tr(A)          # Trace (sum of diagonal)
+```
+
+```@docs
+mean
+```
+
+### Element-wise Operations
+
+```julia
+abs(A)         # Absolute value
+abs2(A)        # Squared absolute value
+real(A)        # Real part
+imag(A)        # Imaginary part
+floor(A)       # Floor
+ceil(A)        # Ceiling
+round(A)       # Round
+```
+
+### Utilities
+
+```julia
+copy(A)        # Deep copy
+dropzeros(A)   # Remove stored zeros
+diag(A)        # Main diagonal (returns VectorMPI)
+diag(A, k)     # k-th diagonal
+triu(A)        # Upper triangular
+triu(A, k)     # Upper triangular from k-th diagonal
+tril(A)        # Lower triangular
+tril(A, k)     # Lower triangular from k-th diagonal
+```
+
+### Block Operations
+
+```julia
+cat(A, B, C; dims=1)       # Vertical concatenation
+cat(A, B, C; dims=2)       # Horizontal concatenation
+cat(A, B, C, D; dims=(2,2)) # 2x2 block matrix [A B; C D]
+vcat(A, B, C)              # Vertical concatenation
+hcat(A, B, C)              # Horizontal concatenation
+blockdiag(A, B, C)         # Block diagonal matrix
+```
+
+### Diagonal Matrix Construction
+
+```julia
+spdiagm(v)                 # Diagonal matrix from VectorMPI
+spdiagm(m, n, v)           # m x n diagonal matrix
+spdiagm(k => v)            # k-th diagonal
+spdiagm(0 => v, 1 => w)    # Multiple diagonals
+```
+
+## Dense Matrix Operations
+
+### Arithmetic
+
+```julia
+A * x          # Matrix-vector multiplication (returns VectorMPI)
+transpose(A)   # Lazy transpose
+conj(A)        # Conjugate
+A'             # Adjoint
+a * A          # Scalar multiplication
+```
+
+### mapslices
+
+Apply a function to rows or columns of a distributed dense matrix.
+
+```julia
+mapslices(f, A; dims=2)   # Apply f to each row (local, no MPI)
+mapslices(f, A; dims=1)   # Apply f to each column (requires MPI)
+```
 
 **Example:**
 ```julia
-wt = transpose(v) * A
+using LinearAlgebra
+
+A = MatrixMPI(randn(100, 10))
+
+# Compute row statistics: norm, max, sum for each row
+# Transforms 100x10 to 100x3
+B = mapslices(x -> [norm(x), maximum(x), sum(x)], A; dims=2)
 ```
 
-### Vector Addition and Subtraction
+### Block Operations
 
 ```julia
-+(u::VectorMPI{T}, v::VectorMPI{T}) where T
--(u::VectorMPI{T}, v::VectorMPI{T}) where T
--(v::VectorMPI{T}) where T
+cat(A, B; dims=1)          # Vertical concatenation
+cat(A, B; dims=2)          # Horizontal concatenation
+vcat(A, B)                 # Vertical concatenation
+hcat(A, B)                 # Horizontal concatenation
 ```
 
-Add or subtract distributed vectors. If partitions differ, the second operand is automatically aligned to match the first operand's partition.
-
-**Example:**
-```julia
-w = u + v  # Result has u's partition
-w = u - v
-w = -v
-```
-
-### Vector Scalar Multiplication
+### Norms
 
 ```julia
-*(a::Number, v::VectorMPI{T}) where T
-*(v::VectorMPI{T}, a::Number) where T
-/(v::VectorMPI{T}, a::Number) where T
+norm(A)        # Frobenius norm
+norm(A, p)     # General p-norm
+opnorm(A, 1)   # Maximum absolute column sum
+opnorm(A, Inf) # Maximum absolute row sum
 ```
 
-Multiply or divide a distributed vector by a scalar.
+## Vector Operations
 
-**Example:**
-```julia
-w = 2.0 * v
-w = v * 2.0
-w = v / 2.0
-```
-
-### Vector Transpose and Adjoint
+### Arithmetic
 
 ```julia
-transpose(v::VectorMPI{T}) where T
-conj(v::VectorMPI{T}) where T
-adjoint(v::VectorMPI{T}) where T
+u + v          # Addition (auto-aligns partitions)
+u - v          # Subtraction
+-v             # Negation
+a * v          # Scalar multiplication
+v * a          # Scalar multiplication
+v / a          # Scalar division
 ```
 
-Return transpose (lazy wrapper), conjugate (new VectorMPI), or adjoint (transpose of conjugate).
-
-**Example:**
-```julia
-vt = transpose(v)  # Lazy
-vc = conj(v)       # New vector with conjugated values
-va = v'            # Equivalent to transpose(conj(v))
-```
-
-### Vector Norms
+### Transpose and Adjoint
 
 ```julia
-norm(v::VectorMPI, p=2)
+transpose(v)   # Lazy transpose (row vector)
+conj(v)        # Conjugate
+v'             # Adjoint
 ```
 
-Compute the p-norm of a distributed vector.
-
-**Arguments:**
-- `p=2` (default): Euclidean norm
-- `p=1`: Sum of absolute values
-- `p=Inf`: Maximum absolute value
-- Other p: General p-norm
-
-### Vector Reductions
+### Norms
 
 ```julia
-sum(v::VectorMPI)
-prod(v::VectorMPI)
-maximum(v::VectorMPI)
-minimum(v::VectorMPI)
+norm(v)        # 2-norm (default)
+norm(v, 1)     # 1-norm
+norm(v, Inf)   # Infinity norm
+norm(v, p)     # General p-norm
 ```
 
-Compute reductions across all elements of a distributed vector.
-
-### Vector Properties
+### Reductions
 
 ```julia
-length(v::VectorMPI) -> Int
-size(v::VectorMPI) -> (Int,)
-eltype(v::VectorMPI{T}) -> T
+sum(v)         # Sum of elements
+prod(v)        # Product of elements
+maximum(v)     # Maximum element
+minimum(v)     # Minimum element
+mean(v)        # Mean of elements
 ```
 
-Return the global length, size tuple, or element type.
-
-## Norms
-
-### Element-wise Norms
-
-Compute the p-norm of A treated as a vector of elements.
-
-**Signature:**
-```julia
-norm(A::SparseMatrixMPI, p=2)
-```
-
-**Arguments:**
-- `p=2` (default): Frobenius norm
-- `p=1`: Sum of absolute values
-- `p=Inf`: Maximum absolute value
-- Other p: General p-norm
-
-### Operator Norms
-
-Compute the induced operator norm.
-
-**Signature:**
-```julia
-opnorm(A::SparseMatrixMPI, p=1)
-```
-
-**Arguments:**
-- `p=1`: Maximum absolute column sum
-- `p=Inf`: Maximum absolute row sum
-
-**Note:** `opnorm(A, 2)` (spectral norm) is not implemented.
-
-## Matrix Properties
-
-### Size
+### Element-wise Operations
 
 ```julia
-size(A::SparseMatrixMPI) -> (Int, Int)
-size(A::SparseMatrixMPI, d::Integer) -> Int
+abs(v)         # Absolute value
+abs2(v)        # Squared absolute value
+real(v)        # Real part
+imag(v)        # Imaginary part
+copy(v)        # Deep copy
 ```
 
-Return the global size of the distributed matrix.
+### Broadcasting
 
-### Element Type
+VectorMPI supports broadcasting for element-wise operations:
 
 ```julia
-eltype(A::SparseMatrixMPI{T}) -> T
+v .+ w         # Element-wise addition
+v .* w         # Element-wise multiplication
+sin.(v)        # Apply function element-wise
+v .* 2.0 .+ w  # Compound expressions
 ```
 
-Return the element type of the matrix.
+### Block Operations
+
+```julia
+vcat(u, v, w)  # Concatenate vectors (returns VectorMPI)
+hcat(u, v, w)  # Stack as columns (returns MatrixMPI)
+```
+
+### Properties
+
+```julia
+length(v)      # Global length
+size(v)        # Returns (length,)
+eltype(v)      # Element type
+```
 
 ## Cache Management
 
 ```@docs
 clear_plan_cache!
 ```
-
-Clear all memoized plan caches.
-
-**Example:**
-```julia
-clear_plan_cache!()
-```
-
-## Dense Matrix Types
-
-### MatrixMPI
-
-```@docs
-MatrixMPI
-```
-
-A distributed dense matrix partitioned by rows across MPI ranks.
-
-**Fields:**
-- `structural_hash::Blake3Hash`: 256-bit Blake3 hash of the structural pattern
-- `row_partition::Vector{Int}`: Row partition boundaries (length = nranks + 1)
-- `col_partition::Vector{Int}`: Column partition boundaries (length = nranks + 1)
-- `A::Matrix{T}`: Local rows (NOT transposed), size = (local_nrows, ncols)
-
-### DenseMatrixVectorPlan
-
-```@docs
-DenseMatrixVectorPlan
-```
-
-A communication plan for gathering vector elements needed for `MatrixMPI * x`.
-
-### DenseTransposePlan
-
-```@docs
-DenseTransposePlan
-```
-
-A communication plan for computing the transpose of a `MatrixMPI`.
-
-## Type Aliases
-
-```julia
-const TransposedSparseMatrixMPI{T} = Transpose{T, SparseMatrixMPI{T}}
-const TransposedMatrixMPI{T} = Transpose{T, MatrixMPI{T}}
-```
-
-Type aliases for lazy transpose of `SparseMatrixMPI` and `MatrixMPI`.
 
 ## Full API Index
 

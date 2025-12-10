@@ -52,4 +52,10 @@ end
     @testset "MPI Dense Matrix" begin
         run_mpi_test(joinpath(@__DIR__, "test_dense_matrix.jl"); nprocs=4, expect_success=true)
     end
+    @testset "MPI Sparse API Extensions" begin
+        run_mpi_test(joinpath(@__DIR__, "test_sparse_api.jl"); nprocs=4, expect_success=true)
+    end
+    @testset "MPI Block Matrix Operations" begin
+        run_mpi_test(joinpath(@__DIR__, "test_blocks.jl"); nprocs=4, expect_success=true)
+    end
 end

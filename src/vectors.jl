@@ -499,3 +499,263 @@ Base.size(v::VectorMPI, d::Integer) = d == 1 ? length(v) : 1
 
 Base.eltype(::VectorMPI{T}) where T = T
 Base.eltype(::Type{VectorMPI{T}}) where T = T
+
+# ============================================================================
+# Extended VectorMPI API - Element-wise Operations
+# ============================================================================
+
+"""
+    Base.abs(v::VectorMPI{T}) where T
+
+Return a new VectorMPI with absolute values of all elements.
+"""
+function Base.abs(v::VectorMPI{T}) where T
+    RT = real(T)
+    return VectorMPI{RT}(v.structural_hash, v.partition, abs.(v.v))
+end
+
+"""
+    Base.abs2(v::VectorMPI{T}) where T
+
+Return a new VectorMPI with squared absolute values of all elements.
+"""
+function Base.abs2(v::VectorMPI{T}) where T
+    RT = real(T)
+    return VectorMPI{RT}(v.structural_hash, v.partition, abs2.(v.v))
+end
+
+"""
+    Base.real(v::VectorMPI{T}) where T
+
+Return a new VectorMPI containing the real parts of all elements.
+"""
+function Base.real(v::VectorMPI{T}) where T
+    RT = real(T)
+    return VectorMPI{RT}(v.structural_hash, v.partition, real.(v.v))
+end
+
+"""
+    Base.imag(v::VectorMPI{T}) where T
+
+Return a new VectorMPI containing the imaginary parts of all elements.
+"""
+function Base.imag(v::VectorMPI{T}) where T
+    RT = real(T)
+    return VectorMPI{RT}(v.structural_hash, v.partition, imag.(v.v))
+end
+
+"""
+    Base.copy(v::VectorMPI{T}) where T
+
+Create a deep copy of the distributed vector.
+"""
+function Base.copy(v::VectorMPI{T}) where T
+    return VectorMPI{T}(v.structural_hash, copy(v.partition), copy(v.v))
+end
+
+"""
+    mean(v::VectorMPI{T}) where T
+
+Compute the mean of all elements in the distributed vector.
+"""
+function mean(v::VectorMPI{T}) where T
+    return sum(v) / length(v)
+end
+
+# ============================================================================
+# Broadcasting Support for VectorMPI
+# ============================================================================
+
+import Base.Broadcast: BroadcastStyle, Broadcasted, DefaultArrayStyle, AbstractArrayStyle
+import Base.Broadcast: broadcasted, materialize, instantiate, broadcastable
+
+"""
+    VectorMPIStyle <: AbstractArrayStyle{1}
+
+Custom broadcast style for VectorMPI that ensures broadcast operations
+return VectorMPI results and handle distributed data correctly.
+"""
+struct VectorMPIStyle <: AbstractArrayStyle{1} end
+
+# VectorMPI uses VectorMPIStyle
+Base.BroadcastStyle(::Type{<:VectorMPI}) = VectorMPIStyle()
+
+# VectorMPI is its own broadcastable representation (don't try to iterate)
+Base.Broadcast.broadcastable(v::VectorMPI) = v
+
+# Define axes for VectorMPI (needed for broadcast)
+Base.axes(v::VectorMPI) = (Base.OneTo(length(v)),)
+
+# VectorMPIStyle wins over DefaultArrayStyle for scalars and regular arrays
+Base.BroadcastStyle(::VectorMPIStyle, ::DefaultArrayStyle{0}) = VectorMPIStyle()
+Base.BroadcastStyle(::VectorMPIStyle, ::DefaultArrayStyle{N}) where N = VectorMPIStyle()
+
+# Two VectorMPI => VectorMPIStyle
+Base.BroadcastStyle(::VectorMPIStyle, ::VectorMPIStyle) = VectorMPIStyle()
+
+"""
+    _find_vectormpi(args...)
+
+Find the first VectorMPI in a tuple of broadcast arguments.
+Recursively searches through nested Broadcasted objects.
+"""
+_find_vectormpi(v::VectorMPI, args...) = v
+function _find_vectormpi(bc::Broadcasted, args...)
+    # Search in nested Broadcasted
+    result = _find_vectormpi(bc.args...)
+    if result !== nothing
+        return result
+    end
+    return _find_vectormpi(args...)
+end
+_find_vectormpi(::Any, args...) = _find_vectormpi(args...)
+_find_vectormpi() = nothing
+
+"""
+    _find_all_vectormpi(args...)
+
+Find all VectorMPI arguments and return them as a tuple.
+"""
+_find_all_vectormpi(args::Tuple) = _find_all_vectormpi_impl(args...)
+_find_all_vectormpi_impl() = ()
+_find_all_vectormpi_impl(v::VectorMPI, args...) = (v, _find_all_vectormpi_impl(args...)...)
+_find_all_vectormpi_impl(::Any, args...) = _find_all_vectormpi_impl(args...)
+
+"""
+    _check_same_partition(vs::Tuple)
+
+Check that all VectorMPI in the tuple have the same partition.
+Returns true if all partitions match, false otherwise.
+"""
+function _check_same_partition(vs::Tuple)
+    isempty(vs) && return true
+    first_partition = vs[1].partition
+    for v in vs[2:end]
+        if v.partition != first_partition
+            return false
+        end
+    end
+    return true
+end
+
+"""
+    _prepare_broadcast_arg(arg, ref_partition, comm)
+
+Prepare a broadcast argument for local computation.
+- VectorMPI with same partition: return local vector
+- VectorMPI with different partition: align to ref_partition
+- Nested Broadcasted: recursively prepare and materialize
+- Scalar or other: return as-is
+"""
+function _prepare_broadcast_arg(v::VectorMPI, ref_partition, comm)
+    if v.partition == ref_partition
+        return v.v
+    else
+        # Align to reference partition using existing alignment infrastructure
+        aligned = _align_vector(v, ref_partition, comm)
+        return aligned
+    end
+end
+
+# Handle nested Broadcasted objects by recursively preparing their arguments
+function _prepare_broadcast_arg(bc::Broadcasted{VectorMPIStyle}, ref_partition, comm)
+    # Recursively prepare nested arguments
+    prepared_args = map(arg -> _prepare_broadcast_arg(arg, ref_partition, comm), bc.args)
+    # Return a new Broadcasted with prepared (local) arguments
+    return Broadcasted{Nothing}(bc.f, prepared_args)
+end
+
+# Handle Broadcasted with other styles (e.g., scalar operations nested)
+function _prepare_broadcast_arg(bc::Broadcasted, ref_partition, comm)
+    # Recursively prepare nested arguments
+    prepared_args = map(arg -> _prepare_broadcast_arg(arg, ref_partition, comm), bc.args)
+    # Return a new Broadcasted with prepared arguments
+    return Broadcasted{Nothing}(bc.f, prepared_args)
+end
+
+# Handle Base.RefValue (used in literal_pow for things like x.^2)
+_prepare_broadcast_arg(r::Base.RefValue, ref_partition, comm) = r
+
+_prepare_broadcast_arg(x, ref_partition, comm) = x
+
+"""
+    _get_broadcast_align_plan(target_partition::Vector{Int}, source::VectorMPI{T}) where T
+
+Get or create a cached VectorPlan for aligning `source` to `target_partition`.
+Uses point-to-point Isend/Irecv communication for efficiency.
+"""
+function _get_broadcast_align_plan(target_partition::Vector{Int}, source::VectorMPI{T}) where T
+    target_hash = compute_partition_hash(target_partition)
+    key = (target_hash, source.structural_hash, T)
+
+    if haskey(_vector_align_plan_cache, key)
+        return _vector_align_plan_cache[key]::VectorPlan{T}
+    end
+
+    # Create new plan using existing VectorPlan infrastructure
+    plan = VectorPlan(target_partition, source)
+    _vector_align_plan_cache[key] = plan
+    return plan
+end
+
+"""
+    _align_vector(v::VectorMPI{T}, target_partition, comm) where T
+
+Align a VectorMPI to a target partition, redistributing elements as needed.
+Uses cached communication plans with point-to-point Isend/Irecv for efficiency.
+Returns the local portion of the aligned vector.
+"""
+function _align_vector(v::VectorMPI{T}, target_partition, comm) where T
+    # Get or create cached plan
+    plan = _get_broadcast_align_plan(target_partition, v)
+
+    # Execute the plan (uses Isend/Irecv internally)
+    execute_plan!(plan, v)
+
+    # Return a copy of the gathered data (plan.gathered is reused)
+    return copy(plan.gathered)
+end
+
+"""
+    Base.similar(bc::Broadcasted{VectorMPIStyle}, ::Type{ElType}) where ElType
+
+Allocate output array for VectorMPI broadcast.
+"""
+function Base.similar(bc::Broadcasted{VectorMPIStyle}, ::Type{ElType}) where ElType
+    # Find a VectorMPI to get partition info
+    v = _find_vectormpi(bc.args...)
+    if v === nothing
+        error("No VectorMPI found in broadcast arguments")
+    end
+    # Create output with same partition
+    return VectorMPI{ElType}(v.structural_hash, copy(v.partition), Vector{ElType}(undef, length(v.v)))
+end
+
+"""
+    Base.copyto!(dest::VectorMPI, bc::Broadcasted{VectorMPIStyle})
+
+Execute the broadcast operation and store results in dest.
+"""
+function Base.copyto!(dest::VectorMPI, bc::Broadcasted{VectorMPIStyle})
+    comm = MPI.COMM_WORLD
+
+    # Find all VectorMPI arguments
+    all_vmpi = _find_all_vectormpi(bc.args)
+
+    # Use the destination's partition as reference
+    ref_partition = dest.partition
+
+    # Prepare all arguments (align VectorMPI to ref_partition, pass others through)
+    prepared_args = map(arg -> _prepare_broadcast_arg(arg, ref_partition, comm), bc.args)
+
+    # Perform local broadcast
+    local_bc = Broadcasted{Nothing}(bc.f, prepared_args, axes(dest.v))
+    copyto!(dest.v, local_bc)
+
+    return dest
+end
+
+# Convenience: allow broadcast assignment to existing VectorMPI
+function Base.materialize!(dest::VectorMPI, bc::Broadcasted{VectorMPIStyle})
+    return copyto!(dest, instantiate(bc))
+end

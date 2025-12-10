@@ -55,13 +55,6 @@ The matrix is partitioned roughly equally by rows. For example, with 4 ranks and
 - Rank 2: rows 51-75
 - Rank 3: rows 76-100
 
-You can inspect the partition:
-
-```julia
-println("Row partition: ", Adist.row_partition)
-# Output: [1, 26, 51, 76, 101]
-```
-
 ## Basic Operations
 
 ### Matrix Multiplication
@@ -95,18 +88,13 @@ Cdist = Adist * 2.5  # Equivalent
 
 ### Transpose
 
-LinearAlgebraMPI.jl supports both lazy and eager transpose:
-
 ```julia
-# Lazy transpose (no communication)
+# Transpose is lazy (no communication until needed)
 At = transpose(Adist)
 
-# Eager transpose (materializes the transposed matrix)
-plan = TransposePlan(Adist)
-At_materialized = execute_plan!(plan, Adist)
+# Use in multiplication - automatically materializes when needed
+Cdist = At * Bdist
 ```
-
-Lazy transposes are automatically materialized when needed in operations.
 
 ### Adjoint (Conjugate Transpose)
 
@@ -223,4 +211,3 @@ A = sparse(I, J, V, 100, 100)
 
 - See [Examples](@ref) for more detailed usage examples
 - Read the [API Reference](@ref) for complete function documentation
-- Understand the [Internals](@ref) for implementation details

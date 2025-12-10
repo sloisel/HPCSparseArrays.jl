@@ -3,10 +3,12 @@ module LinearAlgebraMPI
 using MPI
 using Blake3Hash
 using SparseArrays
+import SparseArrays: nnz, issparse, dropzeros, spdiagm, blockdiag
 import LinearAlgebra
-using LinearAlgebra: Transpose, Adjoint
+import LinearAlgebra: tr, diag, triu, tril, Transpose, Adjoint, norm, opnorm, mul!
 
-export SparseMatrixMPI, MatrixMPI, VectorMPI, MatrixPlan, TransposePlan, VectorPlan, DenseMatrixVectorPlan, DenseTransposePlan, clear_plan_cache!, execute_plan!
+export SparseMatrixMPI, MatrixMPI, VectorMPI, clear_plan_cache!
+export mean  # Our mean function for SparseMatrixMPI and VectorMPI
 
 # Type alias for 256-bit Blake3 hash
 const Blake3Hash = NTuple{32,UInt8}
@@ -58,9 +60,10 @@ function compute_partition_hash(partition::Vector{Int})::Blake3Hash
     return Blake3Hash(digest(ctx))
 end
 
-# Include the three component files
+# Include the component files (order matters: vectors first, then dense/sparse, then blocks)
 include("vectors.jl")
 include("dense.jl")
 include("sparse.jl")
+include("blocks.jl")
 
 end # module LinearAlgebraMPI

@@ -12,7 +12,6 @@ makedocs(
         "Getting Started" => "getting-started.md",
         "Examples" => "examples.md",
         "API Reference" => "api.md",
-        "Internals" => "internals.md",
     ],
     checkdocs = :exports,
     remotes = nothing,  # Disable source links (configure when publishing)

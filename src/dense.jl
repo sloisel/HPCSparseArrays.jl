@@ -110,6 +110,24 @@ function MatrixMPI(M::Matrix{T}; row_partition=nothing, col_partition=nothing) w
     return MatrixMPI{T}(structural_hash, row_partition, col_partition, A)
 end
 
+"""
+    _compute_partition(n::Int, nranks::Int) -> Vector{Int}
+
+Compute a balanced partition of n elements across nranks ranks.
+Returns a vector of length nranks + 1 with partition boundaries.
+"""
+function _compute_partition(n::Int, nranks::Int)
+    per_rank = div(n, nranks)
+    remainder = mod(n, nranks)
+    partition = Vector{Int}(undef, nranks + 1)
+    partition[1] = 1
+    for r in 1:nranks
+        extra = r <= remainder ? 1 : 0
+        partition[r+1] = partition[r] + per_rank + extra
+    end
+    return partition
+end
+
 # Dense matrix-vector plan and multiplication
 
 """
@@ -1080,5 +1098,85 @@ function LinearAlgebra.opnorm(A::MatrixMPI{T}, p::Real=1) where T
 
     else
         error("opnorm(A, $p) is not implemented. Use p=1 or p=Inf.")
+    end
+end
+
+# mapslices for MatrixMPI
+
+"""
+    Base.mapslices(f, A::MatrixMPI{T}; dims) where T
+
+Apply function f to slices of distributed matrix A along dimension dims.
+
+- `dims=2`: Apply f to each row (local operation, no MPI communication)
+- `dims=1`: Apply f to each column (requires MPI communication to gather columns)
+
+Returns a MatrixMPI with the results.
+
+# Example
+```julia
+A = MatrixMPI(randn(5,3))
+# Apply function to each row, returning 2-element result
+B = mapslices(x -> [norm(x), maximum(x)], A; dims=2)  # Returns 5×2 MatrixMPI
+```
+"""
+function Base.mapslices(f, A::MatrixMPI{T}; dims) where T
+    comm = MPI.COMM_WORLD
+    rank = MPI.Comm_rank(comm)
+    nranks = MPI.Comm_size(comm)
+
+    if dims == 2
+        # Apply f to each row - LOCAL operation (rows are distributed)
+        local_result = mapslices(f, A.A; dims=2)
+
+        # Result has same row count, possibly different column count
+        new_ncols = size(local_result, 2)
+
+        # Create new col_partition for result
+        new_col_partition = _compute_partition(new_ncols, nranks)
+
+        # Compute structural hash
+        new_hash = compute_dense_structural_hash(
+            A.row_partition, new_col_partition, size(local_result), comm)
+
+        RT = eltype(local_result)
+        return MatrixMPI{RT}(new_hash, A.row_partition, new_col_partition, local_result)
+
+    elseif dims == 1
+        # Apply f to each column - REQUIRES MPI (columns span ranks)
+        m_global = A.row_partition[end] - 1
+        n = size(A.A, 2)  # columns are not partitioned
+
+        results = Vector{Any}(undef, n)
+        for j in 1:n
+            # Gather full column j from all ranks
+            local_col = A.A[:, j]
+            counts = Int32[A.row_partition[r+1] - A.row_partition[r] for r in 1:nranks]
+            full_col = Vector{T}(undef, m_global)
+            MPI.Allgatherv!(local_col, MPI.VBuffer(full_col, counts), comm)
+
+            # Apply f to full column
+            results[j] = f(full_col)
+        end
+
+        # Stack results - each is a column of the output
+        # Result is (output_len × n)
+        local_full_result = hcat(results...)
+
+        # Redistribute rows according to standard partition
+        output_m = size(local_full_result, 1)
+        new_row_partition = _compute_partition(output_m, nranks)
+        row_start = new_row_partition[rank+1]
+        row_end = new_row_partition[rank+2] - 1
+        local_result = local_full_result[row_start:row_end, :]
+
+        new_col_partition = _compute_partition(n, nranks)
+        new_hash = compute_dense_structural_hash(
+            new_row_partition, new_col_partition, size(local_result), comm)
+
+        RT = eltype(local_result)
+        return MatrixMPI{RT}(new_hash, new_row_partition, new_col_partition, local_result)
+    else
+        error("dims must be 1 or 2")
     end
 end
