@@ -35,6 +35,27 @@ TransposePlan
 
 A communication plan for computing the transpose of an `SparseMatrixMPI`.
 
+### VectorMPI
+
+```@docs
+VectorMPI
+```
+
+A distributed vector type. Elements are partitioned across MPI ranks.
+
+**Fields:**
+- `structural_hash::NTuple{32,UInt8}`: 256-bit Blake3 hash of the partition pattern
+- `partition::Vector{Int}`: Element partition boundaries (length = nranks + 1)
+- `v::Vector{T}`: Local elements owned by this rank
+
+### VectorPlan
+
+```@docs
+VectorPlan
+```
+
+A communication plan for gathering vector elements for matrix-vector multiplication or vector alignment.
+
 ## Constructors
 
 ### SparseMatrixMPI Constructor
@@ -79,6 +100,41 @@ Create a communication plan for transpose.
 ```julia
 TransposePlan(A::SparseMatrixMPI{T}) where T
 ```
+
+### VectorMPI Constructor
+
+Create a distributed vector from a global vector.
+
+**Signature:**
+```julia
+VectorMPI(v_global::Vector{T}, comm::MPI.Comm=MPI.COMM_WORLD) where T
+```
+
+**Arguments:**
+- `v_global::Vector{T}`: The global vector (must be identical on all ranks)
+- `comm::MPI.Comm`: MPI communicator (optional, defaults to COMM_WORLD)
+
+**Returns:**
+- `VectorMPI{T}`: The distributed vector
+
+**Example:**
+```julia
+v = collect(1.0:100.0)
+vdist = VectorMPI(v)
+```
+
+### VectorPlan Constructors
+
+Create communication plans for vector operations.
+
+**Signatures:**
+```julia
+VectorPlan(A::SparseMatrixMPI{T}, x::VectorMPI{T}) where T
+VectorPlan(target_partition::Vector{Int}, source::VectorMPI{T}) where T
+```
+
+The first form creates a plan for gathering `x[A.col_indices]` for matrix-vector multiplication.
+The second form creates a plan for aligning a source vector to a target partition.
 
 ## Executing Plans
 
@@ -210,6 +266,122 @@ A * transpose(B)
 a * transpose(A)  # Returns transpose(a * A)
 transpose(A) * a  # Returns transpose(a * A)
 ```
+
+## Vector Operations
+
+### Matrix-Vector Multiplication
+
+```julia
+*(A::SparseMatrixMPI{T}, x::VectorMPI{T}) where T
+mul!(y::VectorMPI{T}, A::SparseMatrixMPI{T}, x::VectorMPI{T}) where T
+```
+
+Multiply a distributed sparse matrix by a distributed vector. The result vector has `A.row_partition` as its partition.
+
+**Example:**
+```julia
+y = A * x
+mul!(y, A, x)  # In-place version
+```
+
+### Vector-Matrix Multiplication
+
+```julia
+*(vt::Transpose{<:Any, VectorMPI{T}}, A::SparseMatrixMPI{T}) where T
+```
+
+Multiply a transposed vector by a matrix: `transpose(v) * A = transpose(transpose(A) * v)`.
+
+**Example:**
+```julia
+wt = transpose(v) * A
+```
+
+### Vector Addition and Subtraction
+
+```julia
++(u::VectorMPI{T}, v::VectorMPI{T}) where T
+-(u::VectorMPI{T}, v::VectorMPI{T}) where T
+-(v::VectorMPI{T}) where T
+```
+
+Add or subtract distributed vectors. If partitions differ, the second operand is automatically aligned to match the first operand's partition.
+
+**Example:**
+```julia
+w = u + v  # Result has u's partition
+w = u - v
+w = -v
+```
+
+### Vector Scalar Multiplication
+
+```julia
+*(a::Number, v::VectorMPI{T}) where T
+*(v::VectorMPI{T}, a::Number) where T
+/(v::VectorMPI{T}, a::Number) where T
+```
+
+Multiply or divide a distributed vector by a scalar.
+
+**Example:**
+```julia
+w = 2.0 * v
+w = v * 2.0
+w = v / 2.0
+```
+
+### Vector Transpose and Adjoint
+
+```julia
+transpose(v::VectorMPI{T}) where T
+conj(v::VectorMPI{T}) where T
+adjoint(v::VectorMPI{T}) where T
+```
+
+Return transpose (lazy wrapper), conjugate (new VectorMPI), or adjoint (transpose of conjugate).
+
+**Example:**
+```julia
+vt = transpose(v)  # Lazy
+vc = conj(v)       # New vector with conjugated values
+va = v'            # Equivalent to transpose(conj(v))
+```
+
+### Vector Norms
+
+```julia
+norm(v::VectorMPI, p=2)
+```
+
+Compute the p-norm of a distributed vector.
+
+**Arguments:**
+- `p=2` (default): Euclidean norm
+- `p=1`: Sum of absolute values
+- `p=Inf`: Maximum absolute value
+- Other p: General p-norm
+
+### Vector Reductions
+
+```julia
+sum(v::VectorMPI)
+prod(v::VectorMPI)
+maximum(v::VectorMPI)
+minimum(v::VectorMPI)
+```
+
+Compute reductions across all elements of a distributed vector.
+
+### Vector Properties
+
+```julia
+length(v::VectorMPI) -> Int
+size(v::VectorMPI) -> (Int,)
+eltype(v::VectorMPI{T}) -> T
+```
+
+Return the global length, size tuple, or element type.
 
 ## Norms
 
