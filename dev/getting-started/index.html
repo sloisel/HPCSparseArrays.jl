@@ -13,7 +13,41 @@ n = 100
 A = spdiagm(0 =&gt; 2.0*ones(n), 1 =&gt; -ones(n-1), -1 =&gt; -ones(n-1))
 
 # Distribute across MPI ranks
-Adist = SparseMatrixMPI{Float64}(A)</code></pre><p><strong>Important</strong>: All MPI ranks must have identical copies of the input matrix when constructing <code>SparseMatrixMPI</code>. The matrix is then automatically partitioned by rows across ranks.</p><h3 id="Understanding-Row-Partitioning"><a class="docs-heading-anchor" href="#Understanding-Row-Partitioning">Understanding Row Partitioning</a><a id="Understanding-Row-Partitioning-1"></a><a class="docs-heading-anchor-permalink" href="#Understanding-Row-Partitioning" title="Permalink"></a></h3><p>The matrix is partitioned roughly equally by rows. For example, with 4 ranks and a 100x100 matrix:</p><ul><li>Rank 0: rows 1-25</li><li>Rank 1: rows 26-50</li><li>Rank 2: rows 51-75</li><li>Rank 3: rows 76-100</li></ul><h2 id="Basic-Operations"><a class="docs-heading-anchor" href="#Basic-Operations">Basic Operations</a><a id="Basic-Operations-1"></a><a class="docs-heading-anchor-permalink" href="#Basic-Operations" title="Permalink"></a></h2><h3 id="Matrix-Multiplication"><a class="docs-heading-anchor" href="#Matrix-Multiplication">Matrix Multiplication</a><a id="Matrix-Multiplication-1"></a><a class="docs-heading-anchor-permalink" href="#Matrix-Multiplication" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Both matrices must be distributed
+Adist = SparseMatrixMPI{Float64}(A)</code></pre><p><strong>Important</strong>: All MPI ranks must have the same matrix <strong>size</strong> when constructing distributed types. However, each rank only extracts its own local rows, so the actual <strong>data</strong> only needs to be correct for each rank&#39;s portion.</p><h3 id="Understanding-Row-Partitioning"><a class="docs-heading-anchor" href="#Understanding-Row-Partitioning">Understanding Row Partitioning</a><a id="Understanding-Row-Partitioning-1"></a><a class="docs-heading-anchor-permalink" href="#Understanding-Row-Partitioning" title="Permalink"></a></h3><p>The matrix is partitioned roughly equally by rows. For example, with 4 ranks and a 100x100 matrix:</p><ul><li>Rank 0: rows 1-25</li><li>Rank 1: rows 26-50</li><li>Rank 2: rows 51-75</li><li>Rank 3: rows 76-100</li></ul><h3 id="Efficient-Local-Only-Construction"><a class="docs-heading-anchor" href="#Efficient-Local-Only-Construction">Efficient Local-Only Construction</a><a id="Efficient-Local-Only-Construction-1"></a><a class="docs-heading-anchor-permalink" href="#Efficient-Local-Only-Construction" title="Permalink"></a></h3><p>For large matrices, you can avoid replicating data across all ranks by only populating each rank&#39;s local portion:</p><pre><code class="language-julia hljs">using MPI
+MPI.Init()
+
+using LinearAlgebraMPI
+using SparseArrays
+
+comm = MPI.COMM_WORLD
+rank = MPI.Comm_rank(comm)
+nranks = MPI.Comm_size(comm)
+
+# Global dimensions
+m, n = 1000, 1000
+
+# Compute which rows this rank owns
+rows_per_rank = div(m, nranks)
+remainder = mod(m, nranks)
+my_row_start = 1 + rank * rows_per_rank + min(rank, remainder)
+my_row_end = my_row_start + rows_per_rank - 1 + (rank &lt; remainder ? 1 : 0)
+
+# Create a sparse matrix with correct size, but only populate local rows
+I, J, V = Int[], Int[], Float64[]
+for i in my_row_start:my_row_end
+    # Example: tridiagonal matrix
+    if i &gt; 1
+        push!(I, i); push!(J, i-1); push!(V, -1.0)
+    end
+    push!(I, i); push!(J, i); push!(V, 2.0)
+    if i &lt; m
+        push!(I, i); push!(J, i+1); push!(V, -1.0)
+    end
+end
+A = sparse(I, J, V, m, n)
+
+# The constructor extracts only local rows - other rows are ignored
+Adist = SparseMatrixMPI{Float64}(A)</code></pre><p>This pattern is useful when:</p><ul><li>The global matrix is too large to fit in memory on each rank</li><li>You&#39;re generating matrix entries programmatically</li><li>You want to minimize memory usage during construction</li></ul><h2 id="Basic-Operations"><a class="docs-heading-anchor" href="#Basic-Operations">Basic Operations</a><a id="Basic-Operations-1"></a><a class="docs-heading-anchor-permalink" href="#Basic-Operations" title="Permalink"></a></h2><h3 id="Matrix-Multiplication"><a class="docs-heading-anchor" href="#Matrix-Multiplication">Matrix Multiplication</a><a id="Matrix-Multiplication-1"></a><a class="docs-heading-anchor-permalink" href="#Matrix-Multiplication" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Both matrices must be distributed
 Adist = SparseMatrixMPI{Float64}(A)
 Bdist = SparseMatrixMPI{Float64}(B)
 
@@ -72,11 +106,11 @@ MPI.Finalize()</code></pre><h2 id="Performance-Tips"><a class="docs-heading-anch
 C1 = Adist * Bdist
 
 # Subsequent multiplications with same A, B reuse the cached plan
-C2 = Adist * Bdist  # Uses cached plan - much faster</code></pre><h3 id="Clear-Cache-When-Done"><a class="docs-heading-anchor" href="#Clear-Cache-When-Done">Clear Cache When Done</a><a id="Clear-Cache-When-Done-1"></a><a class="docs-heading-anchor-permalink" href="#Clear-Cache-When-Done" title="Permalink"></a></h3><p>If you&#39;re done with a set of matrices and want to free memory:</p><pre><code class="language-julia hljs">clear_plan_cache!()</code></pre><h3 id="Use-Deterministic-Test-Data"><a class="docs-heading-anchor" href="#Use-Deterministic-Test-Data">Use Deterministic Test Data</a><a id="Use-Deterministic-Test-Data-1"></a><a class="docs-heading-anchor-permalink" href="#Use-Deterministic-Test-Data" title="Permalink"></a></h3><p>For testing, avoid random matrices since they&#39;ll differ across ranks:</p><pre><code class="language-julia hljs"># Bad - different on each rank
+C2 = Adist * Bdist  # Uses cached plan - much faster</code></pre><h3 id="Clear-Cache-When-Done"><a class="docs-heading-anchor" href="#Clear-Cache-When-Done">Clear Cache When Done</a><a id="Clear-Cache-When-Done-1"></a><a class="docs-heading-anchor-permalink" href="#Clear-Cache-When-Done" title="Permalink"></a></h3><p>If you&#39;re done with a set of matrices and want to free memory:</p><pre><code class="language-julia hljs">clear_plan_cache!()</code></pre><h3 id="Use-Deterministic-Test-Data"><a class="docs-heading-anchor" href="#Use-Deterministic-Test-Data">Use Deterministic Test Data</a><a id="Use-Deterministic-Test-Data-1"></a><a class="docs-heading-anchor-permalink" href="#Use-Deterministic-Test-Data" title="Permalink"></a></h3><p>For testing with the simple &quot;replicate everywhere&quot; pattern, avoid random matrices since they&#39;ll differ across ranks:</p><pre><code class="language-julia hljs"># Bad - different random values on each rank
 A = sprand(100, 100, 0.01)
 
-# Good - deterministic, identical on all ranks
+# Good - deterministic formula, same on all ranks
 I = [1:100; 1:99; 2:100]
 J = [1:100; 2:100; 1:99]
 V = [2.0*ones(100); -0.5*ones(99); -0.5*ones(99)]
-A = sparse(I, J, V, 100, 100)</code></pre><h2 id="Next-Steps"><a class="docs-heading-anchor" href="#Next-Steps">Next Steps</a><a id="Next-Steps-1"></a><a class="docs-heading-anchor-permalink" href="#Next-Steps" title="Permalink"></a></h2><ul><li>See <a href="../examples/#Examples">Examples</a> for more detailed usage examples</li><li>Read the <a href="../api/#API-Reference">API Reference</a> for complete function documentation</li></ul></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../">« Home</a><a class="docs-footer-nextpage" href="../examples/">Examples »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.16.1 on <span class="colophon-date" title="Thursday 11 December 2025 17:28">Thursday 11 December 2025</span>. Using Julia version 1.10.10.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
+A = sparse(I, J, V, 100, 100)</code></pre><p>Alternatively, use the <a href="#Efficient-Local-Only-Construction">local-only construction pattern</a> where each rank generates only its own rows.</p><h2 id="Next-Steps"><a class="docs-heading-anchor" href="#Next-Steps">Next Steps</a><a id="Next-Steps-1"></a><a class="docs-heading-anchor-permalink" href="#Next-Steps" title="Permalink"></a></h2><ul><li>See <a href="../examples/#Examples">Examples</a> for more detailed usage examples</li><li>Read the <a href="../api/#API-Reference">API Reference</a> for complete function documentation</li></ul></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../">« Home</a><a class="docs-footer-nextpage" href="../examples/">Examples »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.16.1 on <span class="colophon-date" title="Thursday 11 December 2025 17:41">Thursday 11 December 2025</span>. Using Julia version 1.10.10.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
