@@ -23,6 +23,10 @@ julia --project=. -e 'using Pkg; Pkg.precompile()'
 
 LinearAlgebraMPI implements distributed sparse matrix operations using MPI for parallel computing across multiple ranks. Supports both `Float64` and `ComplexF64` element types.
 
+### Core design principle
+
+Distributed matrices (sparse and dense) and vectors should not be allgathered in the main library, although gathering constructors are available to the user. It is normal to have to move data from one rank to another, and for this, point-to-point communication (e.g. isend) should be favored. For communication that is performance-sensitive, like algebraic operations between matrices, a plan should be generated and cached based upon the hash of the relevant structures.
+
 ### Core Data Structures
 
 **SparseMatrixMPI{T}**

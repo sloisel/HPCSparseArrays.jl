@@ -62,11 +62,12 @@ function compute_partition_hash(partition::Vector{Int})::Blake3Hash
     return Blake3Hash(digest(ctx))
 end
 
-# Include the component files (order matters: vectors first, then dense/sparse, then blocks)
+# Include the component files (order matters: vectors first, then dense/sparse, then blocks, then indexing)
 include("vectors.jl")
 include("dense.jl")
 include("sparse.jl")
 include("blocks.jl")
+include("indexing.jl")
 
 # ============================================================================
 # Utility Functions
