@@ -382,6 +382,134 @@ result = gather_sparse(result_dist)
 
 MPI.Barrier(comm)
 
+if rank == 0
+    println("[test] MatrixMPI vcat")
+    flush(stdout)
+end
+
+# Create random dense matrices to stack vertically
+A_dense = rand(8, 10)
+B_dense = rand(6, 10)
+C_dense = rand(4, 10)
+
+ref = vcat(A_dense, B_dense, C_dense)
+
+Adist = MatrixMPI(A_dense)
+Bdist = MatrixMPI(B_dense)
+Cdist = MatrixMPI(C_dense)
+
+result_dist = vcat(Adist, Bdist, Cdist)
+
+@test size(result_dist) == size(ref)
+@test size(result_dist, 2) == 10  # columns preserved
+
+# Verify local data matches expected rows from ref
+my_row_start = result_dist.row_partition[rank + 1]
+my_row_end = result_dist.row_partition[rank + 2] - 1
+@test result_dist.A == ref[my_row_start:my_row_end, :]
+
+MPI.Barrier(comm)
+
+if rank == 0
+    println("[test] MatrixMPI hcat")
+    flush(stdout)
+end
+
+# Create random dense matrices to stack horizontally
+A_dense = rand(10, 8)
+B_dense = rand(10, 6)
+C_dense = rand(10, 4)
+
+ref = hcat(A_dense, B_dense, C_dense)
+
+Adist = MatrixMPI(A_dense)
+Bdist = MatrixMPI(B_dense)
+Cdist = MatrixMPI(C_dense)
+
+result_dist = hcat(Adist, Bdist, Cdist)
+
+@test size(result_dist) == size(ref)
+
+# Verify local data matches expected rows from ref
+my_row_start = result_dist.row_partition[rank + 1]
+my_row_end = result_dist.row_partition[rank + 2] - 1
+@test result_dist.A == ref[my_row_start:my_row_end, :]
+
+MPI.Barrier(comm)
+
+if rank == 0
+    println("[test] MatrixMPI cat dims=(2,2)")
+    flush(stdout)
+end
+
+# Create 4 matrices for 2x2 block [A B; C D]
+A_dense = rand(8, 6)
+B_dense = rand(8, 5)
+C_dense = rand(7, 6)
+D_dense = rand(7, 5)
+
+ref = [A_dense B_dense; C_dense D_dense]
+
+Adist = MatrixMPI(A_dense)
+Bdist = MatrixMPI(B_dense)
+Cdist = MatrixMPI(C_dense)
+Ddist = MatrixMPI(D_dense)
+
+result_dist = cat(Adist, Bdist, Cdist, Ddist; dims=(2, 2))
+
+@test size(result_dist) == size(ref)
+
+# Verify local data matches expected rows from ref
+my_row_start = result_dist.row_partition[rank + 1]
+my_row_end = result_dist.row_partition[rank + 2] - 1
+@test result_dist.A == ref[my_row_start:my_row_end, :]
+
+MPI.Barrier(comm)
+
+if rank == 0
+    println("[test] VectorMPI cat with tuple dims")
+    flush(stdout)
+end
+
+# Test dims=(n,1) same as vcat
+v1 = rand(10)
+v2 = rand(8)
+v3 = rand(12)
+
+ref = vcat(v1, v2, v3)
+
+v1dist = VectorMPI(v1)
+v2dist = VectorMPI(v2)
+v3dist = VectorMPI(v3)
+
+result_dist = cat(v1dist, v2dist, v3dist; dims=(3, 1))
+result = gather_vector(result_dist)
+
+@test result == ref
+
+# Test dims=(1,n) same as hcat
+v1 = rand(10)
+v2 = rand(10)
+v3 = rand(10)
+
+v1dist = VectorMPI(v1)
+v2dist = VectorMPI(v2)
+v3dist = VectorMPI(v3)
+
+result_dist = cat(v1dist, v2dist, v3dist; dims=(1, 3))
+
+@test size(result_dist) == (10, 3)
+
+# Test dims=(1,1) with single vector
+v_single = rand(15)
+v_single_dist = VectorMPI(v_single)
+result_single = cat(v_single_dist; dims=(1, 1))
+result_gathered = gather_vector(result_single)
+
+@test result_gathered == v_single
+
+MPI.Barrier(comm)
+
 end  # QuietTestSet
 
 # Aggregate counts across ranks
