@@ -31,7 +31,7 @@ Adist = SparseMatrixMPI{Float64}(A_global)
 # Complex test matrix
 A_complex = sparse([1, 2, 3, 4, 5, 1, 2, 3],
                    [1, 2, 3, 4, 5, 6, 7, 8],
-                   ComplexF64[1+2im, 3-1im, 2+0im, -1+3im, 4-2im, 1-1im, 2+2im, 3+1im],
+                   ComplexF64[1+2im, 3-1im, 2+1im, -1+3im, 4-2im, 1-1im, 2+2im, 3+1im],
                    n, n)
 Adist_complex = SparseMatrixMPI{ComplexF64}(A_complex)
 
@@ -211,7 +211,7 @@ vcopy_sum = sum(v_copy)
 v_sum = sum(v)
 @test vcopy_sum ≈ v_sum atol=TOL
 
-v_complex_global = vcat(ComplexF64[1+2im, 3-1im, 2+0im, -1+3im], zeros(ComplexF64, n - 4))
+v_complex_global = vcat(ComplexF64[1+2im, 3-1im, 2+1im, -1+3im], zeros(ComplexF64, n - 4))
 v_complex = VectorMPI(v_complex_global)
 vr_sum = sum(real(v_complex))
 @test vr_sum ≈ sum(real.(v_complex_global)) atol=TOL
@@ -311,6 +311,24 @@ v_exp_sum = sum(v_exp)
 compound = v .* 2.0 .+ w .^ 2
 compound_sum = sum(compound)
 @test compound_sum ≈ sum(v_global .* 2.0 .+ w_global .^ 2) atol=TOL
+
+# Test in-place broadcast assignment (materialize!)
+dest = VectorMPI(zeros(10))
+dest .= v .+ w
+dest_sum = sum(dest)
+@test dest_sum ≈ sum(v_global .+ w_global) atol=TOL
+
+# Test in-place compound broadcast (materialize!)
+dest2 = VectorMPI(zeros(10))
+dest2 .= v .* 2.0 .+ w .^ 2
+dest2_sum = sum(dest2)
+@test dest2_sum ≈ sum(v_global .* 2.0 .+ w_global .^ 2) atol=TOL
+
+# Test in-place with scalar (materialize!)
+dest3 = VectorMPI(zeros(10))
+dest3 .= v .* 3.0 .+ 10.0
+dest3_sum = sum(dest3)
+@test dest3_sum ≈ sum(v_global .* 3.0 .+ 10.0) atol=TOL
 
 # Test broadcast with different element types
 v_int_global = collect(1:10)

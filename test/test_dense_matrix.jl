@@ -210,7 +210,32 @@ err = maximum(abs.(yt.parent.v .- local_ref))
 MPI.Barrier(comm)
 
 if rank == 0
-    println("[test] VectorMPI' * MatrixMPI")
+    println("[test] VectorMPI' * MatrixMPI (Float64)")
+    flush(stdout)
+end
+
+m, n = 8, 6
+A = Float64.([i + j for i in 1:m, j in 1:n])
+x_global = collect(1.0:m)
+
+Adist = MatrixMPI(A)
+xdist = VectorMPI(x_global)
+
+# v' * A (Float64)
+yt = xdist' * Adist
+y_ref = x_global' * A
+
+my_col_start = Adist.col_partition[rank+1]
+my_col_end = Adist.col_partition[rank+2] - 1
+local_ref = collect(y_ref)[my_col_start:my_col_end]
+
+err = maximum(abs.(yt.parent.v .- local_ref))
+@test err < TOL
+
+MPI.Barrier(comm)
+
+if rank == 0
+    println("[test] VectorMPI' * MatrixMPI (ComplexF64)")
     flush(stdout)
 end
 
@@ -221,7 +246,7 @@ x_global = ComplexF64.(1:m) .+ im .* ComplexF64.(m:-1:1)
 Adist = MatrixMPI(A)
 xdist = VectorMPI(x_global)
 
-# v' * A
+# v' * A (ComplexF64)
 yt = xdist' * Adist
 y_ref = x_global' * A
 
@@ -360,6 +385,11 @@ norm1_ref = norm(A, 1)
 norminf = norm(Adist, Inf)
 norminf_ref = norm(A, Inf)
 @test abs(norminf - norminf_ref) < TOL
+
+# Non-integer p-norm (p = 1.5)
+norm15 = norm(Adist, 1.5)
+norm15_ref = norm(A, 1.5)
+@test abs(norm15 - norm15_ref) < TOL
 
 MPI.Barrier(comm)
 

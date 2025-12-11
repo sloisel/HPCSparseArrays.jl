@@ -225,6 +225,11 @@ norm3 = norm(xdist, 3)
 norm3_ref = norm(x_global, 3)
 @test abs(norm3 - norm3_ref) < TOL
 
+# Non-integer p-norm (p = 1.5)
+norm15 = norm(xdist, 1.5)
+norm15_ref = norm(x_global, 1.5)
+@test abs(norm15 - norm15_ref) < TOL
+
 # Complex vector norms
 z_global = ComplexF64.(1:n) .+ im .* ComplexF64.(n:-1:1)
 zdist = VectorMPI(z_global)

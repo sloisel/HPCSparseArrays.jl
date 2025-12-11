@@ -1639,6 +1639,43 @@ function mean(A::SparseMatrixMPI{T}) where T
 end
 
 """
+    _find_nzval_at_global_col(A::SparseMatrixMPI{T}, local_row::Int, global_col::Int) where T
+
+Find the nonzero value at (local_row, global_col) using binary search.
+Returns the value if found, or nothing if not present.
+
+Uses binary search on col_indices (sorted) to convert global→local,
+then binary search on rowval (sorted within each CSC column) to find the entry.
+"""
+function _find_nzval_at_global_col(A::SparseMatrixMPI{T}, local_row::Int, global_col::Int) where T
+    col_indices = A.col_indices
+
+    # Binary search to find local column index for global_col
+    local_col_idx = searchsortedfirst(col_indices, global_col)
+    if local_col_idx > length(col_indices) || col_indices[local_col_idx] != global_col
+        return nothing  # global_col not in our local columns
+    end
+
+    # Binary search within the row's nonzeros (CSC column) for this local column
+    start_idx = A.A.parent.colptr[local_row]
+    end_idx = A.A.parent.colptr[local_row + 1] - 1
+
+    if start_idx > end_idx
+        return nothing  # empty row
+    end
+
+    # rowval is sorted within each column, use binary search
+    rowval_view = view(A.A.parent.rowval, start_idx:end_idx)
+    pos = searchsortedfirst(rowval_view, local_col_idx)
+
+    if pos <= length(rowval_view) && rowval_view[pos] == local_col_idx
+        return A.A.parent.nzval[start_idx + pos - 1]
+    end
+
+    return nothing
+end
+
+"""
     tr(A::SparseMatrixMPI{T}) where T
 
 Compute the trace (sum of main diagonal elements) of A.
@@ -1652,19 +1689,13 @@ function tr(A::SparseMatrixMPI{T}) where T
     my_row_end = A.row_partition[rank+2] - 1
 
     local_trace = zero(T)
-    col_indices = A.col_indices
     for local_row in 1:(my_row_end - my_row_start + 1)
         global_row = my_row_start + local_row - 1
         # Diagonal element is at (global_row, global_row) if within bounds
         if global_row <= n
-            # Search for column global_row in A.A.parent[:, local_row]
-            # A.A.parent.rowval contains LOCAL indices, convert to global using col_indices
-            for nz_idx in A.A.parent.colptr[local_row]:(A.A.parent.colptr[local_row+1]-1)
-                global_col = col_indices[A.A.parent.rowval[nz_idx]]
-                if global_col == global_row
-                    local_trace += A.A.parent.nzval[nz_idx]
-                    break
-                end
+            val = _find_nzval_at_global_col(A, local_row, global_row)
+            if val !== nothing
+                local_trace += val
             end
         end
     end
@@ -1739,7 +1770,6 @@ function diag(A::SparseMatrixMPI{T}, k::Integer=0) where T
     # Each rank extracts diagonal elements from its rows
     my_row_start = A.row_partition[rank+1]
     my_row_end = A.row_partition[rank+2] - 1
-    col_indices = A.col_indices
 
     # Build full diagonal using Allreduce (each rank contributes its portion)
     full_diag = zeros(T, diag_len)
@@ -1749,14 +1779,10 @@ function diag(A::SparseMatrixMPI{T}, k::Integer=0) where T
 
         if global_row >= my_row_start && global_row <= my_row_end
             local_row = global_row - my_row_start + 1
-            # Search for column global_col in A.A.parent[:, local_row]
-            # A.A.parent.rowval contains LOCAL indices, convert to global using col_indices
-            for nz_idx in A.A.parent.colptr[local_row]:(A.A.parent.colptr[local_row+1]-1)
-                local_col = A.A.parent.rowval[nz_idx]
-                if col_indices[local_col] == global_col
-                    full_diag[d] = A.A.parent.nzval[nz_idx]
-                    break
-                end
+            # Use binary search to find the element at (local_row, global_col)
+            val = _find_nzval_at_global_col(A, local_row, global_col)
+            if val !== nothing
+                full_diag[d] = val
             end
         end
     end
