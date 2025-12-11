@@ -2040,32 +2040,212 @@ function tril(A::SparseMatrixMPI{T}, k::Integer=0) where T
 end
 
 # ============================================================================
+# Helpers for Distributed Operations (cat, blockdiag, etc.)
+# ============================================================================
+
+# Note: _partition_rows_by_owner is defined in dense.jl (included before this file)
+
+"""
+    _gather_rows_from_sparse(A::SparseMatrixMPI{T}, global_rows::AbstractVector{Int}) where T
+
+Gather specific rows from a SparseMatrixMPI by global row index.
+
+Returns a Vector of tuples `(global_row, global_col, value)` containing all nonzeros
+in the requested rows. Uses point-to-point communication (Isend/Irecv) to minimize
+data transfer - only exchanges rows that are actually needed.
+
+# Arguments
+- `A::SparseMatrixMPI{T}`: The distributed sparse matrix
+- `global_rows::AbstractVector{Int}`: Global row indices to gather
+
+# Returns
+Vector{Tuple{Int,Int,T}} of (row, col, value) triplets for the requested rows.
+
+Communication tags used: 30 (structure), 31 (values)
+"""
+function _gather_rows_from_sparse(A::SparseMatrixMPI{T}, global_rows::AbstractVector{Int}) where T
+    comm = MPI.COMM_WORLD
+    rank = MPI.Comm_rank(comm)
+    nranks = MPI.Comm_size(comm)
+
+    # NOTE: Do NOT early return here even if global_rows is empty!
+    # All ranks must participate in MPI collectives below.
+
+    my_row_start = A.row_partition[rank+1]
+
+    # Step 1: Partition rows by owner
+    rows_by_owner = _partition_rows_by_owner(global_rows, A.row_partition)
+
+    # Step 2: Exchange row request counts via Alltoall
+    send_counts = Int32[haskey(rows_by_owner, r) ? length(rows_by_owner[r]) : 0 for r in 0:(nranks-1)]
+    recv_counts = MPI.Alltoall(MPI.UBuffer(send_counts, 1), comm)
+
+    # Step 3: Send row requests to owner ranks
+    row_send_reqs = MPI.Request[]
+    row_recv_bufs = Dict{Int,Vector{Int32}}()
+    row_recv_reqs = MPI.Request[]
+
+    for r in 0:(nranks-1)
+        if send_counts[r+1] > 0 && r != rank
+            rows_to_request = Int32.(rows_by_owner[r])
+            req = MPI.Isend(rows_to_request, comm; dest=r, tag=30)
+            push!(row_send_reqs, req)
+        end
+    end
+
+    # Step 4: Receive row requests from other ranks
+    for r in 0:(nranks-1)
+        if recv_counts[r+1] > 0 && r != rank
+            buf = Vector{Int32}(undef, recv_counts[r+1])
+            req = MPI.Irecv!(buf, comm; source=r, tag=30)
+            push!(row_recv_reqs, req)
+            row_recv_bufs[r] = buf
+        end
+    end
+
+    MPI.Waitall(row_recv_reqs)
+    MPI.Waitall(row_send_reqs)
+
+    # Step 5: For each requesting rank, extract and send triplets for requested rows
+    # First, compute how many triplets we'll send to each rank
+    triplet_counts_to_send = Dict{Int,Int}()
+    triplets_to_send = Dict{Int,Vector{Tuple{Int32,Int32,T}}}()
+
+    for r in 0:(nranks-1)
+        if recv_counts[r+1] > 0 && r != rank
+            requested_rows = row_recv_bufs[r]
+            triplets = Tuple{Int32,Int32,T}[]
+
+            for global_row in requested_rows
+                local_row = global_row - my_row_start + 1
+                # A.A.parent has columns = local rows, so iterate column `local_row`
+                for nz_idx in A.A.parent.colptr[local_row]:(A.A.parent.colptr[local_row+1]-1)
+                    local_col = A.A.parent.rowval[nz_idx]
+                    global_col = A.col_indices[local_col]
+                    val = A.A.parent.nzval[nz_idx]
+                    push!(triplets, (Int32(global_row), Int32(global_col), val))
+                end
+            end
+
+            triplet_counts_to_send[r] = length(triplets)
+            triplets_to_send[r] = triplets
+        end
+    end
+
+    # Step 6: Exchange triplet counts
+    send_triplet_counts = Int32[get(triplet_counts_to_send, r, 0) for r in 0:(nranks-1)]
+    recv_triplet_counts = MPI.Alltoall(MPI.UBuffer(send_triplet_counts, 1), comm)
+
+    # Step 7: Send triplets (pack as flat arrays: rows, cols, vals)
+    triplet_send_reqs = MPI.Request[]
+
+    for r in 0:(nranks-1)
+        if send_triplet_counts[r+1] > 0 && r != rank
+            triplets = triplets_to_send[r]
+            n_triplets = length(triplets)
+
+            # Pack into arrays
+            rows_buf = Int32[t[1] for t in triplets]
+            cols_buf = Int32[t[2] for t in triplets]
+            vals_buf = T[t[3] for t in triplets]
+
+            req1 = MPI.Isend(rows_buf, comm; dest=r, tag=31)
+            req2 = MPI.Isend(cols_buf, comm; dest=r, tag=32)
+            req3 = MPI.Isend(vals_buf, comm; dest=r, tag=33)
+            push!(triplet_send_reqs, req1, req2, req3)
+        end
+    end
+
+    # Step 8: Receive triplets
+    triplet_recv_bufs = Dict{Int,Tuple{Vector{Int32},Vector{Int32},Vector{T}}}()
+    triplet_recv_reqs = MPI.Request[]
+
+    for r in 0:(nranks-1)
+        if recv_triplet_counts[r+1] > 0 && r != rank
+            n = recv_triplet_counts[r+1]
+            rows_buf = Vector{Int32}(undef, n)
+            cols_buf = Vector{Int32}(undef, n)
+            vals_buf = Vector{T}(undef, n)
+
+            req1 = MPI.Irecv!(rows_buf, comm; source=r, tag=31)
+            req2 = MPI.Irecv!(cols_buf, comm; source=r, tag=32)
+            req3 = MPI.Irecv!(vals_buf, comm; source=r, tag=33)
+            push!(triplet_recv_reqs, req1, req2, req3)
+
+            triplet_recv_bufs[r] = (rows_buf, cols_buf, vals_buf)
+        end
+    end
+
+    # Step 9: Collect local triplets for rows we own
+    result = Tuple{Int,Int,T}[]
+
+    if haskey(rows_by_owner, rank)
+        for global_row in rows_by_owner[rank]
+            local_row = global_row - my_row_start + 1
+            for nz_idx in A.A.parent.colptr[local_row]:(A.A.parent.colptr[local_row+1]-1)
+                local_col = A.A.parent.rowval[nz_idx]
+                global_col = A.col_indices[local_col]
+                val = A.A.parent.nzval[nz_idx]
+                push!(result, (global_row, global_col, val))
+            end
+        end
+    end
+
+    MPI.Waitall(triplet_recv_reqs)
+
+    # Step 10: Unpack received triplets
+    for r in 0:(nranks-1)
+        if recv_triplet_counts[r+1] > 0 && r != rank
+            rows_buf, cols_buf, vals_buf = triplet_recv_bufs[r]
+            for i in eachindex(rows_buf)
+                push!(result, (Int(rows_buf[i]), Int(cols_buf[i]), vals_buf[i]))
+            end
+        end
+    end
+
+    MPI.Waitall(triplet_send_reqs)
+
+    return result
+end
+
+# ============================================================================
 # Extended SparseMatrixCSC API - Diagonal Matrix Construction
 # ============================================================================
 
 """
-    _gather_vectormpi(v::VectorMPI{T}) where T
+    _compute_spdiagm_size(kv::Pair{<:Integer, <:VectorMPI}...)
 
-Gather a distributed VectorMPI to a full vector on all ranks.
+Compute the output matrix size for spdiagm from diagonal specifications.
+
+For diagonal k with length n:
+- If k >= 0: matrix is (n, n+k) minimum to fit
+- If k < 0: matrix is (n+|k|, n) minimum to fit
+
+Returns the maximum dimensions needed to fit all diagonals.
 """
-function _gather_vectormpi(v::VectorMPI{T}) where T
-    comm = MPI.COMM_WORLD
-    nranks = MPI.Comm_size(comm)
-
-    # Get counts for each rank
-    counts = Int32[v.partition[r+2] - v.partition[r+1] for r in 0:nranks-1]
-
-    # Use Allgatherv to gather the full vector
-    full_v = Vector{T}(undef, length(v))
-    MPI.Allgatherv!(v.v, MPI.VBuffer(full_v, counts), comm)
-
-    return full_v
+function _compute_spdiagm_size(kv::Pair{<:Integer, <:VectorMPI}...)
+    m = 0
+    n = 0
+    for (k, v) in kv
+        vec_len = length(v)
+        if k >= 0
+            m = max(m, vec_len)
+            n = max(n, vec_len + k)
+        else
+            m = max(m, vec_len - k)  # vec_len + |k|
+            n = max(n, vec_len)
+        end
+    end
+    return m, n
 end
 
 """
     spdiagm(kv::Pair{<:Integer, <:VectorMPI}...)
 
 Construct a sparse diagonal SparseMatrixMPI from pairs of diagonals and VectorMPI vectors.
+
+This is a distributed implementation that only gathers the vector elements each rank
+needs for its local rows, rather than gathering the entire vector to all ranks.
 
 # Example
 ```julia
@@ -2075,24 +2255,139 @@ A = spdiagm(0 => v1, 1 => v2)  # Main diagonal and first superdiagonal
 ```
 """
 function spdiagm(kv::Pair{<:Integer, <:VectorMPI}...)
-    comm = MPI.COMM_WORLD
+    isempty(kv) && error("spdiagm requires at least one diagonal")
 
-    # Gather all VectorMPI to full vectors
-    gathered_kv = map(kv) do (k, v)
-        k => _gather_vectormpi(v)
+    comm = MPI.COMM_WORLD
+    rank = MPI.Comm_rank(comm)
+    nranks = MPI.Comm_size(comm)
+
+    # Determine element type
+    T = eltype(first(kv)[2])
+    for (_, v) in kv
+        T = promote_type(T, eltype(v))
     end
 
-    # Call standard spdiagm to create global sparse matrix
-    A_global = SparseArrays.spdiagm(gathered_kv...)
+    # Step 1: Compute output dimensions
+    m, n = _compute_spdiagm_size(kv...)
 
-    # Create SparseMatrixMPI from the global matrix
-    return SparseMatrixMPI{eltype(A_global)}(A_global)
+    # Step 2: Compute output row partition (standard balanced partition)
+    rows_per_rank = div(m, nranks)
+    row_remainder = mod(m, nranks)
+    row_partition = Vector{Int}(undef, nranks + 1)
+    row_partition[1] = 1
+    for r in 1:nranks
+        extra = r <= row_remainder ? 1 : 0
+        row_partition[r+1] = row_partition[r] + rows_per_rank + extra
+    end
+
+    my_row_start = row_partition[rank+1]
+    my_row_end = row_partition[rank+2] - 1
+    local_nrows = my_row_end - my_row_start + 1
+
+    # Step 3: For each diagonal, determine which vector elements we need
+    # Diagonal k: v[i] at (row, col) where:
+    #   k >= 0: (i, i+k)
+    #   k < 0: (i+|k|, i)
+    needed_indices_per_diag = Dict{Int, Vector{Int}}()  # k => global vector indices
+
+    for (k, v) in kv
+        vec_len = length(v)
+        indices = Int[]
+
+        for local_row_idx in 1:local_nrows
+            global_row = my_row_start + local_row_idx - 1
+
+            # Determine vector index for this row on diagonal k
+            if k >= 0
+                # v[i] at (i, i+k), so row = i => vec_idx = row
+                vec_idx = global_row
+                col = global_row + k
+            else
+                # v[i] at (i+|k|, i), so row = i+|k| => vec_idx = row - |k| = row + k
+                vec_idx = global_row + k
+                col = vec_idx
+            end
+
+            # Check if this row has an entry on this diagonal
+            if 1 <= vec_idx <= vec_len && 1 <= col <= n
+                push!(indices, vec_idx)
+            end
+        end
+
+        if !isempty(indices)
+            needed_indices_per_diag[k] = indices
+        end
+    end
+
+    # Step 4: Gather needed vector elements for each diagonal
+    # IMPORTANT: All ranks must call _gather_specific_elements for each diagonal
+    # to participate in MPI collectives, even if they need no elements
+    gathered_values = Dict{Int, Vector{T}}()
+
+    for (k, v) in kv
+        indices = get(needed_indices_per_diag, k, Int[])
+        gathered_values[k] = _gather_specific_elements(v, indices)
+    end
+
+    # Step 5: Build local triplets (local_row, global_col, value)
+    local_I = Int[]
+    local_J = Int[]
+    local_V = T[]
+
+    for (k, v) in kv
+        if !haskey(needed_indices_per_diag, k)
+            continue
+        end
+
+        indices = needed_indices_per_diag[k]
+        values = gathered_values[k]
+        vec_len = length(v)
+
+        val_idx = 1
+        for local_row_idx in 1:local_nrows
+            global_row = my_row_start + local_row_idx - 1
+
+            if k >= 0
+                vec_idx = global_row
+                col = global_row + k
+            else
+                vec_idx = global_row + k
+                col = vec_idx
+            end
+
+            if 1 <= vec_idx <= vec_len && 1 <= col <= n
+                push!(local_I, local_row_idx)
+                push!(local_J, col)
+                push!(local_V, values[val_idx])
+                val_idx += 1
+            end
+        end
+    end
+
+    # Step 6: Build local sparse matrix in transposed CSC format
+    # SparseMatrixMPI_local expects transpose(AT) where AT has:
+    #   - m = number of columns (global)
+    #   - n = number of local rows
+    #   - rowval = global column indices
+    if isempty(local_I)
+        # Empty local part
+        AT_local = SparseMatrixCSC(n, local_nrows, ones(Int, local_nrows + 1), Int[], T[])
+    else
+        # Build local sparse matrix then take its transpose parent
+        local_sparse = sparse(local_I, local_J, local_V, local_nrows, n)
+        AT_local = sparse(transpose(local_sparse))
+    end
+
+    return SparseMatrixMPI_local(transpose(AT_local), comm)
 end
 
 """
     spdiagm(m::Integer, n::Integer, kv::Pair{<:Integer, <:VectorMPI}...)
 
 Construct an m×n sparse diagonal SparseMatrixMPI from pairs of diagonals and VectorMPI vectors.
+
+This is a distributed implementation that only gathers the vector elements each rank
+needs for its local rows, rather than gathering the entire vector to all ranks.
 
 # Example
 ```julia
@@ -2101,18 +2396,114 @@ A = spdiagm(4, 4, 0 => v)  # 4×4 matrix with [1,2] on main diagonal
 ```
 """
 function spdiagm(m::Integer, n::Integer, kv::Pair{<:Integer, <:VectorMPI}...)
-    comm = MPI.COMM_WORLD
+    isempty(kv) && error("spdiagm requires at least one diagonal")
 
-    # Gather all VectorMPI to full vectors
-    gathered_kv = map(kv) do (k, v)
-        k => _gather_vectormpi(v)
+    comm = MPI.COMM_WORLD
+    rank = MPI.Comm_rank(comm)
+    nranks = MPI.Comm_size(comm)
+
+    # Determine element type
+    T = eltype(first(kv)[2])
+    for (_, v) in kv
+        T = promote_type(T, eltype(v))
     end
 
-    # Call standard spdiagm to create global sparse matrix
-    A_global = SparseArrays.spdiagm(m, n, gathered_kv...)
+    # Step 1: Compute output row partition
+    rows_per_rank = div(m, nranks)
+    row_remainder = mod(m, nranks)
+    row_partition = Vector{Int}(undef, nranks + 1)
+    row_partition[1] = 1
+    for r in 1:nranks
+        extra = r <= row_remainder ? 1 : 0
+        row_partition[r+1] = row_partition[r] + rows_per_rank + extra
+    end
 
-    # Create SparseMatrixMPI from the global matrix
-    return SparseMatrixMPI{eltype(A_global)}(A_global)
+    my_row_start = row_partition[rank+1]
+    my_row_end = row_partition[rank+2] - 1
+    local_nrows = my_row_end - my_row_start + 1
+
+    # Step 2: For each diagonal, determine which vector elements we need
+    needed_indices_per_diag = Dict{Int, Vector{Int}}()
+
+    for (k, v) in kv
+        vec_len = length(v)
+        indices = Int[]
+
+        for local_row_idx in 1:local_nrows
+            global_row = my_row_start + local_row_idx - 1
+
+            if k >= 0
+                vec_idx = global_row
+                col = global_row + k
+            else
+                vec_idx = global_row + k
+                col = vec_idx
+            end
+
+            if 1 <= vec_idx <= vec_len && 1 <= col <= n && 1 <= global_row <= m
+                push!(indices, vec_idx)
+            end
+        end
+
+        if !isempty(indices)
+            needed_indices_per_diag[k] = indices
+        end
+    end
+
+    # Step 3: Gather needed vector elements
+    # IMPORTANT: All ranks must call _gather_specific_elements for each diagonal
+    # to participate in MPI collectives, even if they need no elements
+    gathered_values = Dict{Int, Vector{T}}()
+
+    for (k, v) in kv
+        indices = get(needed_indices_per_diag, k, Int[])
+        gathered_values[k] = _gather_specific_elements(v, indices)
+    end
+
+    # Step 4: Build local triplets
+    local_I = Int[]
+    local_J = Int[]
+    local_V = T[]
+
+    for (k, v) in kv
+        if !haskey(needed_indices_per_diag, k)
+            continue
+        end
+
+        indices = needed_indices_per_diag[k]
+        values = gathered_values[k]
+        vec_len = length(v)
+
+        val_idx = 1
+        for local_row_idx in 1:local_nrows
+            global_row = my_row_start + local_row_idx - 1
+
+            if k >= 0
+                vec_idx = global_row
+                col = global_row + k
+            else
+                vec_idx = global_row + k
+                col = vec_idx
+            end
+
+            if 1 <= vec_idx <= vec_len && 1 <= col <= n && 1 <= global_row <= m
+                push!(local_I, local_row_idx)
+                push!(local_J, col)
+                push!(local_V, values[val_idx])
+                val_idx += 1
+            end
+        end
+    end
+
+    # Step 5: Build local sparse matrix
+    if isempty(local_I)
+        AT_local = SparseMatrixCSC(n, local_nrows, ones(Int, local_nrows + 1), Int[], T[])
+    else
+        local_sparse = sparse(local_I, local_J, local_V, local_nrows, n)
+        AT_local = sparse(transpose(local_sparse))
+    end
+
+    return SparseMatrixMPI_local(transpose(AT_local), comm)
 end
 
 """

@@ -193,6 +193,172 @@ function _compute_partition(n::Int, nranks::Int)
     return partition
 end
 
+# ============================================================================
+# Helpers for Distributed Operations (cat, etc.)
+# ============================================================================
+
+"""
+    _gather_dense_rows(A::MatrixMPI{T}, global_rows::AbstractVector{Int}) where T
+
+Gather specific rows from a MatrixMPI by global row index.
+
+Returns a Matrix{T} with the requested rows, where result[i,:] corresponds to
+global row global_rows[i]. Uses point-to-point communication (Isend/Irecv)
+to minimize data transfer - only exchanges rows that are actually needed.
+
+# Arguments
+- `A::MatrixMPI{T}`: The distributed dense matrix
+- `global_rows::AbstractVector{Int}`: Global row indices to gather
+
+# Returns
+Matrix{T} of size (length(global_rows), ncols) with the requested rows.
+
+Communication tags used: 34 (row indices), 35 (row values)
+"""
+function _gather_dense_rows(A::MatrixMPI{T}, global_rows::AbstractVector{Int}) where T
+    comm = MPI.COMM_WORLD
+    rank = MPI.Comm_rank(comm)
+    nranks = MPI.Comm_size(comm)
+
+    n_requested = length(global_rows)
+    ncols = size(A, 2)
+
+    # NOTE: Do NOT early return here even if n_requested == 0!
+    # All ranks must participate in MPI collectives below.
+
+    my_row_start = A.row_partition[rank+1]
+
+    # Step 1: Partition rows by owner
+    rows_by_owner = _partition_rows_by_owner(global_rows, A.row_partition)
+
+    # Step 2: Exchange row request counts via Alltoall
+    send_counts = Int32[haskey(rows_by_owner, r) ? length(rows_by_owner[r]) : 0 for r in 0:(nranks-1)]
+    recv_counts = MPI.Alltoall(MPI.UBuffer(send_counts, 1), comm)
+
+    # Step 3: Send row requests to owner ranks
+    row_send_reqs = MPI.Request[]
+    row_recv_bufs = Dict{Int,Vector{Int32}}()
+    row_recv_reqs = MPI.Request[]
+
+    for r in 0:(nranks-1)
+        if send_counts[r+1] > 0 && r != rank
+            rows_to_request = Int32.(rows_by_owner[r])
+            req = MPI.Isend(rows_to_request, comm; dest=r, tag=34)
+            push!(row_send_reqs, req)
+        end
+    end
+
+    # Step 4: Receive row requests from other ranks
+    for r in 0:(nranks-1)
+        if recv_counts[r+1] > 0 && r != rank
+            buf = Vector{Int32}(undef, recv_counts[r+1])
+            req = MPI.Irecv!(buf, comm; source=r, tag=34)
+            push!(row_recv_reqs, req)
+            row_recv_bufs[r] = buf
+        end
+    end
+
+    MPI.Waitall(row_recv_reqs)
+    MPI.Waitall(row_send_reqs)
+
+    # Step 5: Send row data for received requests
+    row_data_send_bufs = Dict{Int,Matrix{T}}()
+    row_data_send_reqs = MPI.Request[]
+
+    for r in 0:(nranks-1)
+        if recv_counts[r+1] > 0 && r != rank
+            requested_rows = row_recv_bufs[r]
+            n_rows_to_send = length(requested_rows)
+            data_to_send = Matrix{T}(undef, n_rows_to_send, ncols)
+
+            for (i, global_row) in enumerate(requested_rows)
+                local_row = global_row - my_row_start + 1
+                data_to_send[i, :] = A.A[local_row, :]
+            end
+
+            row_data_send_bufs[r] = data_to_send
+            req = MPI.Isend(vec(data_to_send), comm; dest=r, tag=35)
+            push!(row_data_send_reqs, req)
+        end
+    end
+
+    # Step 6: Receive row data
+    result = Matrix{T}(undef, n_requested, ncols)
+    row_data_recv_bufs = Dict{Int,Vector{T}}()
+    row_data_recv_reqs = MPI.Request[]
+    recv_positions = Dict{Int,Vector{Int}}()  # Track where each rank's data goes
+
+    # Build position mapping for received rows
+    position_map = Dict{Int,Int}()  # global_row => position in result
+    for (pos, global_row) in enumerate(global_rows)
+        position_map[global_row] = pos
+    end
+
+    for r in 0:(nranks-1)
+        if send_counts[r+1] > 0 && r != rank
+            n_rows = send_counts[r+1]
+            buf = Vector{T}(undef, n_rows * ncols)
+            req = MPI.Irecv!(buf, comm; source=r, tag=35)
+            push!(row_data_recv_reqs, req)
+            row_data_recv_bufs[r] = buf
+            # Track positions for this rank's rows
+            recv_positions[r] = [position_map[row] for row in rows_by_owner[r]]
+        end
+    end
+
+    # Step 7: Copy local rows directly
+    if haskey(rows_by_owner, rank)
+        for global_row in rows_by_owner[rank]
+            local_row = global_row - my_row_start + 1
+            result_pos = position_map[global_row]
+            result[result_pos, :] = A.A[local_row, :]
+        end
+    end
+
+    MPI.Waitall(row_data_recv_reqs)
+
+    # Step 8: Unpack received row data
+    for r in 0:(nranks-1)
+        if send_counts[r+1] > 0 && r != rank
+            buf = row_data_recv_bufs[r]
+            positions = recv_positions[r]
+            n_rows = length(positions)
+            data_matrix = reshape(buf, n_rows, ncols)
+            for (i, pos) in enumerate(positions)
+                result[pos, :] = data_matrix[i, :]
+            end
+        end
+    end
+
+    MPI.Waitall(row_data_send_reqs)
+
+    return result
+end
+
+"""
+    _partition_rows_by_owner(global_rows::AbstractVector{Int}, partition::Vector{Int}) -> Dict{Int, Vector{Int}}
+
+Partition a list of global row indices by their owner rank.
+
+Returns a Dict mapping owner rank (0-indexed) to the list of global row indices
+owned by that rank, according to the given partition.
+"""
+function _partition_rows_by_owner(global_rows::AbstractVector{Int}, partition::Vector{Int})
+    nranks = length(partition) - 1
+    result = Dict{Int, Vector{Int}}()
+
+    for global_row in global_rows
+        owner = searchsortedlast(partition, global_row) - 1
+        owner = clamp(owner, 0, nranks - 1)
+        if !haskey(result, owner)
+            result[owner] = Int[]
+        end
+        push!(result[owner], global_row)
+    end
+
+    return result
+end
+
 # Dense matrix-vector plan and multiplication
 
 """

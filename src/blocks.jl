@@ -23,6 +23,9 @@ cat(A, B; dims=1)           # vcat: stack A on top of B
 cat(A, B; dims=2)           # hcat: place A left of B
 cat(A, B, C, D; dims=(2,2)) # 2×2 block matrix [A B; C D]
 ```
+
+This is a distributed implementation that only gathers the rows each rank needs
+for its local output, rather than gathering all data to all ranks.
 """
 function Base.cat(As::SparseMatrixMPI{T}...; dims) where T
     isempty(As) && error("cat requires at least one matrix")
@@ -69,7 +72,7 @@ function Base.cat(As::SparseMatrixMPI{T}...; dims) where T
     total_rows = sum(block_row_heights)
     total_cols = sum(block_col_widths)
 
-    # Row and column offsets for each block
+    # Row and column offsets for each block row/column
     row_offsets = [0; cumsum(block_row_heights[1:end-1])]
     col_offsets = [0; cumsum(block_col_widths[1:end-1])]
 
@@ -77,53 +80,71 @@ function Base.cat(As::SparseMatrixMPI{T}...; dims) where T
     rank = MPI.Comm_rank(comm)
     nranks = MPI.Comm_size(comm)
 
-    # Gather all blocks to global sparse matrix using triplet format
-    all_I = Int[]
-    all_J = Int[]
-    all_V = T[]
+    # Step 1: Compute output row partition
+    rows_per_rank = div(total_rows, nranks)
+    row_remainder = mod(total_rows, nranks)
+    output_row_partition = Vector{Int}(undef, nranks + 1)
+    output_row_partition[1] = 1
+    for r in 1:nranks
+        extra = r <= row_remainder ? 1 : 0
+        output_row_partition[r+1] = output_row_partition[r] + rows_per_rank + extra
+    end
+
+    my_out_row_start = output_row_partition[rank+1]
+    my_out_row_end = output_row_partition[rank+2] - 1
+    local_nrows = my_out_row_end - my_out_row_start + 1
+
+    # Step 2: For each block row that overlaps our output, gather needed rows
+    local_I = Int[]
+    local_J = Int[]
+    local_V = T[]
 
     for bi in 1:nblock_rows
+        block_row_start = row_offsets[bi] + 1
+        block_row_end = row_offsets[bi] + block_row_heights[bi]
+
+        # Determine rows we need from this block row (in block-local coordinates)
+        # NOTE: ALL ranks must call _gather_rows_from_sparse for EVERY block to
+        # participate in MPI collectives. Pass empty array if no overlap.
+        has_overlap = !(block_row_end < my_out_row_start || block_row_start > my_out_row_end)
+
+        if has_overlap
+            first_row_in_block = max(1, my_out_row_start - row_offsets[bi])
+            last_row_in_block = min(block_row_heights[bi], my_out_row_end - row_offsets[bi])
+            rows_needed = collect(first_row_in_block:last_row_in_block)
+        else
+            rows_needed = Int[]
+        end
+
+        # Get rows from each block in this block row
         for bj in 1:nblock_cols
             A = blocks[bi, bj]
-            row_offset = row_offsets[bi]
             col_offset = col_offsets[bj]
 
-            # Extract local triplets from this block
-            my_row_start = A.row_partition[rank + 1]
-            col_indices = A.col_indices
-            for local_row in 1:size(A.A.parent, 2)
-                global_row_in_block = my_row_start + local_row - 1
-                global_row = row_offset + global_row_in_block
-                for idx in A.A.parent.colptr[local_row]:(A.A.parent.colptr[local_row + 1] - 1)
-                    local_col = A.A.parent.rowval[idx]
-                    col_in_block = col_indices[local_col]  # map local to global
-                    global_col = col_offset + col_in_block
-                    push!(all_I, global_row)
-                    push!(all_J, global_col)
-                    push!(all_V, A.A.parent.nzval[idx])
-                end
+            # Gather the needed rows from this block (all ranks must call this!)
+            triplets = _gather_rows_from_sparse(A, rows_needed)
+
+            # Add triplets with offsets applied
+            for (row_in_block, col_in_block, val) in triplets
+                output_row = row_offsets[bi] + row_in_block
+                local_output_row = output_row - my_out_row_start + 1
+                global_col = col_offset + col_in_block
+                push!(local_I, local_output_row)
+                push!(local_J, global_col)
+                push!(local_V, val)
             end
         end
     end
 
-    # Gather all triplets from all ranks
-    local_nnz = Int32(length(all_I))
-    all_nnz = MPI.Allgather(local_nnz, comm)
+    # Step 3: Build local sparse matrix
+    if isempty(local_I)
+        AT_local = SparseMatrixCSC(total_cols, local_nrows, ones(Int, local_nrows + 1), Int[], T[])
+    else
+        local_sparse = sparse(local_I, local_J, local_V, local_nrows, total_cols)
+        AT_local = sparse(transpose(local_sparse))
+    end
 
-    total_nnz = sum(all_nnz)
-    global_I = Vector{Int}(undef, total_nnz)
-    global_J = Vector{Int}(undef, total_nnz)
-    global_V = Vector{T}(undef, total_nnz)
-
-    MPI.Allgatherv!(all_I, MPI.VBuffer(global_I, all_nnz), comm)
-    MPI.Allgatherv!(all_J, MPI.VBuffer(global_J, all_nnz), comm)
-    MPI.Allgatherv!(all_V, MPI.VBuffer(global_V, all_nnz), comm)
-
-    # Build global sparse matrix
-    global_sparse = sparse(global_I, global_J, global_V, total_rows, total_cols)
-
-    # Create SparseMatrixMPI (constructor computes balanced partition automatically)
-    return SparseMatrixMPI{T}(global_sparse)
+    return SparseMatrixMPI_local(transpose(AT_local), comm)
 end
 
 # ============================================================================
@@ -152,6 +173,9 @@ Base.vcat(As::SparseMatrixMPI...) = cat(As...; dims=1)
     Base.cat(As::MatrixMPI...; dims)
 
 Concatenate MatrixMPI matrices. Same interface as SparseMatrixMPI version.
+
+This is a distributed implementation that only gathers the rows each rank needs
+for its local output, rather than gathering all data to all ranks.
 """
 function Base.cat(As::MatrixMPI{T}...; dims) where T
     isempty(As) && error("cat requires at least one matrix")
@@ -197,58 +221,63 @@ function Base.cat(As::MatrixMPI{T}...; dims) where T
     rank = MPI.Comm_rank(comm)
     nranks = MPI.Comm_size(comm)
 
-    # Gather all blocks to global matrix
-    # Each rank contributes its local rows from each block
-    my_data = T[]
-    my_indices = Int[]  # (global_row, col) pairs encoded
+    # Step 1: Compute output row partition
+    rows_per_rank = div(total_rows, nranks)
+    row_remainder = mod(total_rows, nranks)
+    output_row_partition = Vector{Int}(undef, nranks + 1)
+    output_row_partition[1] = 1
+    for r in 1:nranks
+        extra = r <= row_remainder ? 1 : 0
+        output_row_partition[r+1] = output_row_partition[r] + rows_per_rank + extra
+    end
 
+    my_out_row_start = output_row_partition[rank+1]
+    my_out_row_end = output_row_partition[rank+2] - 1
+    local_nrows = my_out_row_end - my_out_row_start + 1
+
+    # Step 2: Allocate local output matrix
+    local_matrix = Matrix{T}(undef, local_nrows, total_cols)
+
+    # Step 3: For each block row, gather needed rows (all ranks must participate)
     for bi in 1:nblock_rows
+        block_row_start = row_offsets[bi] + 1
+        block_row_end = row_offsets[bi] + block_row_heights[bi]
+
+        # Determine rows we need from this block row (in block-local coordinates)
+        # NOTE: ALL ranks must call _gather_dense_rows for EVERY block to
+        # participate in MPI collectives. Pass empty array if no overlap.
+        has_overlap = !(block_row_end < my_out_row_start || block_row_start > my_out_row_end)
+
+        if has_overlap
+            first_row_in_block = max(1, my_out_row_start - row_offsets[bi])
+            last_row_in_block = min(block_row_heights[bi], my_out_row_end - row_offsets[bi])
+            rows_needed = collect(first_row_in_block:last_row_in_block)
+        else
+            rows_needed = Int[]
+        end
+
+        # Get rows from each block in this block row
         for bj in 1:nblock_cols
             A = blocks[bi, bj]
-            row_offset = row_offsets[bi]
-            col_offset = col_offsets[bj]
+            col_start = col_offsets[bj] + 1
+            col_end = col_offsets[bj] + block_col_widths[bj]
 
-            my_row_start = A.row_partition[rank + 1]
-            my_row_end = A.row_partition[rank + 2] - 1
+            # Gather the needed rows from this block (all ranks must call this!)
+            gathered_rows = _gather_dense_rows(A, rows_needed)
 
-            for local_row in 1:(my_row_end - my_row_start + 1)
-                global_row = row_offset + my_row_start + local_row - 1
-                for col in 1:size(A.A, 2)
-                    push!(my_indices, global_row)
-                    push!(my_indices, col_offset + col)
-                    push!(my_data, A.A[local_row, col])
+            # Place into local matrix (only if we have overlap)
+            if has_overlap
+                for (i, row_in_block) in enumerate(rows_needed)
+                    output_row = row_offsets[bi] + row_in_block
+                    local_row = output_row - my_out_row_start + 1
+                    local_matrix[local_row, col_start:col_end] = gathered_rows[i, :]
                 end
             end
         end
     end
 
-    # Gather counts
-    local_count = Int32(length(my_data))
-    all_counts = MPI.Allgather(local_count, comm)
-
-    # Gather data
-    total_count = sum(all_counts)
-    all_data = Vector{T}(undef, total_count)
-    MPI.Allgatherv!(my_data, MPI.VBuffer(all_data, all_counts), comm)
-
-    # Gather indices (twice as many as data)
-    index_counts = Int32.(all_counts .* 2)
-    all_indices = Vector{Int}(undef, sum(index_counts))
-    MPI.Allgatherv!(my_indices, MPI.VBuffer(all_indices, index_counts), comm)
-
-    # Build global matrix
-    global_matrix = Matrix{T}(undef, total_rows, total_cols)
-    fill!(global_matrix, zero(T))
-
-    idx = 1
-    for k in 1:length(all_data)
-        row = all_indices[2k - 1]
-        col = all_indices[2k]
-        global_matrix[row, col] = all_data[k]
-    end
-
-    # Create MatrixMPI
-    return MatrixMPI(global_matrix)
+    # Step 4: Create MatrixMPI from local data
+    return MatrixMPI_local(local_matrix, comm)
 end
 
 Base.hcat(As::MatrixMPI...) = cat(As...; dims=2)
@@ -293,6 +322,14 @@ function Base.cat(vs::VectorMPI{T}...; dims) where T
     end
 end
 
+"""
+    _vcat_vectors(vs::VectorMPI{T}...) where T
+
+Vertically concatenate VectorMPI vectors.
+
+This is a distributed implementation that only gathers the vector elements each rank
+needs for its local output, rather than gathering all data to all ranks.
+"""
 function _vcat_vectors(vs::VectorMPI{T}...) where T
     length(vs) == 1 && return copy(vs[1])
 
@@ -300,42 +337,60 @@ function _vcat_vectors(vs::VectorMPI{T}...) where T
     rank = MPI.Comm_rank(comm)
     nranks = MPI.Comm_size(comm)
 
-    # Compute total length and offsets
+    # Step 1: Compute total length and offsets
     lengths = [length(v) for v in vs]
     total_length = sum(lengths)
     offsets = [0; cumsum(lengths[1:end-1])]
 
-    # Gather all contributions with global indices
-    my_global_indices = Int[]
-    my_values = T[]
+    # Step 2: Compute output partition
+    elements_per_rank = div(total_length, nranks)
+    elem_remainder = mod(total_length, nranks)
+    output_partition = Vector{Int}(undef, nranks + 1)
+    output_partition[1] = 1
+    for r in 1:nranks
+        extra = r <= elem_remainder ? 1 : 0
+        output_partition[r+1] = output_partition[r] + elements_per_rank + extra
+    end
 
+    my_out_start = output_partition[rank+1]
+    my_out_end = output_partition[rank+2] - 1
+    local_len = my_out_end - my_out_start + 1
+
+    # Step 3: Allocate local output vector
+    local_v = Vector{T}(undef, local_len)
+
+    # Step 4: For each input vector, gather elements (all ranks must participate)
     for (vec_idx, v) in enumerate(vs)
-        offset = offsets[vec_idx]
-        my_start = v.partition[rank + 1]
-        my_end = v.partition[rank + 2] - 1
-        for (local_idx, global_idx) in enumerate(my_start:my_end)
-            push!(my_global_indices, offset + global_idx)
-            push!(my_values, v.v[local_idx])
+        vec_start = offsets[vec_idx] + 1
+        vec_end = offsets[vec_idx] + lengths[vec_idx]
+
+        # Determine indices we need from this vector
+        # NOTE: ALL ranks must call _gather_specific_elements for EVERY vector to
+        # participate in MPI collectives. Pass empty array if no overlap.
+        has_overlap = !(vec_end < my_out_start || vec_start > my_out_end)
+
+        if has_overlap
+            first_in_vec = max(1, my_out_start - offsets[vec_idx])
+            last_in_vec = min(lengths[vec_idx], my_out_end - offsets[vec_idx])
+            indices_needed = collect(first_in_vec:last_in_vec)
+        else
+            indices_needed = Int[]
+        end
+
+        # Gather these elements (all ranks must call this!)
+        gathered = _gather_specific_elements(v, indices_needed)
+
+        # Place into local output (only if we have overlap)
+        if has_overlap
+            for (i, idx_in_vec) in enumerate(indices_needed)
+                global_out_idx = offsets[vec_idx] + idx_in_vec
+                local_out_idx = global_out_idx - my_out_start + 1
+                local_v[local_out_idx] = gathered[i]
+            end
         end
     end
 
-    # Gather
-    local_count = Int32(length(my_values))
-    all_counts = MPI.Allgather(local_count, comm)
-
-    all_indices = Vector{Int}(undef, sum(all_counts))
-    all_values = Vector{T}(undef, sum(all_counts))
-
-    MPI.Allgatherv!(my_global_indices, MPI.VBuffer(all_indices, all_counts), comm)
-    MPI.Allgatherv!(my_values, MPI.VBuffer(all_values, all_counts), comm)
-
-    # Build global vector
-    global_vector = Vector{T}(undef, total_length)
-    for (idx, val) in zip(all_indices, all_values)
-        global_vector[idx] = val
-    end
-
-    return VectorMPI(global_vector, comm)
+    return VectorMPI_local(local_v, comm)
 end
 
 function _hcat_vectors(vs::VectorMPI{T}...) where T
@@ -382,6 +437,9 @@ blockdiag(A, B, C) = [A 0 0]
 ```
 
 Returns a SparseMatrixMPI.
+
+This is a distributed implementation that only gathers the rows each rank needs
+for its local output, rather than gathering all data to all ranks.
 """
 function blockdiag(As::SparseMatrixMPI{T}...) where T
     isempty(As) && error("blockdiag requires at least one matrix")
@@ -389,8 +447,9 @@ function blockdiag(As::SparseMatrixMPI{T}...) where T
 
     comm = MPI.COMM_WORLD
     rank = MPI.Comm_rank(comm)
+    nranks = MPI.Comm_size(comm)
 
-    # Compute dimensions and offsets
+    # Step 1: Compute dimensions and offsets (all ranks compute same values)
     row_sizes = [size(A, 1) for A in As]
     col_sizes = [size(A, 2) for A in As]
     total_rows = sum(row_sizes)
@@ -398,46 +457,65 @@ function blockdiag(As::SparseMatrixMPI{T}...) where T
     row_offsets = [0; cumsum(row_sizes[1:end-1])]
     col_offsets = [0; cumsum(col_sizes[1:end-1])]
 
-    # Gather all triplets with diagonal offsets
-    all_I = Int[]
-    all_J = Int[]
-    all_V = T[]
+    # Step 2: Compute output row partition
+    rows_per_rank = div(total_rows, nranks)
+    row_remainder = mod(total_rows, nranks)
+    output_row_partition = Vector{Int}(undef, nranks + 1)
+    output_row_partition[1] = 1
+    for r in 1:nranks
+        extra = r <= row_remainder ? 1 : 0
+        output_row_partition[r+1] = output_row_partition[r] + rows_per_rank + extra
+    end
+
+    my_out_row_start = output_row_partition[rank+1]
+    my_out_row_end = output_row_partition[rank+2] - 1
+    local_nrows = my_out_row_end - my_out_row_start + 1
+
+    # Step 3: For each block, determine if it overlaps our output rows
+    # and gather the needed rows
+    local_I = Int[]
+    local_J = Int[]
+    local_V = T[]
 
     for (k, A) in enumerate(As)
-        row_offset = row_offsets[k]
+        block_row_start = row_offsets[k] + 1
+        block_row_end = row_offsets[k] + row_sizes[k]
         col_offset = col_offsets[k]
 
-        my_row_start = A.row_partition[rank + 1]
-        col_indices = A.col_indices
-        for local_row in 1:size(A.A.parent, 2)
-            global_row_in_block = my_row_start + local_row - 1
-            global_row = row_offset + global_row_in_block
-            for idx in A.A.parent.colptr[local_row]:(A.A.parent.colptr[local_row + 1] - 1)
-                local_col = A.A.parent.rowval[idx]
-                col_in_block = col_indices[local_col]  # map local to global
-                global_col = col_offset + col_in_block
-                push!(all_I, global_row)
-                push!(all_J, global_col)
-                push!(all_V, A.A.parent.nzval[idx])
-            end
+        # Determine rows we need from this block (in block-local coordinates)
+        # NOTE: ALL ranks must call _gather_rows_from_sparse for EVERY block to
+        # participate in MPI collectives. Pass empty array if no overlap.
+        has_overlap = !(block_row_end < my_out_row_start || block_row_start > my_out_row_end)
+
+        if has_overlap
+            first_row_in_block = max(1, my_out_row_start - row_offsets[k])
+            last_row_in_block = min(row_sizes[k], my_out_row_end - row_offsets[k])
+            rows_needed = collect(first_row_in_block:last_row_in_block)
+        else
+            rows_needed = Int[]
+        end
+
+        # Gather these rows from block A (all ranks must call this!)
+        triplets = _gather_rows_from_sparse(A, rows_needed)
+
+        # Add triplets with offsets applied
+        for (row_in_block, col_in_block, val) in triplets
+            output_row = row_offsets[k] + row_in_block
+            local_output_row = output_row - my_out_row_start + 1
+            global_col = col_offset + col_in_block
+            push!(local_I, local_output_row)
+            push!(local_J, global_col)
+            push!(local_V, val)
         end
     end
 
-    # Gather all triplets from all ranks
-    local_nnz = Int32(length(all_I))
-    all_nnz = MPI.Allgather(local_nnz, comm)
+    # Step 4: Build local sparse matrix
+    if isempty(local_I)
+        AT_local = SparseMatrixCSC(total_cols, local_nrows, ones(Int, local_nrows + 1), Int[], T[])
+    else
+        local_sparse = sparse(local_I, local_J, local_V, local_nrows, total_cols)
+        AT_local = sparse(transpose(local_sparse))
+    end
 
-    total_nnz = sum(all_nnz)
-    global_I = Vector{Int}(undef, total_nnz)
-    global_J = Vector{Int}(undef, total_nnz)
-    global_V = Vector{T}(undef, total_nnz)
-
-    MPI.Allgatherv!(all_I, MPI.VBuffer(global_I, all_nnz), comm)
-    MPI.Allgatherv!(all_J, MPI.VBuffer(global_J, all_nnz), comm)
-    MPI.Allgatherv!(all_V, MPI.VBuffer(global_V, all_nnz), comm)
-
-    # Build global sparse matrix
-    global_sparse = sparse(global_I, global_J, global_V, total_rows, total_cols)
-
-    return SparseMatrixMPI{T}(global_sparse)
+    return SparseMatrixMPI_local(transpose(AT_local), comm)
 end
