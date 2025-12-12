@@ -1475,6 +1475,144 @@ end
 
 MPI.Barrier(comm)
 
+# ============================================================================
+# VectorMPI range setindex! with VectorMPI source
+# ============================================================================
+
+if rank == 0
+    println("[test] VectorMPI range setindex! (VectorMPI source)")
+    flush(stdout)
+end
+
+v_vec_src = VectorMPI(copy(v_global))
+src_vec = VectorMPI([100.0, 200.0, 300.0, 400.0])
+v_vec_src[3:6] = src_vec
+
+for i in 1:n
+    if 3 <= i <= 6
+        @test v_vec_src[i] ≈ (i - 2) * 100.0 atol=TOL
+    else
+        @test v_vec_src[i] ≈ v_global[i] atol=TOL
+    end
+end
+
+MPI.Barrier(comm)
+
+# ============================================================================
+# MatrixMPI getindex with Colon, Colon (full matrix copy)
+# ============================================================================
+
+if rank == 0
+    println("[test] MatrixMPI getindex with Colon, Colon")
+    flush(stdout)
+end
+
+M_full = M[:, :]
+@test size(M_full) == size(M)
+@test M_full.row_partition == M.row_partition
+
+# Verify all elements match
+for i in 1:n
+    for j in 1:n
+        @test M_full[i, j] ≈ M_global[i, j] atol=TOL
+    end
+end
+
+MPI.Barrier(comm)
+
+# ============================================================================
+# MatrixMPI range setindex! with MatrixMPI source
+# ============================================================================
+
+if rank == 0
+    println("[test] MatrixMPI range setindex! (MatrixMPI source)")
+    flush(stdout)
+end
+
+M_matrix_src = MatrixMPI(zeros(n, n))
+src_matrix = MatrixMPI(Float64[10*i + j for i in 1:4, j in 1:5])
+M_matrix_src[2:5, 3:7] = src_matrix
+
+for i in 2:5
+    for j in 3:7
+        @test M_matrix_src[i, j] ≈ 10*(i-1) + (j-2) atol=TOL
+    end
+end
+# Unchanged regions should still be zero
+@test M_matrix_src[1, 1] ≈ 0.0 atol=TOL
+@test M_matrix_src[6, 8] ≈ 0.0 atol=TOL
+
+MPI.Barrier(comm)
+
+# ============================================================================
+# SparseMatrixMPI range setindex! with cross-rank SparseMatrixMPI source
+# This tests the path: if num_rows_needed > 0 && intersect_start <= intersect_end
+# ============================================================================
+
+if rank == 0
+    println("[test] SparseMatrixMPI range setindex! (cross-rank sparse source)")
+    flush(stdout)
+end
+
+# Create a larger sparse matrix where the source spans multiple ranks
+n_crossrank = 40
+A_crossrank = SparseMatrixMPI{Float64}(spzeros(n_crossrank, n_crossrank))
+
+# Create source matrix that spans multiple ranks (rows 1:20)
+I_src = vcat(1:20, 1:10)  # Diagonal + some off-diagonal
+J_src = vcat(1:20, 11:20)
+V_src = Float64[i + j/100 for (i, j) in zip(I_src, J_src)]
+src_sparse_global = sparse(I_src, J_src, V_src, 20, 20)
+src_sparse = SparseMatrixMPI{Float64}(src_sparse_global)
+
+# Set rows 10:29 and cols 5:24 from the source
+# This forces cross-rank communication as src spans rows 1:20 and dest spans 10:29
+A_crossrank[10:29, 5:24] = src_sparse
+
+# Verify some values
+# src[1,1] = 1.01 should go to A[10, 5]
+@test A_crossrank[10, 5] ≈ 1.01 atol=TOL
+# src[10,10] = 10.10 should go to A[19, 14]
+@test A_crossrank[19, 14] ≈ 10.10 atol=TOL
+# src[20,20] = 20.20 should go to A[29, 24]
+@test A_crossrank[29, 24] ≈ 20.20 atol=TOL
+# Position outside source should be zero
+@test A_crossrank[1, 1] ≈ 0.0 atol=TOL
+
+MPI.Barrier(comm)
+
+if rank == 0
+    println("[test] SparseMatrixMPI range setindex! (cross-rank with row intersection)")
+    flush(stdout)
+end
+
+# Another test where source and dest row ranges intersect differently on each rank
+A_crossrank2 = SparseMatrixMPI{Float64}(spzeros(n_crossrank, n_crossrank))
+
+# Create a source with specific pattern
+I_src2 = [1, 2, 3, 4, 5, 1, 2, 3]
+J_src2 = [1, 2, 3, 4, 5, 3, 4, 5]
+V_src2 = Float64[100*i + j for (i, j) in zip(I_src2, J_src2)]
+src_sparse2_global = sparse(I_src2, J_src2, V_src2, 5, 5)
+src_sparse2 = SparseMatrixMPI{Float64}(src_sparse2_global)
+
+# Assign to rows 18:22, cols 18:22 - this spans rank boundaries with 4 ranks and n=40
+A_crossrank2[18:22, 18:22] = src_sparse2
+
+# Verify diagonal entries
+@test A_crossrank2[18, 18] ≈ 101.0 atol=TOL  # src[1,1] = 100*1 + 1 = 101
+@test A_crossrank2[19, 19] ≈ 202.0 atol=TOL  # src[2,2]
+@test A_crossrank2[20, 20] ≈ 303.0 atol=TOL  # src[3,3]
+@test A_crossrank2[21, 21] ≈ 404.0 atol=TOL  # src[4,4]
+@test A_crossrank2[22, 22] ≈ 505.0 atol=TOL  # src[5,5]
+
+# Verify off-diagonal entries
+@test A_crossrank2[18, 20] ≈ 103.0 atol=TOL  # src[1,3]
+@test A_crossrank2[19, 21] ≈ 204.0 atol=TOL  # src[2,4]
+@test A_crossrank2[20, 22] ≈ 305.0 atol=TOL  # src[3,5]
+
+MPI.Barrier(comm)
+
 end  # QuietTestSet
 
 # Aggregate counts across ranks
