@@ -215,7 +215,7 @@ mutable struct SparseMatrixMPI{T}
 end
 
 """
-    SparseMatrixMPI{T}(A::SparseMatrixCSC{T,Int}) where T
+    SparseMatrixMPI{T}(A::SparseMatrixCSC{T,Int}; comm=MPI.COMM_WORLD, row_partition=..., col_partition=...) where T
 
 Create a SparseMatrixMPI from a global sparse matrix A, partitioning it by rows across MPI ranks.
 
@@ -225,49 +225,29 @@ Each rank extracts only its local rows from `A`, so:
 - **Efficient usage**: Pass a matrix with correct `size(A)` on all ranks,
   but only populate the rows that each rank owns (other rows are ignored)
 
-The default row partition assigns `div(m, nranks)` rows per rank,
-with the first `mod(m, nranks)` ranks getting one extra row.
+# Keyword Arguments
+- `comm::MPI.Comm`: MPI communicator (default: `MPI.COMM_WORLD`)
+- `row_partition::Vector{Int}`: Row partition boundaries (default: `uniform_partition(size(A,1), nranks)`)
+- `col_partition::Vector{Int}`: Column partition boundaries (default: `uniform_partition(size(A,2), nranks)`)
+
+Use `uniform_partition(n, nranks)` to compute custom partitions.
 """
-function SparseMatrixMPI{T}(A::SparseMatrixCSC{T,Int}) where T
-    comm = MPI.COMM_WORLD
+function SparseMatrixMPI{T}(A::SparseMatrixCSC{T,Int};
+                            comm::MPI.Comm=MPI.COMM_WORLD,
+                            row_partition::Vector{Int}=uniform_partition(size(A, 1), MPI.Comm_size(comm)),
+                            col_partition::Vector{Int}=uniform_partition(size(A, 2), MPI.Comm_size(comm))) where T
     rank = MPI.Comm_rank(comm)
-    nranks = MPI.Comm_size(comm)
-
-    m, n = size(A)
-
-    # Compute row partition: roughly equal distribution
-    rows_per_rank = div(m, nranks)
-    remainder = mod(m, nranks)
-
-    row_partition = Vector{Int}(undef, nranks + 1)
-    row_partition[1] = 1
-    for r in 1:nranks
-        extra = r <= remainder ? 1 : 0
-        row_partition[r+1] = row_partition[r] + rows_per_rank + extra
-    end
-
-    # Compute col partition: roughly equal distribution (placeholder for transpose)
-    cols_per_rank = div(n, nranks)
-    col_remainder = mod(n, nranks)
-
-    col_partition = Vector{Int}(undef, nranks + 1)
-    col_partition[1] = 1
-    for r in 1:nranks
-        extra = r <= col_remainder ? 1 : 0
-        col_partition[r+1] = col_partition[r] + cols_per_rank + extra
-    end
 
     # Local row range (1-indexed, Julia style)
     row_start = row_partition[rank+1]
     row_end = row_partition[rank+2] - 1
-    local_rows = row_start:row_end
 
     # Extract local rows from A and store as transpose for efficient row-wise access.
     # A[local_rows, :] gives us the local rows as CSC with shape (local_nrows, ncols).
     # We materialize the transpose to get a CSC with shape (ncols, local_nrows) where
     # columns correspond to local rows - this makes row iteration efficient.
     # Note: Use transpose(), not ' (adjoint), to avoid conjugating complex values.
-    local_A = A[local_rows, :]
+    local_A = A[row_start:row_end, :]
     AT_storage = sparse(transpose(local_A))  # CSC (ncols, local_nrows), columns = local rows
 
     # Identify which columns have nonzeros in our local part
@@ -288,8 +268,8 @@ function SparseMatrixMPI{T}(A::SparseMatrixCSC{T,Int}) where T
 end
 
 """
-    SparseMatrixMPI_local(A_local::Transpose{T,SparseMatrixCSC{T,Int}}, comm::MPI.Comm=MPI.COMM_WORLD) where T
-    SparseMatrixMPI_local(A_local::Adjoint{T,SparseMatrixCSC{T,Int}}, comm::MPI.Comm=MPI.COMM_WORLD) where T
+    SparseMatrixMPI_local(A_local::Transpose{T,SparseMatrixCSC{T,Int}}; comm=MPI.COMM_WORLD, col_partition=...) where T
+    SparseMatrixMPI_local(A_local::Adjoint{T,SparseMatrixCSC{T,Int}}; comm=MPI.COMM_WORLD, col_partition=...) where T
 
 Create a SparseMatrixMPI from a local sparse matrix on each rank.
 
@@ -307,6 +287,10 @@ A collective error is raised if the column counts don't match.
 
 Note: For `Adjoint` inputs, the values are conjugated to match the adjoint semantics.
 
+# Keyword Arguments
+- `comm::MPI.Comm`: MPI communicator (default: `MPI.COMM_WORLD`)
+- `col_partition::Vector{Int}`: Column partition boundaries (default: `uniform_partition(A_local.parent.m, nranks)`)
+
 # Example
 ```julia
 # Create local rows as transpose of CSC storage
@@ -315,8 +299,9 @@ local_AT = sparse([1, 2, 3], [1, 1, 2], [1.0, 2.0, 3.0], 3, 2)  # 3 cols, 2 loca
 A = SparseMatrixMPI_local(transpose(local_AT))
 ```
 """
-function SparseMatrixMPI_local(A_local::Transpose{T,SparseMatrixCSC{T,Int}}, comm::MPI.Comm=MPI.COMM_WORLD) where T
-    rank = MPI.Comm_rank(comm)
+function SparseMatrixMPI_local(A_local::Transpose{T,SparseMatrixCSC{T,Int}};
+                               comm::MPI.Comm=MPI.COMM_WORLD,
+                               col_partition::Vector{Int}=uniform_partition(A_local.parent.m, MPI.Comm_size(comm))) where T
     nranks = MPI.Comm_size(comm)
 
     AT_local = A_local.parent  # The underlying CSC storage
@@ -336,23 +321,12 @@ function SparseMatrixMPI_local(A_local::Transpose{T,SparseMatrixCSC{T,Int}}, com
         error("SparseMatrixMPI_local: All ranks must have the same number of columns. " *
               "Got column counts: $all_col_counts")
     end
-    ncols = Int(all_col_counts[1])
 
-    # Build row_partition from row counts
+    # Build row_partition from row counts (inferred via Allgather)
     row_partition = Vector{Int}(undef, nranks + 1)
     row_partition[1] = 1
     for r in 1:nranks
         row_partition[r+1] = row_partition[r] + all_row_counts[r]
-    end
-
-    # Build col_partition (standard even distribution)
-    cols_per_rank = div(ncols, nranks)
-    col_remainder = mod(ncols, nranks)
-    col_partition = Vector{Int}(undef, nranks + 1)
-    col_partition[1] = 1
-    for r in 1:nranks
-        extra = r <= col_remainder ? 1 : 0
-        col_partition[r+1] = col_partition[r] + cols_per_rank + extra
     end
 
     # Identify which columns have nonzeros in our local part
@@ -371,12 +345,14 @@ function SparseMatrixMPI_local(A_local::Transpose{T,SparseMatrixCSC{T,Int}}, com
 end
 
 # Adjoint version: conjugate values during construction
-function SparseMatrixMPI_local(A_local::Adjoint{T,SparseMatrixCSC{T,Int}}, comm::MPI.Comm=MPI.COMM_WORLD) where T
+function SparseMatrixMPI_local(A_local::Adjoint{T,SparseMatrixCSC{T,Int}};
+                               comm::MPI.Comm=MPI.COMM_WORLD,
+                               col_partition::Vector{Int}=uniform_partition(A_local.parent.m, MPI.Comm_size(comm))) where T
     # Convert adjoint to transpose with conjugated values
     AT_parent = A_local.parent
     AT_conj = SparseMatrixCSC(AT_parent.m, AT_parent.n, copy(AT_parent.colptr),
                                copy(AT_parent.rowval), conj.(AT_parent.nzval))
-    return SparseMatrixMPI_local(transpose(AT_conj), comm)
+    return SparseMatrixMPI_local(transpose(AT_conj); comm=comm, col_partition=col_partition)
 end
 
 """
@@ -1768,7 +1744,7 @@ function Base.sum(A::SparseMatrixMPI{T}; dims=nothing) where T
             local_col_sums[global_col] += A.A.parent.nzval[idx]
         end
         global_col_sums = MPI.Allreduce(local_col_sums, MPI.SUM, comm)
-        return VectorMPI(global_col_sums, comm)
+        return VectorMPI(global_col_sums; comm=comm)
     elseif dims == 2
         # Sum over columns: result is length-m vector (row sums)
         local_nrows = size(A.A.parent, 2)
@@ -1978,7 +1954,7 @@ function diag(A::SparseMatrixMPI{T}, k::Integer=0) where T
     global_diag = MPI.Allreduce(full_diag, MPI.SUM, comm)
 
     # Create VectorMPI from the global diagonal
-    return VectorMPI(global_diag, comm)
+    return VectorMPI(global_diag; comm=comm)
 end
 
 """
@@ -2473,7 +2449,7 @@ function spdiagm(kv::Pair{<:Integer, <:VectorMPI}...)
         AT_local = sparse(transpose(local_sparse))
     end
 
-    return SparseMatrixMPI_local(transpose(AT_local), comm)
+    return SparseMatrixMPI_local(transpose(AT_local); comm=comm)
 end
 
 """
@@ -2598,7 +2574,7 @@ function spdiagm(m::Integer, n::Integer, kv::Pair{<:Integer, <:VectorMPI}...)
         AT_local = sparse(transpose(local_sparse))
     end
 
-    return SparseMatrixMPI_local(transpose(AT_local), comm)
+    return SparseMatrixMPI_local(transpose(AT_local); comm=comm)
 end
 
 """

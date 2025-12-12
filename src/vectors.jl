@@ -52,35 +52,25 @@ function VectorMPI_local(v_local::Vector{T}, comm::MPI.Comm=MPI.COMM_WORLD) wher
 end
 
 """
-    VectorMPI(v_global::Vector{T}, comm::MPI.Comm=MPI.COMM_WORLD) where T
+    VectorMPI(v_global::Vector{T}; comm=MPI.COMM_WORLD, partition=uniform_partition(...)) where T
 
 Create a VectorMPI from a global vector, partitioning it across MPI ranks.
 
-The vector is partitioned roughly equally across ranks. Each rank extracts only
-its local portion from `v_global`, so:
+Each rank extracts only its local portion from `v_global`, so:
 
 - **Simple usage**: Pass identical `v_global` to all ranks
 - **Efficient usage**: Pass a vector with correct `length(v_global)` on all ranks,
   but only populate the elements that each rank owns (other elements are ignored)
 
-The partition boundaries can be computed as `div(n, nranks)` elements per rank,
-with the first `mod(n, nranks)` ranks getting one extra element.
+# Keyword Arguments
+- `comm::MPI.Comm`: MPI communicator (default: `MPI.COMM_WORLD`)
+- `partition::Vector{Int}`: Partition boundaries (default: `uniform_partition(length(v_global), nranks)`)
+
+Use `uniform_partition(n, nranks)` to compute custom partitions.
 """
-function VectorMPI(v_global::Vector{T}, comm::MPI.Comm=MPI.COMM_WORLD) where T
-    nranks = MPI.Comm_size(comm)
-    n = length(v_global)
-
-    # Compute partition (same logic as SparseMatrixMPI)
-    rows_per_rank = div(n, nranks)
-    remainder = mod(n, nranks)
-
-    partition = Vector{Int}(undef, nranks + 1)
-    partition[1] = 1
-    for r in 1:nranks
-        extra = r <= remainder ? 1 : 0
-        partition[r+1] = partition[r] + rows_per_rank + extra
-    end
-
+function VectorMPI(v_global::Vector{T};
+                   comm::MPI.Comm=MPI.COMM_WORLD,
+                   partition::Vector{Int}=uniform_partition(length(v_global), MPI.Comm_size(comm))) where T
     rank = MPI.Comm_rank(comm)
     local_range = partition[rank + 1]:(partition[rank + 2] - 1)
     local_v = v_global[local_range]

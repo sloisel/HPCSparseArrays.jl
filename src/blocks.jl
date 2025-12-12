@@ -2,7 +2,7 @@
 # Block Matrix Primitives - cat, hcat, vcat for distributed matrices
 # ============================================================================
 
-# Note: _compute_partition is defined in dense.jl (included before this file)
+# Note: uniform_partition is defined in LinearAlgebraMPI.jl (included before this file)
 
 # ============================================================================
 # Core cat implementation for SparseMatrixMPI
@@ -144,7 +144,7 @@ function Base.cat(As::SparseMatrixMPI{T}...; dims) where T
         AT_local = sparse(transpose(local_sparse))
     end
 
-    return SparseMatrixMPI_local(transpose(AT_local), comm)
+    return SparseMatrixMPI_local(transpose(AT_local); comm=comm)
 end
 
 # ============================================================================
@@ -277,7 +277,7 @@ function Base.cat(As::MatrixMPI{T}...; dims) where T
     end
 
     # Step 4: Create MatrixMPI from local data
-    return MatrixMPI_local(local_matrix, comm)
+    return MatrixMPI_local(local_matrix; comm=comm)
 end
 
 Base.hcat(As::MatrixMPI...) = cat(As...; dims=2)
@@ -410,7 +410,7 @@ function _hcat_vectors(vs::VectorMPI{T}...) where T
     ncols = length(vs)
 
     # Compute col partition
-    col_partition = _compute_partition(ncols, nranks)
+    col_partition = uniform_partition(ncols, nranks)
 
     # Compute structural hash
     structural_hash = compute_dense_structural_hash(row_partition, col_partition, size(local_matrix), comm)
@@ -517,5 +517,5 @@ function blockdiag(As::SparseMatrixMPI{T}...) where T
         AT_local = sparse(transpose(local_sparse))
     end
 
-    return SparseMatrixMPI_local(transpose(AT_local), comm)
+    return SparseMatrixMPI_local(transpose(AT_local); comm=comm)
 end

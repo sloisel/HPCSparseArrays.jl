@@ -53,7 +53,7 @@ struct MatrixMPI{T}
 end
 
 """
-    MatrixMPI_local(A_local::Matrix{T}, comm::MPI.Comm=MPI.COMM_WORLD) where T
+    MatrixMPI_local(A_local::Matrix{T}; comm=MPI.COMM_WORLD, col_partition=...) where T
 
 Create a MatrixMPI from a local matrix on each rank.
 
@@ -64,6 +64,10 @@ The row partition is computed by gathering the local row counts from all ranks.
 All ranks must have local matrices with the same number of columns.
 A collective error is raised if the column counts don't match.
 
+# Keyword Arguments
+- `comm::MPI.Comm`: MPI communicator (default: `MPI.COMM_WORLD`)
+- `col_partition::Vector{Int}`: Column partition boundaries (default: `uniform_partition(size(A_local,2), nranks)`)
+
 # Example
 ```julia
 # Rank 0 has 2×3 matrix, Rank 1 has 3×3 matrix
@@ -72,8 +76,9 @@ A = MatrixMPI_local(randn(3, 3))  # on rank 1
 # Result: 5×3 distributed matrix with row_partition [1, 3, 6]
 ```
 """
-function MatrixMPI_local(A_local::Matrix{T}, comm::MPI.Comm=MPI.COMM_WORLD) where T
-    rank = MPI.Comm_rank(comm)
+function MatrixMPI_local(A_local::Matrix{T};
+                         comm::MPI.Comm=MPI.COMM_WORLD,
+                         col_partition::Vector{Int}=uniform_partition(size(A_local, 2), MPI.Comm_size(comm))) where T
     nranks = MPI.Comm_size(comm)
 
     local_nrows, local_ncols = size(A_local)
@@ -91,17 +96,13 @@ function MatrixMPI_local(A_local::Matrix{T}, comm::MPI.Comm=MPI.COMM_WORLD) wher
         error("MatrixMPI_local: All ranks must have the same number of columns. " *
               "Got column counts: $all_col_counts")
     end
-    ncols = Int(all_col_counts[1])
 
-    # Build row_partition from row counts
+    # Build row_partition from row counts (inferred via Allgather)
     row_partition = Vector{Int}(undef, nranks + 1)
     row_partition[1] = 1
     for r in 1:nranks
         row_partition[r+1] = row_partition[r] + all_row_counts[r]
     end
-
-    # Build col_partition (standard even distribution)
-    col_partition = _compute_partition(ncols, nranks)
 
     # Compute structural hash
     structural_hash = compute_dense_structural_hash(row_partition, col_partition, size(A_local), comm)
@@ -110,7 +111,7 @@ function MatrixMPI_local(A_local::Matrix{T}, comm::MPI.Comm=MPI.COMM_WORLD) wher
 end
 
 """
-    MatrixMPI(M::Matrix{T}; row_partition=nothing, col_partition=nothing) where T
+    MatrixMPI(M::Matrix{T}; comm=MPI.COMM_WORLD, row_partition=..., col_partition=...) where T
 
 Create a MatrixMPI from a global matrix M, partitioning it by rows across MPI ranks.
 
@@ -120,77 +121,30 @@ Each rank extracts only its local rows from `M`, so:
 - **Efficient usage**: Pass a matrix with correct `size(M)` on all ranks,
   but only populate the rows that each rank owns (other rows are ignored)
 
-# Arguments
-- `M::Matrix{T}`: The global matrix (must have same size on all ranks)
-- `row_partition`: Optional custom row partition (default: even distribution)
-- `col_partition`: Optional custom column partition (default: even distribution, for transpose)
+# Keyword Arguments
+- `comm::MPI.Comm`: MPI communicator (default: `MPI.COMM_WORLD`)
+- `row_partition::Vector{Int}`: Row partition boundaries (default: `uniform_partition(size(M,1), nranks)`)
+- `col_partition::Vector{Int}`: Column partition boundaries (default: `uniform_partition(size(M,2), nranks)`)
 
-The default row partition assigns `div(m, nranks)` rows per rank,
-with the first `mod(m, nranks)` ranks getting one extra row.
+Use `uniform_partition(n, nranks)` to compute custom partitions.
 """
-function MatrixMPI(M::Matrix{T}; row_partition=nothing, col_partition=nothing) where T
-    comm = MPI.COMM_WORLD
+function MatrixMPI(M::Matrix{T};
+                   comm::MPI.Comm=MPI.COMM_WORLD,
+                   row_partition::Vector{Int}=uniform_partition(size(M, 1), MPI.Comm_size(comm)),
+                   col_partition::Vector{Int}=uniform_partition(size(M, 2), MPI.Comm_size(comm))) where T
     rank = MPI.Comm_rank(comm)
-    nranks = MPI.Comm_size(comm)
-
-    m, n = size(M)
-
-    # Compute row partition: roughly equal distribution
-    if row_partition === nothing
-        rows_per_rank = div(m, nranks)
-        remainder = mod(m, nranks)
-
-        row_partition = Vector{Int}(undef, nranks + 1)
-        row_partition[1] = 1
-        for r in 1:nranks
-            extra = r <= remainder ? 1 : 0
-            row_partition[r+1] = row_partition[r] + rows_per_rank + extra
-        end
-    end
-
-    # Compute col partition: roughly equal distribution (for transpose)
-    if col_partition === nothing
-        cols_per_rank = div(n, nranks)
-        col_remainder = mod(n, nranks)
-
-        col_partition = Vector{Int}(undef, nranks + 1)
-        col_partition[1] = 1
-        for r in 1:nranks
-            extra = r <= col_remainder ? 1 : 0
-            col_partition[r+1] = col_partition[r] + cols_per_rank + extra
-        end
-    end
 
     # Local row range (1-indexed, Julia style)
     row_start = row_partition[rank+1]
     row_end = row_partition[rank+2] - 1
-    local_rows = row_start:row_end
 
     # Extract local rows from M (NOT transposed, unlike SparseMatrixMPI)
-    A = M[local_rows, :]
+    A = M[row_start:row_end, :]
 
     # Compute structural hash (identical across all ranks)
     structural_hash = compute_dense_structural_hash(row_partition, col_partition, size(A), comm)
 
     return MatrixMPI{T}(structural_hash, row_partition, col_partition, A)
-end
-
-"""
-    _compute_partition(n::Int, nranks::Int) -> Vector{Int}
-
-Compute a balanced partition of n elements across nranks ranks.
-Returns a vector of length nranks + 1 with partition boundaries.
-"""
-function _compute_partition(n::Int, nranks::Int)
-    per_rank = div(n, nranks)
-    remainder = mod(n, nranks)
-    partition = Vector{Int}(undef, nranks + 1)
-    partition[1] = 1
-    for r in 1:nranks
-        extra = r <= remainder ? 1 : 0
-        partition[r+1] = partition[r] + per_rank + extra
-    end
-    return partition
 end
 
 # ============================================================================
@@ -1364,7 +1318,7 @@ function Base.mapslices(f, A::MatrixMPI{T}; dims) where T
         new_ncols = size(local_result, 2)
 
         # Create new col_partition for result
-        new_col_partition = _compute_partition(new_ncols, nranks)
+        new_col_partition = uniform_partition(new_ncols, nranks)
 
         # Compute structural hash
         new_hash = compute_dense_structural_hash(
@@ -1396,12 +1350,12 @@ function Base.mapslices(f, A::MatrixMPI{T}; dims) where T
 
         # Redistribute rows according to standard partition
         output_m = size(local_full_result, 1)
-        new_row_partition = _compute_partition(output_m, nranks)
+        new_row_partition = uniform_partition(output_m, nranks)
         row_start = new_row_partition[rank+1]
         row_end = new_row_partition[rank+2] - 1
         local_result = local_full_result[row_start:row_end, :]
 
-        new_col_partition = _compute_partition(n, nranks)
+        new_col_partition = uniform_partition(n, nranks)
         new_hash = compute_dense_structural_hash(
             new_row_partition, new_col_partition, size(local_result), comm)
 

@@ -708,7 +708,7 @@ function Base.getindex(A::MatrixMPI{T}, row_rng::UnitRange{Int}, col_rng::UnitRa
     if isempty(row_rng) || isempty(col_rng)
         # Empty range - return empty MatrixMPI
         new_row_partition = ones(Int, nranks + 1)
-        new_col_partition = _compute_partition(0, nranks)
+        new_col_partition = uniform_partition(0, nranks)
         hash = compute_dense_structural_hash(new_row_partition, new_col_partition, (0, 0), comm)
         return MatrixMPI{T}(hash, new_row_partition, new_col_partition, Matrix{T}(undef, 0, 0))
     end
@@ -718,7 +718,7 @@ function Base.getindex(A::MatrixMPI{T}, row_rng::UnitRange{Int}, col_rng::UnitRa
 
     # Compute new column partition (standard even distribution for the submatrix column count)
     new_ncols = length(col_rng)
-    new_col_partition = _compute_partition(new_ncols, nranks)
+    new_col_partition = uniform_partition(new_ncols, nranks)
 
     # Extract local portion
     my_row_start = A.row_partition[rank + 1]
@@ -1079,7 +1079,7 @@ function Base.getindex(A::SparseMatrixMPI{T}, row_rng::UnitRange{Int}, col_rng::
     if isempty(row_rng) || isempty(col_rng)
         # Empty range - return empty SparseMatrixMPI
         new_row_partition = ones(Int, nranks + 1)
-        new_col_partition = _compute_partition(0, nranks)
+        new_col_partition = uniform_partition(0, nranks)
         empty_AT = SparseMatrixCSC(0, 0, Int[1], Int[], T[])
         hash = compute_structural_hash(new_row_partition, Int[], empty_AT, comm)
         return SparseMatrixMPI{T}(hash, new_row_partition, new_col_partition, Int[],
@@ -1090,7 +1090,7 @@ function Base.getindex(A::SparseMatrixMPI{T}, row_rng::UnitRange{Int}, col_rng::
     new_row_partition = _compute_subpartition(A.row_partition, row_rng)
 
     # Compute new column partition (standard even distribution)
-    new_col_partition = _compute_partition(new_ncols, nranks)
+    new_col_partition = uniform_partition(new_ncols, nranks)
 
     # Extract local portion
     my_row_start = A.row_partition[rank + 1]
@@ -1917,7 +1917,7 @@ function Base.getindex(A::MatrixMPI{T}, row_idx::VectorMPI{Int}, col_idx::Vector
     MPI.Waitall(send_reqs)
 
     # Compute column partition for result
-    result_col_partition = _compute_partition(ncols_result, nranks)
+    result_col_partition = uniform_partition(ncols_result, nranks)
 
     # Compute hash for result
     hash = compute_dense_structural_hash(result_row_partition, result_col_partition, size(result_A), comm)
@@ -2105,7 +2105,7 @@ function Base.getindex(A::SparseMatrixMPI{T}, row_idx::VectorMPI{Int}, col_idx::
     MPI.Waitall(send_reqs)
 
     # Compute column partition for result
-    result_col_partition = _compute_partition(ncols_result, nranks)
+    result_col_partition = uniform_partition(ncols_result, nranks)
 
     # Compute hash for result
     hash = compute_dense_structural_hash(result_row_partition, result_col_partition, size(result_A), comm)
@@ -2804,7 +2804,7 @@ function Base.getindex(A::MatrixMPI{T}, row_rng::UnitRange{Int}, col_idx::Vector
     end
 
     # Create result partition for row range
-    result_partition = _compute_partition(nrows_result, nranks)
+    result_partition = uniform_partition(nrows_result, nranks)
 
     # Determine which rows I need
     my_result_start = result_partition[rank + 1]
@@ -3287,7 +3287,7 @@ function Base.getindex(A::SparseMatrixMPI{T}, row_rng::UnitRange{Int}, col_idx::
     end
 
     # Create result partition
-    result_partition = _compute_partition(nrows_result, nranks)
+    result_partition = uniform_partition(nrows_result, nranks)
     my_result_start = result_partition[rank + 1]
     my_result_end = result_partition[rank + 2] - 1
     n_local_result_rows = my_result_end - my_result_start + 1

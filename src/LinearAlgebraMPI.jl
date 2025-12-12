@@ -7,7 +7,7 @@ import SparseArrays: nnz, issparse, dropzeros, spdiagm, blockdiag
 import LinearAlgebra
 import LinearAlgebra: tr, diag, triu, tril, Transpose, Adjoint, norm, opnorm, mul!
 
-export SparseMatrixMPI, MatrixMPI, VectorMPI, clear_plan_cache!
+export SparseMatrixMPI, MatrixMPI, VectorMPI, clear_plan_cache!, uniform_partition
 export VectorMPI_local, MatrixMPI_local, SparseMatrixMPI_local  # Local constructors
 export mean  # Our mean function for SparseMatrixMPI and VectorMPI
 export io0   # Utility for rank-selective output
@@ -60,6 +60,36 @@ function compute_partition_hash(partition::Vector{Int})::Blake3Hash
     ctx = Blake3Ctx()
     update!(ctx, reinterpret(UInt8, partition))
     return Blake3Hash(digest(ctx))
+end
+
+"""
+    uniform_partition(n::Int, nranks::Int) -> Vector{Int}
+
+Compute a balanced partition of `n` elements across `nranks` ranks.
+Returns a vector of length `nranks + 1` with 1-indexed partition boundaries.
+
+The first `mod(n, nranks)` ranks get `div(n, nranks) + 1` elements,
+the remaining ranks get `div(n, nranks)` elements.
+
+# Example
+```julia
+partition = uniform_partition(10, 4)  # [1, 4, 7, 9, 11]
+# Rank 0: 1:3 (3 elements)
+# Rank 1: 4:6 (3 elements)
+# Rank 2: 7:8 (2 elements)
+# Rank 3: 9:10 (2 elements)
+```
+"""
+function uniform_partition(n::Int, nranks::Int)
+    per_rank = div(n, nranks)
+    remainder = mod(n, nranks)
+    partition = Vector{Int}(undef, nranks + 1)
+    partition[1] = 1
+    for r in 1:nranks
+        extra = r <= remainder ? 1 : 0
+        partition[r+1] = partition[r] + per_rank + extra
+    end
+    return partition
 end
 
 # Include the component files (order matters: vectors first, then dense/sparse, then blocks, then indexing)
