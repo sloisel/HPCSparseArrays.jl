@@ -7,11 +7,11 @@ with indefinite matrices.
 Main algorithm:
 1. Process supernodes in postorder (leaves to root)
 2. For each supernode owned by this rank:
-   a. Gather sparse entries to initialize frontal matrix (symmetric)
-   b. Receive and extend-add contributions from children
+   a. Initialize frontal matrix from gathered sparse entries
+   b. Extend-add contributions from children (all local since subtrees are on same rank)
    c. Partial factorization with Bunch-Kaufman pivoting
    d. Extract L and D factors to local storage
-   e. Send update matrix (Schur complement) to parent's owner
+   e. Store update matrix for parent supernode
 """
 
 using MPI
@@ -41,7 +41,7 @@ function LinearAlgebra.ldlt(A::SparseMatrixMPI{T}; reuse_symbolic::Bool=true) wh
         get_symbolic_factorization(A; symmetric=true) :
         compute_symbolic_factorization(A; symmetric=true)
 
-    # Get or compute communication plans
+    # Get or compute communication plans (currently just for caching)
     plans = get_factorization_plans(A, symbolic)
 
     # Perform numerical factorization
@@ -52,13 +52,15 @@ end
     numerical_factorization_ldlt(A, symbolic, plans) -> LDLTFactorizationMPI{T}
 
 Perform the numerical LDLT factorization with Bunch-Kaufman pivoting.
+
+Note: The current supernode assignment places complete subtrees on single ranks,
+so all parent-child communication is local (no MPI communication during factorization).
 """
 function numerical_factorization_ldlt(A::SparseMatrixMPI{T},
                                       symbolic::SymbolicFactorization,
                                       plans::FactorizationPlans{T}) where T
     comm = MPI.COMM_WORLD
     rank = MPI.Comm_rank(comm)
-    nranks = MPI.Comm_size(comm)
 
     n = symbolic.n
     nsupernodes = length(symbolic.supernodes)
@@ -98,27 +100,13 @@ function numerical_factorization_ldlt(A::SparseMatrixMPI{T},
             # 1. Initialize frontal matrix (symmetric)
             F = initialize_frontal_sym(Ap, snode, info)
 
-            # 2. Receive and extend-add update matrices from children
+            # 2. Extend-add update matrices from children
+            # Note: All children are on the same rank (subtrees assigned to single ranks)
             for child_sidx in symbolic.snode_children[sidx]
-                child_owner = symbolic.snode_owner[child_sidx]
-
-                if child_owner == rank
-                    # Local update - use stored update
-                    if haskey(updates, child_sidx)
-                        extend_add_sym!(F, updates[child_sidx], update_rows[child_sidx])
-                        delete!(updates, child_sidx)
-                        delete!(update_rows, child_sidx)
-                    end
-                else
-                    # Remote update - receive from child owner
-                    plan_key = (child_sidx, sidx)
-                    if haskey(plans.update_plans, plan_key)
-                        plan = plans.update_plans[plan_key]
-                        update, u_rows = receive_update!(plan)
-                        if !isempty(update)
-                            extend_add_sym!(F, update, u_rows)
-                        end
-                    end
+                if haskey(updates, child_sidx)
+                    extend_add_sym!(F, updates[child_sidx], update_rows[child_sidx])
+                    delete!(updates, child_sidx)
+                    delete!(update_rows, child_sidx)
                 end
             end
 
@@ -135,54 +123,15 @@ function numerical_factorization_ldlt(A::SparseMatrixMPI{T},
             # 5. Extract L and D entries
             extract_L_D!(F, snode, symbolic.global_to_elim, L_I, L_J, L_V, D_I, D_J, D_V, D_local, pivot_info)
 
-            # 6. Store or send update matrix to parent
+            # 6. Store update matrix for parent (parent is on same rank)
             parent_sidx = symbolic.snode_parent[sidx]
             if parent_sidx != 0
                 nfs = info.nfs
                 nrows = length(info.row_indices)
                 if nrows > nfs
-                    update = F.F[nfs+1:nrows, nfs+1:nrows]
-                    u_rows = F.row_indices[nfs+1:nrows]
-
-                    parent_owner = symbolic.snode_owner[parent_sidx]
-                    if parent_owner == rank
-                        # Store locally
-                        updates[sidx] = copy(update)
-                        update_rows[sidx] = copy(u_rows)
-                    else
-                        # Send to parent owner
-                        plan_key = (sidx, parent_sidx)
-                        if haskey(plans.update_plans, plan_key)
-                            plan = plans.update_plans[plan_key]
-                            send_update!(plan, update, u_rows)
-                        end
-                    end
+                    updates[sidx] = copy(F.F[nfs+1:nrows, nfs+1:nrows])
+                    update_rows[sidx] = copy(F.row_indices[nfs+1:nrows])
                 end
-            end
-        else
-            # This rank does not own this supernode
-            # But may need to send updates for children we own
-
-            for child_sidx in symbolic.snode_children[sidx]
-                child_owner = symbolic.snode_owner[child_sidx]
-                if child_owner == rank
-                    # We own this child - send its update to the parent owner
-                    plan_key = (child_sidx, sidx)
-                    if haskey(plans.update_plans, plan_key) && haskey(updates, child_sidx)
-                        plan = plans.update_plans[plan_key]
-                        send_update!(plan, updates[child_sidx], update_rows[child_sidx])
-                        delete!(updates, child_sidx)
-                        delete!(update_rows, child_sidx)
-                    end
-                end
-            end
-        end
-
-        # Wait for any pending sends for this supernode
-        for child_sidx in symbolic.snode_children[sidx]
-            plan_key = (child_sidx, sidx)
-            if haskey(plans.update_plans, plan_key)
-                wait_update_sends!(plans.update_plans[plan_key])
             end
         end
 
