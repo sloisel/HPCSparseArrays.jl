@@ -383,6 +383,52 @@ end
 @test err_rdaa < TOL
 
 
+# Test 13b: Right division - transpose(v) / A' (complex)
+# Tests the complex branch: x = conj(A \ conj(v))
+if rank == 0
+    println("[test] Right division - transpose(v) / A' (complex)")
+    flush(stdout)
+end
+
+n = 6
+A_cx_full = Complex{Float64}.(create_general_tridiagonal(n)) + im * spdiagm(0 => 0.1*ones(n))
+A_cx = SparseMatrixMPI{ComplexF64}(A_cx_full)
+b_cx_full = ComplexF64.(1:n) .+ im .* ComplexF64.(n:-1:1)
+b_cx = VectorMPI(b_cx_full)
+
+# transpose(v) / A' solves x * A' = transpose(v)
+x_tac = transpose(b_cx) / A_cx'
+x_tac_full = Vector(x_tac.parent)
+# x_tac represents transpose(x_col), so use transpose (not adjoint) for verification
+residual_tac = transpose(x_tac_full) * A_cx_full' - transpose(b_cx_full)
+err_tac = norm(residual_tac, Inf)
+
+if rank == 0
+    println("  Right division (transpose/adjoint complex) residual: $err_tac")
+end
+@test err_tac < TOL
+
+
+# Test 13c: Right division - v' / transpose(A) (complex)
+# Tests the complex branch: x = conj(A) \ v
+if rank == 0
+    println("[test] Right division - v' / transpose(A) (complex)")
+    flush(stdout)
+end
+
+# v' / transpose(A) solves x * transpose(A) = v'
+x_at = b_cx' / transpose(A_cx)
+x_at_full = Vector(x_at.parent)
+# x_at represents transpose(x_col), so use transpose (not adjoint) for verification
+residual_at = transpose(x_at_full) * transpose(A_cx_full) - b_cx_full'
+err_at = norm(residual_at, Inf)
+
+if rank == 0
+    println("  Right division (adjoint/transpose complex) residual: $err_at")
+end
+@test err_at < TOL
+
+
 # Test 14: LDLT transpose solve via factorization (real symmetric)
 if rank == 0
     println("[test] LDLT factorization transpose")

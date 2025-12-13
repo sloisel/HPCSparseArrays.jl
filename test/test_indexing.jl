@@ -1724,6 +1724,62 @@ if rank == 0
 end
 
 
+# ============================================================================
+# Cross-type assignment (Float64 -> ComplexF64)
+# ============================================================================
+
+if rank == 0
+    println("[test] VectorMPI cross-type setindex! (Float64 -> ComplexF64)")
+    flush(stdout)
+end
+
+# Create a ComplexF64 vector and assign Float64 values to a range
+n_cross_type = 8
+v_cx_target = VectorMPI(ComplexF64.(1:n_cross_type) .+ im .* ComplexF64.(n_cross_type:-1:1))
+v_real_src = VectorMPI(Float64[100.0, 200.0, 300.0])
+
+# Assign Float64 VectorMPI to a range of ComplexF64 VectorMPI
+v_cx_target[2:4] = v_real_src
+
+v_cx_target_gathered = gather_to_root(v_cx_target)
+if rank == 0
+    # Check that assignment worked and types are correct
+    @test v_cx_target_gathered[1] ≈ ComplexF64(1.0 + 8.0im) atol=TOL  # Unchanged
+    @test v_cx_target_gathered[2] ≈ ComplexF64(100.0 + 0.0im) atol=TOL  # Assigned from real
+    @test v_cx_target_gathered[3] ≈ ComplexF64(200.0 + 0.0im) atol=TOL  # Assigned from real
+    @test v_cx_target_gathered[4] ≈ ComplexF64(300.0 + 0.0im) atol=TOL  # Assigned from real
+    @test v_cx_target_gathered[5] ≈ ComplexF64(5.0 + 4.0im) atol=TOL  # Unchanged
+end
+
+
+if rank == 0
+    println("[test] MatrixMPI cross-type setindex! (Float64 -> ComplexF64)")
+    flush(stdout)
+end
+
+# Create a ComplexF64 matrix and assign Float64 values to a submatrix
+m_cross_type = 6
+n_cols_cross = 5
+M_cx_target = MatrixMPI(ComplexF64[i + im*j for i in 1:m_cross_type, j in 1:n_cols_cross])
+M_real_src = MatrixMPI(Float64[1000.0*i + j for i in 1:2, j in 1:3])
+
+# Assign Float64 MatrixMPI to a range of ComplexF64 MatrixMPI
+M_cx_target[2:3, 1:3] = M_real_src
+
+M_cx_target_gathered = gather_to_root(M_cx_target)
+if rank == 0
+    # Check that assignment worked and types are correct
+    @test M_cx_target_gathered[1, 1] ≈ ComplexF64(1.0 + 1.0im) atol=TOL  # Unchanged
+    @test M_cx_target_gathered[2, 1] ≈ ComplexF64(1001.0 + 0.0im) atol=TOL  # Assigned from real
+    @test M_cx_target_gathered[2, 2] ≈ ComplexF64(1002.0 + 0.0im) atol=TOL  # Assigned from real
+    @test M_cx_target_gathered[2, 3] ≈ ComplexF64(1003.0 + 0.0im) atol=TOL  # Assigned from real
+    @test M_cx_target_gathered[3, 1] ≈ ComplexF64(2001.0 + 0.0im) atol=TOL  # Assigned from real
+    @test M_cx_target_gathered[3, 3] ≈ ComplexF64(2003.0 + 0.0im) atol=TOL  # Assigned from real
+    @test M_cx_target_gathered[4, 1] ≈ ComplexF64(4.0 + 1.0im) atol=TOL  # Unchanged
+    @test M_cx_target_gathered[2, 4] ≈ ComplexF64(2.0 + 4.0im) atol=TOL  # Unchanged (column not in assignment)
+end
+
+
 end  # QuietTestSet
 
 # Aggregate counts across ranks

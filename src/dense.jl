@@ -840,7 +840,6 @@ Base.adjoint(A::MatrixMPI{T}) where T = transpose(conj(A))
 
 # Type alias for transpose of MatrixMPI
 const TransposedMatrixMPI{T} = Transpose{T,MatrixMPI{T}}
-const AdjointedMatrixMPI{T} = Adjoint{T,MatrixMPI{T}}
 
 """
     LinearAlgebra.copy(At::Transpose{T,MatrixMPI{T}}) where T
@@ -851,18 +850,6 @@ function LinearAlgebra.copy(At::Transpose{T,MatrixMPI{T}}) where T
     A = At.parent
     plan = get_dense_transpose_plan(A)
     return execute_plan!(plan, A)
-end
-
-"""
-    LinearAlgebra.copy(Ah::Adjoint{T,MatrixMPI{T}}) where T
-
-Materialize an adjointed MatrixMPI.
-"""
-function LinearAlgebra.copy(Ah::Adjoint{T,MatrixMPI{T}}) where T
-    # Adjoint = transpose of conjugate
-    A_conj = conj(Ah.parent)
-    plan = get_dense_transpose_plan(A_conj)
-    return execute_plan!(plan, A_conj)
 end
 
 # transpose(A) * x for MatrixMPI
@@ -1100,45 +1087,6 @@ function Base.:*(At::Transpose{T,MatrixMPI{T}}, x::VectorMPI{T}) where T
     return y
 end
 
-"""
-    Base.:*(Ah::Adjoint{T,MatrixMPI{T}}, x::VectorMPI{T}) where T
-
-Compute adjoint(A) * x = conj(transpose(A)) * x without materializing.
-"""
-function Base.:*(Ah::Adjoint{T,MatrixMPI{T}}, x::VectorMPI{T}) where T
-    A = Ah.parent
-    comm = MPI.COMM_WORLD
-    rank = MPI.Comm_rank(comm)
-
-    plan = get_dense_transpose_vector_plan(A, x)
-    gathered = execute_plan!(plan, x)
-
-    # Local computation: adjoint(A.A) * local_gathered
-    my_row_start = A.row_partition[rank+1]
-    my_row_end = A.row_partition[rank+2] - 1
-    local_gathered = @view gathered[my_row_start:my_row_end]
-
-    # adjoint(A.A) * local_gathered gives a full vector of size ncols
-    # This is only the contribution from our local rows - need to sum across all ranks
-    partial_result = adjoint(A.A) * local_gathered
-
-    # Allreduce to sum contributions from all ranks
-    full_result = MPI.Allreduce(partial_result, MPI.SUM, comm)
-
-    # Extract our portion according to col_partition
-    my_col_start = A.col_partition[rank+1]
-    my_col_end = A.col_partition[rank+2] - 1
-    local_result = full_result[my_col_start:my_col_end]
-
-    # Create result vector
-    y = VectorMPI{T}(
-        compute_partition_hash(A.col_partition),
-        copy(A.col_partition),
-        local_result
-    )
-    return y
-end
-
 # Vector * MatrixMPI operations
 
 """
@@ -1149,18 +1097,6 @@ Compute transpose(v) * A = transpose(transpose(A) * v).
 function Base.:*(vt::Transpose{<:Any, VectorMPI{T}}, A::MatrixMPI{T}) where T
     v = vt.parent
     result = transpose(A) * v
-    return transpose(result)
-end
-
-"""
-    Base.:*(vh::Adjoint{<:Any, VectorMPI{T}}, A::MatrixMPI{T}) where T
-
-Compute v' * A = transpose(transpose(A) * conj(v)).
-"""
-function Base.:*(vh::Adjoint{<:Any, VectorMPI{T}}, A::MatrixMPI{T}) where T
-    v = vh.parent
-    v_conj = conj(v)
-    result = transpose(A) * v_conj
     return transpose(result)
 end
 
