@@ -658,19 +658,22 @@ function Base.getindex(A::MatrixMPI{T}, row_rng::UnitRange{Int}, col_rng::UnitRa
         error("MatrixMPI column range out of bounds: $col_rng, ncols=$n")
     end
 
+    new_nrows = length(row_rng)
+    new_ncols = length(col_rng)
+
     if isempty(row_rng) || isempty(col_rng)
-        # Empty range - return empty MatrixMPI
-        new_row_partition = ones(Int, nranks + 1)
-        new_col_partition = uniform_partition(0, nranks)
-        hash = compute_dense_structural_hash(new_row_partition, new_col_partition, (0, 0), comm)
-        return MatrixMPI{T}(hash, new_row_partition, new_col_partition, Matrix{T}(undef, 0, 0))
+        # Empty range - return empty MatrixMPI with correct dimensions
+        new_row_partition = uniform_partition(new_nrows, nranks)
+        new_col_partition = uniform_partition(new_ncols, nranks)
+        my_local_rows = new_row_partition[rank + 2] - new_row_partition[rank + 1]
+        hash = compute_dense_structural_hash(new_row_partition, new_col_partition, (new_nrows, new_ncols), comm)
+        return MatrixMPI{T}(hash, new_row_partition, new_col_partition, Matrix{T}(undef, my_local_rows, new_ncols))
     end
 
     # Compute new row partition (local computation, no communication)
     new_row_partition = _compute_subpartition(A.row_partition, row_rng)
 
     # Compute new column partition (standard even distribution for the submatrix column count)
-    new_ncols = length(col_rng)
     new_col_partition = uniform_partition(new_ncols, nranks)
 
     # Extract local portion
@@ -1030,10 +1033,12 @@ function Base.getindex(A::SparseMatrixMPI{T}, row_rng::UnitRange{Int}, col_rng::
     new_ncols = length(col_rng)
 
     if isempty(row_rng) || isempty(col_rng)
-        # Empty range - return empty SparseMatrixMPI
-        new_row_partition = ones(Int, nranks + 1)
-        new_col_partition = uniform_partition(0, nranks)
-        empty_AT = SparseMatrixCSC(0, 0, Int[1], Int[], T[])
+        # Empty range - return empty SparseMatrixMPI with correct dimensions
+        new_row_partition = uniform_partition(new_nrows, nranks)
+        new_col_partition = uniform_partition(new_ncols, nranks)
+        my_local_rows = new_row_partition[rank + 2] - new_row_partition[rank + 1]
+        # SparseMatrixCSC(ncols, nrows, colptr, rowval, nzval) - transposed storage
+        empty_AT = SparseMatrixCSC(new_ncols, my_local_rows, ones(Int, my_local_rows + 1), Int[], T[])
         hash = compute_structural_hash(new_row_partition, Int[], empty_AT, comm)
         return SparseMatrixMPI{T}(hash, new_row_partition, new_col_partition, Int[],
                                    transpose(empty_AT), nothing)

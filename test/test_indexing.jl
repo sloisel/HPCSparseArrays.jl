@@ -1613,6 +1613,193 @@ A_crossrank2[18:22, 18:22] = src_sparse2
 
 MPI.Barrier(comm)
 
+# ============================================================================
+# Empty range tests for SparseMatrixMPI
+# ============================================================================
+
+if rank == 0
+    println("[test] SparseMatrixMPI getindex with empty row range")
+    flush(stdout)
+end
+
+A_empty_test = SparseMatrixMPI{Float64}(A_global)
+A_empty_rows = A_empty_test[1:0, 1:5]
+# Should match Julia builtin behavior: (0, 5)
+@test size(A_empty_rows) == (0, 5)
+@test nnz(SparseMatrixCSC(A_empty_rows)) == 0
+
+MPI.Barrier(comm)
+
+if rank == 0
+    println("[test] SparseMatrixMPI getindex with empty column range")
+    flush(stdout)
+end
+
+A_empty_cols = A_empty_test[1:5, 1:0]
+# Should match Julia builtin behavior: (5, 0)
+@test size(A_empty_cols) == (5, 0)
+@test nnz(SparseMatrixCSC(A_empty_cols)) == 0
+
+MPI.Barrier(comm)
+
+if rank == 0
+    println("[test] SparseMatrixMPI getindex with both ranges empty")
+    flush(stdout)
+end
+
+A_empty_both = A_empty_test[1:0, 1:0]
+@test size(A_empty_both) == (0, 0)
+@test nnz(SparseMatrixCSC(A_empty_both)) == 0
+
+MPI.Barrier(comm)
+
+# Also test MatrixMPI empty ranges
+if rank == 0
+    println("[test] MatrixMPI getindex with empty row range")
+    flush(stdout)
+end
+
+M_empty_test = MatrixMPI(M_global)
+M_empty_rows = M_empty_test[1:0, 1:5]
+@test size(M_empty_rows) == (0, 5)
+
+MPI.Barrier(comm)
+
+if rank == 0
+    println("[test] MatrixMPI getindex with empty column range")
+    flush(stdout)
+end
+
+M_empty_cols = M_empty_test[1:5, 1:0]
+@test size(M_empty_cols) == (5, 0)
+
+MPI.Barrier(comm)
+
+if rank == 0
+    println("[test] MatrixMPI getindex with both ranges empty")
+    flush(stdout)
+end
+
+M_empty_both = M_empty_test[1:0, 1:0]
+@test size(M_empty_both) == (0, 0)
+
+MPI.Barrier(comm)
+
+# ============================================================================
+# SparseMatrixMPI setindex! fast path with matching partitions
+# ============================================================================
+
+if rank == 0
+    println("[test] SparseMatrixMPI setindex! fast path (matching partitions)")
+    flush(stdout)
+end
+
+# Create source and dest with same size so partitions will match
+n_match = 20
+A_dest_match = SparseMatrixMPI{Float64}(spzeros(n_match, n_match))
+I_src_match = [1, 2, 3, 4, 5, 10, 15, 20]
+J_src_match = [2, 3, 4, 5, 6, 11, 16, 20]
+V_src_match = Float64[10*i + j for (i, j) in zip(I_src_match, J_src_match)]
+src_match_global = sparse(I_src_match, J_src_match, V_src_match, n_match, n_match)
+src_match = SparseMatrixMPI{Float64}(src_match_global)
+
+# Assign entire matrix (partitions will match exactly)
+A_dest_match[1:n_match, 1:n_match] = src_match
+
+# Verify values
+@test A_dest_match[1, 2] ≈ 12.0 atol=TOL
+@test A_dest_match[5, 6] ≈ 56.0 atol=TOL
+@test A_dest_match[10, 11] ≈ 111.0 atol=TOL
+@test A_dest_match[20, 20] ≈ 220.0 atol=TOL
+@test A_dest_match[1, 1] ≈ 0.0 atol=TOL  # Structural zero
+
+MPI.Barrier(comm)
+
+# ============================================================================
+# MatrixMPI getindex with VectorMPI rows and Int column (cross-rank)
+# ============================================================================
+
+if rank == 0
+    println("[test] MatrixMPI getindex with VectorMPI rows and Int column (cross-rank)")
+    flush(stdout)
+end
+
+# Create larger matrix to ensure indices span multiple ranks
+n_cross = 40
+M_cross_global = Float64[i * 10.0 + j for i in 1:n_cross, j in 1:10]
+M_cross = MatrixMPI(M_cross_global)
+
+# Create row indices spanning all ranks
+row_idx_cross = VectorMPI(vcat(1:3, div(n_cross,2)-1:div(n_cross,2)+1, n_cross-2:n_cross))
+result_cross = M_cross[row_idx_cross, 5]
+
+@test result_cross isa VectorMPI
+@test length(result_cross) == 9
+
+result_cross_gathered = gather_to_root(result_cross)
+expected_rows = vcat(1:3, div(n_cross,2)-1:div(n_cross,2)+1, n_cross-2:n_cross)
+if rank == 0
+    for (k, row) in enumerate(expected_rows)
+        @test result_cross_gathered[k] ≈ M_cross_global[row, 5] atol=TOL
+    end
+end
+
+MPI.Barrier(comm)
+
+# ============================================================================
+# MatrixMPI setindex! with VectorMPI rows and range columns (cross-rank send)
+# ============================================================================
+
+if rank == 0
+    println("[test] MatrixMPI setindex! with VectorMPI rows, range columns (cross-rank)")
+    flush(stdout)
+end
+
+M_set_cross = MatrixMPI(zeros(n_cross, 10))
+row_idx_set_cross = VectorMPI(vcat(1:2, n_cross-1:n_cross))  # First and last rows
+src_matrix_cross = MatrixMPI(Float64[100*i + j for i in 1:4, j in 1:5])
+
+M_set_cross[row_idx_set_cross, 3:7] = src_matrix_cross
+
+M_set_gathered = gather_to_root(M_set_cross)
+if rank == 0
+    @test M_set_gathered[1, 3] ≈ 101.0 atol=TOL
+    @test M_set_gathered[1, 7] ≈ 105.0 atol=TOL
+    @test M_set_gathered[2, 3] ≈ 201.0 atol=TOL
+    @test M_set_gathered[n_cross-1, 3] ≈ 301.0 atol=TOL
+    @test M_set_gathered[n_cross, 7] ≈ 405.0 atol=TOL
+    @test M_set_gathered[10, 5] ≈ 0.0 atol=TOL  # Unchanged
+end
+
+MPI.Barrier(comm)
+
+# ============================================================================
+# SparseMatrixMPI setindex! with MatrixMPI source, VectorMPI rows (cross-rank)
+# ============================================================================
+
+if rank == 0
+    println("[test] SparseMatrixMPI setindex! with MatrixMPI source, VectorMPI rows (cross-rank)")
+    flush(stdout)
+end
+
+A_sparse_set_cross = SparseMatrixMPI{Float64}(spzeros(n_cross, 10))
+row_idx_sparse_cross = VectorMPI(vcat(1:2, n_cross-1:n_cross))
+src_dense_cross = MatrixMPI(Float64[1000*i + j for i in 1:4, j in 1:3])
+
+A_sparse_set_cross[row_idx_sparse_cross, 2:4] = src_dense_cross
+
+A_sparse_gathered = gather_to_root(A_sparse_set_cross)
+if rank == 0
+    @test A_sparse_gathered[1, 2] ≈ 1001.0 atol=TOL
+    @test A_sparse_gathered[1, 4] ≈ 1003.0 atol=TOL
+    @test A_sparse_gathered[2, 2] ≈ 2001.0 atol=TOL
+    @test A_sparse_gathered[n_cross-1, 2] ≈ 3001.0 atol=TOL
+    @test A_sparse_gathered[n_cross, 4] ≈ 4003.0 atol=TOL
+    @test A_sparse_gathered[10, 5] ≈ 0.0 atol=TOL  # Unchanged
+end
+
+MPI.Barrier(comm)
+
 end  # QuietTestSet
 
 # Aggregate counts across ranks

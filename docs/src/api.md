@@ -496,7 +496,18 @@ F2 = ldlt(A2; reuse_symbolic=true)  # Faster - reuses cached symbolic
 ```@docs
 clear_plan_cache!
 clear_symbolic_cache!
-clear_factorization_plan_cache!
+clear_solve_plan_cache!
+clear_input_plan_cache!
+```
+
+## Distributed Solve (Advanced)
+
+These functions provide direct access to the distributed solve implementation.
+Most users should use `solve` or `\` instead.
+
+```@docs
+distributed_solve_lu!
+distributed_solve_ldlt!
 ```
 
 ## Full API Index
