@@ -162,10 +162,7 @@ M_complex = MatrixMPI(M_complex_global)
 
 ts = @testset QuietTestSet "Indexing" begin
 
-if rank == 0
-    println("[test] VectorMPI getindex")
-    flush(stdout)
-end
+println(io0(), "[test] VectorMPI getindex")
 
 # Test VectorMPI getindex - various indices
 # All these should work regardless of which rank owns the element
@@ -175,10 +172,7 @@ for i in 1:n
 end
 
 
-if rank == 0
-    println("[test] VectorMPI getindex (complex)")
-    flush(stdout)
-end
+println(io0(), "[test] VectorMPI getindex (complex)")
 
 # Test complex VectorMPI getindex
 for i in [1, div(n, 2), n]
@@ -187,10 +181,7 @@ for i in [1, div(n, 2), n]
 end
 
 
-if rank == 0
-    println("[test] VectorMPI setindex!")
-    flush(stdout)
-end
+println(io0(), "[test] VectorMPI setindex!")
 
 # Test VectorMPI setindex! - create a fresh vector to modify
 v_modify_global = collect(1.0:Float64(n))
@@ -208,10 +199,7 @@ for i in 1:n
 end
 
 
-if rank == 0
-    println("[test] SparseMatrixMPI getindex - existing entries")
-    flush(stdout)
-end
+println(io0(), "[test] SparseMatrixMPI getindex - existing entries")
 
 # Test SparseMatrixMPI getindex - existing entries (structural nonzeros)
 for k in eachindex(I_vals)
@@ -221,10 +209,7 @@ for k in eachindex(I_vals)
 end
 
 
-if rank == 0
-    println("[test] SparseMatrixMPI getindex - structural zeros")
-    flush(stdout)
-end
+println(io0(), "[test] SparseMatrixMPI getindex - structural zeros")
 
 # Test SparseMatrixMPI getindex - structural zeros
 # These positions have no entry in the sparsity pattern
@@ -238,10 +223,7 @@ for (i, j) in test_zero_positions
 end
 
 
-if rank == 0
-    println("[test] SparseMatrixMPI getindex (complex)")
-    flush(stdout)
-end
+println(io0(), "[test] SparseMatrixMPI getindex (complex)")
 
 # Test complex SparseMatrixMPI getindex
 for k in [1, 5, 9]
@@ -251,10 +233,7 @@ for k in [1, 5, 9]
 end
 
 
-if rank == 0
-    println("[test] SparseMatrixMPI setindex! - modify existing entries")
-    flush(stdout)
-end
+println(io0(), "[test] SparseMatrixMPI setindex! - modify existing entries")
 
 # Test SparseMatrixMPI setindex! - modify existing entries
 # Create a fresh matrix to modify
@@ -276,10 +255,7 @@ for k in eachindex(I_vals)
 end
 
 
-if rank == 0
-    println("[test] SparseMatrixMPI setindex! (complex)")
-    flush(stdout)
-end
+println(io0(), "[test] SparseMatrixMPI setindex! (complex)")
 
 # Test complex SparseMatrixMPI setindex!
 A_complex_modify_global = sparse(I_vals, J_vals, copy(V_complex), n, n)
@@ -302,10 +278,7 @@ for k in test_modify_indices
 end
 
 
-if rank == 0
-    println("[test] MatrixMPI getindex")
-    flush(stdout)
-end
+println(io0(), "[test] MatrixMPI getindex")
 
 # Test MatrixMPI getindex - various positions
 for i in 1:n
@@ -316,10 +289,7 @@ for i in 1:n
 end
 
 
-if rank == 0
-    println("[test] MatrixMPI getindex (complex)")
-    flush(stdout)
-end
+println(io0(), "[test] MatrixMPI getindex (complex)")
 
 # Test complex MatrixMPI getindex
 for i in [1, div(n, 2), n]
@@ -330,10 +300,7 @@ for i in [1, div(n, 2), n]
 end
 
 
-if rank == 0
-    println("[test] MatrixMPI setindex!")
-    flush(stdout)
-end
+println(io0(), "[test] MatrixMPI setindex!")
 
 # Test MatrixMPI setindex!
 M_modify_global = copy(M_global)
@@ -354,10 +321,7 @@ for (i, j) in test_positions
 end
 
 
-if rank == 0
-    println("[test] MatrixMPI setindex! (complex)")
-    flush(stdout)
-end
+println(io0(), "[test] MatrixMPI setindex! (complex)")
 
 # Test complex MatrixMPI setindex!
 M_complex_modify_global = copy(M_complex_global)
@@ -375,10 +339,7 @@ for (i, j) in test_positions
 end
 
 
-if rank == 0
-    println("[test] Edge cases - boundary indices")
-    flush(stdout)
-end
+println(io0(), "[test] Edge cases - boundary indices")
 
 # Test edge cases: first and last elements
 # VectorMPI
@@ -400,10 +361,7 @@ end
 # Range Indexing Tests
 # ============================================================================
 
-if rank == 0
-    println("[test] VectorMPI range getindex")
-    flush(stdout)
-end
+println(io0(), "[test] VectorMPI range getindex")
 
 # Test VectorMPI range getindex - extract subvector
 for (rng_start, rng_end) in [(1, 4), (3, 7), (5, n), (1, n)]
@@ -417,10 +375,7 @@ for (rng_start, rng_end) in [(1, 4), (3, 7), (5, n), (1, n)]
 end
 
 
-if rank == 0
-    println("[test] VectorMPI range setindex! (scalar)")
-    flush(stdout)
-end
+println(io0(), "[test] VectorMPI range setindex! (scalar)")
 
 # Test VectorMPI range setindex! with scalar
 v_range_modify = VectorMPI(copy(v_global))
@@ -434,10 +389,7 @@ for i in 1:n
 end
 
 
-if rank == 0
-    println("[test] VectorMPI range setindex! (vector)")
-    flush(stdout)
-end
+println(io0(), "[test] VectorMPI range setindex! (vector)")
 
 # Test VectorMPI range setindex! with a regular vector
 v_range_modify2 = VectorMPI(copy(v_global))
@@ -451,10 +403,7 @@ for i in 1:n
 end
 
 
-if rank == 0
-    println("[test] MatrixMPI range getindex")
-    flush(stdout)
-end
+println(io0(), "[test] MatrixMPI range getindex")
 
 # Test MatrixMPI range getindex
 row_rng = 2:6
@@ -468,10 +417,7 @@ for i in 1:length(row_rng)
 end
 
 
-if rank == 0
-    println("[test] MatrixMPI range getindex with Colon")
-    flush(stdout)
-end
+println(io0(), "[test] MatrixMPI range getindex with Colon")
 
 # Test MatrixMPI range getindex with Colon
 M_rows = M[2:5, :]
@@ -491,10 +437,7 @@ for i in 1:n
 end
 
 
-if rank == 0
-    println("[test] MatrixMPI range setindex! (scalar)")
-    flush(stdout)
-end
+println(io0(), "[test] MatrixMPI range setindex! (scalar)")
 
 # Test MatrixMPI range setindex! with scalar
 M_range_modify = MatrixMPI(copy(M_global))
@@ -510,10 +453,7 @@ for i in 1:n
 end
 
 
-if rank == 0
-    println("[test] MatrixMPI range setindex! (matrix)")
-    flush(stdout)
-end
+println(io0(), "[test] MatrixMPI range setindex! (matrix)")
 
 # Test MatrixMPI range setindex! with a matrix
 M_range_modify2 = MatrixMPI(copy(M_global))
@@ -526,10 +466,7 @@ for i in 2:4
 end
 
 
-if rank == 0
-    println("[test] SparseMatrixMPI range getindex")
-    flush(stdout)
-end
+println(io0(), "[test] SparseMatrixMPI range getindex")
 
 # Test SparseMatrixMPI range getindex
 row_rng = 2:6
@@ -546,10 +483,7 @@ A_sub = A[row_rng, col_rng]
 @test A_sub[3, 3] ≈ A_global[4, 4] atol=TOL  # Diagonal entry
 
 
-if rank == 0
-    println("[test] SparseMatrixMPI range getindex with Colon")
-    flush(stdout)
-end
+println(io0(), "[test] SparseMatrixMPI range getindex with Colon")
 
 # Test with Colon
 A_rows = A[2:5, :]
@@ -558,10 +492,7 @@ A_cols = A[:, 3:8]
 @test size(A_cols) == (n, 6)
 
 
-if rank == 0
-    println("[test] SparseMatrixMPI range setindex! (scalar)")
-    flush(stdout)
-end
+println(io0(), "[test] SparseMatrixMPI range setindex! (scalar)")
 
 # Test SparseMatrixMPI range setindex! with scalar
 # Create a fresh copy for modification
@@ -581,10 +512,7 @@ A_modify[2:4, 2:5] = 0.0
 @test A_modify[5, 5] ≈ A_global[5, 5] atol=TOL
 
 
-if rank == 0
-    println("[test] VectorMPI range getindex preserves partition structure")
-    flush(stdout)
-end
+println(io0(), "[test] VectorMPI range getindex preserves partition structure")
 
 # Verify that extracting a range and then extracting the same range again gives same partition
 w1 = v[3:8]
@@ -593,10 +521,7 @@ w2 = v[3:8]
 @test w1.structural_hash == w2.structural_hash
 
 
-if rank == 0
-    println("[test] Complex VectorMPI range getindex")
-    flush(stdout)
-end
+println(io0(), "[test] Complex VectorMPI range getindex")
 
 # Test complex VectorMPI range getindex
 w_complex = v_complex[2:6]
@@ -610,10 +535,7 @@ end
 # VectorMPI indexing with VectorMPI indices
 # ============================================================================
 
-if rank == 0
-    println("[test] VectorMPI getindex with VectorMPI indices")
-    flush(stdout)
-end
+println(io0(), "[test] VectorMPI getindex with VectorMPI indices")
 
 # Test v[idx] where idx is VectorMPI{Int}
 idx_global = [3, 1, 5, 2, 6, 4]
@@ -633,10 +555,7 @@ if rank == 0
 end
 
 
-if rank == 0
-    println("[test] VectorMPI setindex! with VectorMPI indices")
-    flush(stdout)
-end
+println(io0(), "[test] VectorMPI setindex! with VectorMPI indices")
 
 # Test v[idx] = src where idx and src are VectorMPI
 v_modify = VectorMPI(copy(v_global))
@@ -657,10 +576,7 @@ if rank == 0
 end
 
 
-if rank == 0
-    println("[test] MatrixMPI getindex with VectorMPI indices")
-    flush(stdout)
-end
+println(io0(), "[test] MatrixMPI getindex with VectorMPI indices")
 
 # Test A[row_idx, col_idx] for MatrixMPI
 A_dense_global = Float64[i + j/10 for i in 1:6, j in 1:4]
@@ -685,10 +601,7 @@ if rank == 0
 end
 
 
-if rank == 0
-    println("[test] MatrixMPI setindex! with VectorMPI indices")
-    flush(stdout)
-end
+println(io0(), "[test] MatrixMPI setindex! with VectorMPI indices")
 
 # Test A[row_idx, col_idx] = src for MatrixMPI
 A_dense_modify = MatrixMPI(zeros(6, 4))
@@ -715,10 +628,7 @@ if rank == 0
 end
 
 
-if rank == 0
-    println("[test] SparseMatrixMPI getindex with VectorMPI indices")
-    flush(stdout)
-end
+println(io0(), "[test] SparseMatrixMPI getindex with VectorMPI indices")
 
 # Test A[row_idx, col_idx] for SparseMatrixMPI (returns dense MatrixMPI)
 A_sparse_test = SparseMatrixMPI{Float64}(A_global)
@@ -742,10 +652,7 @@ if rank == 0
 end
 
 
-if rank == 0
-    println("[test] SparseMatrixMPI setindex! with VectorMPI indices")
-    flush(stdout)
-end
+println(io0(), "[test] SparseMatrixMPI setindex! with VectorMPI indices")
 
 # Test A[row_idx, col_idx] = src for SparseMatrixMPI
 A_sparse_modify = SparseMatrixMPI{Float64}(spzeros(6, 6))
@@ -772,10 +679,7 @@ if rank == 0
 end
 
 
-if rank == 0
-    println("[test] VectorMPI indexing with VectorMPI indices (complex)")
-    flush(stdout)
-end
+println(io0(), "[test] VectorMPI indexing with VectorMPI indices (complex)")
 
 # Test with ComplexF64
 v_complex_modify = VectorMPI(copy(v_complex_global))
@@ -799,10 +703,7 @@ end
 # point-to-point communication paths
 # ============================================================================
 
-if rank == 0
-    println("[test] Cross-rank VectorMPI getindex with VectorMPI indices")
-    flush(stdout)
-end
+println(io0(), "[test] Cross-rank VectorMPI getindex with VectorMPI indices")
 
 # Create a larger vector to ensure indices span multiple ranks
 n_large = 100
@@ -824,10 +725,7 @@ if rank == 0
 end
 
 
-if rank == 0
-    println("[test] Cross-rank VectorMPI setindex! with VectorMPI indices")
-    flush(stdout)
-end
+println(io0(), "[test] Cross-rank VectorMPI setindex! with VectorMPI indices")
 
 # Test setindex! with cross-rank indices
 v_large_modify = VectorMPI(copy(v_large_global))
@@ -850,10 +748,7 @@ if rank == 0
 end
 
 
-if rank == 0
-    println("[test] Cross-rank MatrixMPI getindex with VectorMPI indices")
-    flush(stdout)
-end
+println(io0(), "[test] Cross-rank MatrixMPI getindex with VectorMPI indices")
 
 # Create larger dense matrix
 M_large_global = Float64[i + j/100 for i in 1:40, j in 1:10]
@@ -878,10 +773,7 @@ if rank == 0
 end
 
 
-if rank == 0
-    println("[test] Cross-rank MatrixMPI setindex! with VectorMPI indices")
-    flush(stdout)
-end
+println(io0(), "[test] Cross-rank MatrixMPI setindex! with VectorMPI indices")
 
 # Test cross-rank setindex!
 M_large_modify = MatrixMPI(zeros(40, 10))
@@ -902,10 +794,7 @@ if rank == 0
 end
 
 
-if rank == 0
-    println("[test] Cross-rank SparseMatrixMPI getindex with VectorMPI indices")
-    flush(stdout)
-end
+println(io0(), "[test] Cross-rank SparseMatrixMPI getindex with VectorMPI indices")
 
 # Create larger sparse matrix with cross-rank structure
 I_large = vcat(1:40, 1:20)  # Diagonal + some off-diagonals
@@ -932,10 +821,7 @@ if rank == 0
 end
 
 
-if rank == 0
-    println("[test] Cross-rank SparseMatrixMPI setindex! with VectorMPI indices")
-    flush(stdout)
-end
+println(io0(), "[test] Cross-rank SparseMatrixMPI setindex! with VectorMPI indices")
 
 # Test cross-rank setindex! for SparseMatrixMPI (structural modification)
 A_large_modify = SparseMatrixMPI{Float64}(spzeros(40, 40))
@@ -960,10 +846,7 @@ end
 # Structural modification tests (SparseMatrixMPI insert new nonzeros)
 # ============================================================================
 
-if rank == 0
-    println("[test] SparseMatrixMPI structural modification - single element insert")
-    flush(stdout)
-end
+println(io0(), "[test] SparseMatrixMPI structural modification - single element insert")
 
 # Create sparse matrix and insert at a position that has no structural nonzero
 I_struct = [1, 2, 3, 4]
@@ -986,10 +869,7 @@ A_struct[1, 5] = 99.0
 # Cached transpose invalidation tests
 # ============================================================================
 
-if rank == 0
-    println("[test] Cached transpose bidirectional invalidation")
-    flush(stdout)
-end
+println(io0(), "[test] Cached transpose bidirectional invalidation")
 
 # Create a matrix and compute its transpose to create cached_transpose
 I_cache = [1, 2, 3, 4, 1]
@@ -1026,10 +906,7 @@ A_cache[2, 5] = 99.0  # Insert at a position that's not in sparsity pattern
 # Mixed indexing tests: VectorMPI + range, VectorMPI + Colon, VectorMPI + Int
 # ============================================================================
 
-if rank == 0
-    println("[test] MatrixMPI getindex with VectorMPI rows and range columns")
-    flush(stdout)
-end
+println(io0(), "[test] MatrixMPI getindex with VectorMPI rows and range columns")
 
 row_idx_mix = VectorMPI([2, 5, 8])
 M_mix = M[row_idx_mix, 3:7]
@@ -1045,10 +922,7 @@ if rank == 0
 end
 
 
-if rank == 0
-    println("[test] MatrixMPI getindex with range rows and VectorMPI columns")
-    flush(stdout)
-end
+println(io0(), "[test] MatrixMPI getindex with range rows and VectorMPI columns")
 
 col_idx_mix = VectorMPI([1, 4, 7, 10])
 M_mix2 = M[2:5, col_idx_mix]
@@ -1064,10 +938,7 @@ if rank == 0
 end
 
 
-if rank == 0
-    println("[test] MatrixMPI getindex with VectorMPI rows and Colon columns")
-    flush(stdout)
-end
+println(io0(), "[test] MatrixMPI getindex with VectorMPI rows and Colon columns")
 
 row_idx_colon = VectorMPI([1, 6, n])
 M_colon = M[row_idx_colon, :]
@@ -1083,10 +954,7 @@ if rank == 0
 end
 
 
-if rank == 0
-    println("[test] MatrixMPI getindex with Colon rows and VectorMPI columns")
-    flush(stdout)
-end
+println(io0(), "[test] MatrixMPI getindex with Colon rows and VectorMPI columns")
 
 col_idx_colon = VectorMPI([2, 5, 8, 11])
 M_colon2 = M[:, col_idx_colon]
@@ -1102,10 +970,7 @@ if rank == 0
 end
 
 
-if rank == 0
-    println("[test] MatrixMPI getindex with VectorMPI rows and Int column")
-    flush(stdout)
-end
+println(io0(), "[test] MatrixMPI getindex with VectorMPI rows and Int column")
 
 row_idx_int = VectorMPI([1, 4, 7, 10])
 M_int_col = M[row_idx_int, 5]
@@ -1120,10 +985,7 @@ if rank == 0
 end
 
 
-if rank == 0
-    println("[test] MatrixMPI getindex with Int row and VectorMPI columns")
-    flush(stdout)
-end
+println(io0(), "[test] MatrixMPI getindex with Int row and VectorMPI columns")
 
 col_idx_int = VectorMPI([2, 4, 6, 8])
 M_int_row = M[3, col_idx_int]
@@ -1138,10 +1000,7 @@ if rank == 0
 end
 
 
-if rank == 0
-    println("[test] SparseMatrixMPI getindex with VectorMPI rows and range columns")
-    flush(stdout)
-end
+println(io0(), "[test] SparseMatrixMPI getindex with VectorMPI rows and range columns")
 
 row_idx_sp_mix = VectorMPI([1, 3, 5, 7])
 A_mix = A[row_idx_sp_mix, 2:6]
@@ -1157,10 +1016,7 @@ if rank == 0
 end
 
 
-if rank == 0
-    println("[test] SparseMatrixMPI getindex with range rows and VectorMPI columns")
-    flush(stdout)
-end
+println(io0(), "[test] SparseMatrixMPI getindex with range rows and VectorMPI columns")
 
 col_idx_sp_mix = VectorMPI([1, 3, 5, 7])
 A_mix2 = A[2:5, col_idx_sp_mix]
@@ -1176,10 +1032,7 @@ if rank == 0
 end
 
 
-if rank == 0
-    println("[test] SparseMatrixMPI getindex with VectorMPI rows and Colon columns")
-    flush(stdout)
-end
+println(io0(), "[test] SparseMatrixMPI getindex with VectorMPI rows and Colon columns")
 
 row_idx_sp_colon = VectorMPI([2, 4, 6, 8])
 A_colon = A[row_idx_sp_colon, :]
@@ -1195,10 +1048,7 @@ if rank == 0
 end
 
 
-if rank == 0
-    println("[test] SparseMatrixMPI getindex with Colon rows and VectorMPI columns")
-    flush(stdout)
-end
+println(io0(), "[test] SparseMatrixMPI getindex with Colon rows and VectorMPI columns")
 
 col_idx_sp_colon = VectorMPI([1, 4, 8])
 A_colon2 = A[:, col_idx_sp_colon]
@@ -1214,10 +1064,7 @@ if rank == 0
 end
 
 
-if rank == 0
-    println("[test] SparseMatrixMPI getindex with VectorMPI rows and Int column")
-    flush(stdout)
-end
+println(io0(), "[test] SparseMatrixMPI getindex with VectorMPI rows and Int column")
 
 row_idx_sp_int = VectorMPI([1, 3, 5, 7])
 A_int_col = A[row_idx_sp_int, 3]
@@ -1232,10 +1079,7 @@ if rank == 0
 end
 
 
-if rank == 0
-    println("[test] SparseMatrixMPI getindex with Int row and VectorMPI columns")
-    flush(stdout)
-end
+println(io0(), "[test] SparseMatrixMPI getindex with Int row and VectorMPI columns")
 
 col_idx_sp_int = VectorMPI([1, 2, 3, 4])
 A_int_row = A[2, col_idx_sp_int]
@@ -1254,10 +1098,7 @@ end
 # Mixed setindex! tests
 # ============================================================================
 
-if rank == 0
-    println("[test] MatrixMPI setindex! with VectorMPI rows and range columns")
-    flush(stdout)
-end
+println(io0(), "[test] MatrixMPI setindex! with VectorMPI rows and range columns")
 
 M_setmix = MatrixMPI(zeros(n, n))
 row_idx_setmix = VectorMPI([1, 4, 7])
@@ -1272,10 +1113,7 @@ if rank == 0
 end
 
 
-if rank == 0
-    println("[test] MatrixMPI setindex! with range rows and VectorMPI columns")
-    flush(stdout)
-end
+println(io0(), "[test] MatrixMPI setindex! with range rows and VectorMPI columns")
 
 M_setmix2 = MatrixMPI(zeros(n, n))
 col_idx_setmix = VectorMPI([1, 5, 9])
@@ -1290,10 +1128,7 @@ if rank == 0
 end
 
 
-if rank == 0
-    println("[test] MatrixMPI setindex! with VectorMPI rows and Int column")
-    flush(stdout)
-end
+println(io0(), "[test] MatrixMPI setindex! with VectorMPI rows and Int column")
 
 M_setint = MatrixMPI(zeros(n, n))
 row_idx_setint = VectorMPI([2, 6, 10])
@@ -1307,10 +1142,7 @@ if rank == 0
 end
 
 
-if rank == 0
-    println("[test] MatrixMPI setindex! with Int row and VectorMPI columns")
-    flush(stdout)
-end
+println(io0(), "[test] MatrixMPI setindex! with Int row and VectorMPI columns")
 
 M_setint2 = MatrixMPI(zeros(n, n))
 col_idx_setint = VectorMPI([3, 7, 11])
@@ -1324,10 +1156,7 @@ if rank == 0
 end
 
 
-if rank == 0
-    println("[test] SparseMatrixMPI setindex! with VectorMPI rows and range columns")
-    flush(stdout)
-end
+println(io0(), "[test] SparseMatrixMPI setindex! with VectorMPI rows and range columns")
 
 A_setmix = SparseMatrixMPI{Float64}(spzeros(n, n))
 row_idx_sp_setmix = VectorMPI([1, 4, 7])
@@ -1342,10 +1171,7 @@ if rank == 0
 end
 
 
-if rank == 0
-    println("[test] SparseMatrixMPI setindex! with range rows and VectorMPI columns")
-    flush(stdout)
-end
+println(io0(), "[test] SparseMatrixMPI setindex! with range rows and VectorMPI columns")
 
 A_setmix2 = SparseMatrixMPI{Float64}(spzeros(n, n))
 col_idx_sp_setmix = VectorMPI([1, 5, 9])
@@ -1360,10 +1186,7 @@ if rank == 0
 end
 
 
-if rank == 0
-    println("[test] SparseMatrixMPI setindex! with VectorMPI rows and Int column")
-    flush(stdout)
-end
+println(io0(), "[test] SparseMatrixMPI setindex! with VectorMPI rows and Int column")
 
 A_setint = SparseMatrixMPI{Float64}(spzeros(n, n))
 row_idx_sp_setint = VectorMPI([2, 6, 10])
@@ -1377,10 +1200,7 @@ if rank == 0
 end
 
 
-if rank == 0
-    println("[test] SparseMatrixMPI setindex! with Int row and VectorMPI columns")
-    flush(stdout)
-end
+println(io0(), "[test] SparseMatrixMPI setindex! with Int row and VectorMPI columns")
 
 A_setint2 = SparseMatrixMPI{Float64}(spzeros(n, n))
 col_idx_sp_setint = VectorMPI([3, 7, 11])
@@ -1398,10 +1218,7 @@ end
 # Range setindex! with SparseMatrixMPI (matrix source)
 # ============================================================================
 
-if rank == 0
-    println("[test] SparseMatrixMPI range setindex! (matrix)")
-    flush(stdout)
-end
+println(io0(), "[test] SparseMatrixMPI range setindex! (matrix)")
 
 A_range_matrix = SparseMatrixMPI{Float64}(copy(A_global))
 new_block = Float64[100*i + j for i in 1:3, j in 1:4]
@@ -1418,10 +1235,7 @@ end
 # VectorMPI range setindex! with VectorMPI source
 # ============================================================================
 
-if rank == 0
-    println("[test] VectorMPI range setindex! (VectorMPI source)")
-    flush(stdout)
-end
+println(io0(), "[test] VectorMPI range setindex! (VectorMPI source)")
 
 v_vec_src = VectorMPI(copy(v_global))
 src_vec = VectorMPI([100.0, 200.0, 300.0, 400.0])
@@ -1440,10 +1254,7 @@ end
 # MatrixMPI getindex with Colon, Colon (full matrix copy)
 # ============================================================================
 
-if rank == 0
-    println("[test] MatrixMPI getindex with Colon, Colon")
-    flush(stdout)
-end
+println(io0(), "[test] MatrixMPI getindex with Colon, Colon")
 
 M_full = M[:, :]
 @test size(M_full) == size(M)
@@ -1461,10 +1272,7 @@ end
 # MatrixMPI range setindex! with MatrixMPI source
 # ============================================================================
 
-if rank == 0
-    println("[test] MatrixMPI range setindex! (MatrixMPI source)")
-    flush(stdout)
-end
+println(io0(), "[test] MatrixMPI range setindex! (MatrixMPI source)")
 
 M_matrix_src = MatrixMPI(zeros(n, n))
 src_matrix = MatrixMPI(Float64[10*i + j for i in 1:4, j in 1:5])
@@ -1485,10 +1293,7 @@ end
 # This tests the path: if num_rows_needed > 0 && intersect_start <= intersect_end
 # ============================================================================
 
-if rank == 0
-    println("[test] SparseMatrixMPI range setindex! (cross-rank sparse source)")
-    flush(stdout)
-end
+println(io0(), "[test] SparseMatrixMPI range setindex! (cross-rank sparse source)")
 
 # Create a larger sparse matrix where the source spans multiple ranks
 n_crossrank = 40
@@ -1516,10 +1321,7 @@ A_crossrank[10:29, 5:24] = src_sparse
 @test A_crossrank[1, 1] ≈ 0.0 atol=TOL
 
 
-if rank == 0
-    println("[test] SparseMatrixMPI range setindex! (cross-rank with row intersection)")
-    flush(stdout)
-end
+println(io0(), "[test] SparseMatrixMPI range setindex! (cross-rank with row intersection)")
 
 # Another test where source and dest row ranges intersect differently on each rank
 A_crossrank2 = SparseMatrixMPI{Float64}(spzeros(n_crossrank, n_crossrank))
@@ -1551,10 +1353,7 @@ A_crossrank2[18:22, 18:22] = src_sparse2
 # Empty range tests for SparseMatrixMPI
 # ============================================================================
 
-if rank == 0
-    println("[test] SparseMatrixMPI getindex with empty row range")
-    flush(stdout)
-end
+println(io0(), "[test] SparseMatrixMPI getindex with empty row range")
 
 A_empty_test = SparseMatrixMPI{Float64}(A_global)
 A_empty_rows = A_empty_test[1:0, 1:5]
@@ -1563,10 +1362,7 @@ A_empty_rows = A_empty_test[1:0, 1:5]
 @test nnz(SparseMatrixCSC(A_empty_rows)) == 0
 
 
-if rank == 0
-    println("[test] SparseMatrixMPI getindex with empty column range")
-    flush(stdout)
-end
+println(io0(), "[test] SparseMatrixMPI getindex with empty column range")
 
 A_empty_cols = A_empty_test[1:5, 1:0]
 # Should match Julia builtin behavior: (5, 0)
@@ -1574,10 +1370,7 @@ A_empty_cols = A_empty_test[1:5, 1:0]
 @test nnz(SparseMatrixCSC(A_empty_cols)) == 0
 
 
-if rank == 0
-    println("[test] SparseMatrixMPI getindex with both ranges empty")
-    flush(stdout)
-end
+println(io0(), "[test] SparseMatrixMPI getindex with both ranges empty")
 
 A_empty_both = A_empty_test[1:0, 1:0]
 @test size(A_empty_both) == (0, 0)
@@ -1585,29 +1378,20 @@ A_empty_both = A_empty_test[1:0, 1:0]
 
 
 # Also test MatrixMPI empty ranges
-if rank == 0
-    println("[test] MatrixMPI getindex with empty row range")
-    flush(stdout)
-end
+println(io0(), "[test] MatrixMPI getindex with empty row range")
 
 M_empty_test = MatrixMPI(M_global)
 M_empty_rows = M_empty_test[1:0, 1:5]
 @test size(M_empty_rows) == (0, 5)
 
 
-if rank == 0
-    println("[test] MatrixMPI getindex with empty column range")
-    flush(stdout)
-end
+println(io0(), "[test] MatrixMPI getindex with empty column range")
 
 M_empty_cols = M_empty_test[1:5, 1:0]
 @test size(M_empty_cols) == (5, 0)
 
 
-if rank == 0
-    println("[test] MatrixMPI getindex with both ranges empty")
-    flush(stdout)
-end
+println(io0(), "[test] MatrixMPI getindex with both ranges empty")
 
 M_empty_both = M_empty_test[1:0, 1:0]
 @test size(M_empty_both) == (0, 0)
@@ -1617,10 +1401,7 @@ M_empty_both = M_empty_test[1:0, 1:0]
 # SparseMatrixMPI setindex! fast path with matching partitions
 # ============================================================================
 
-if rank == 0
-    println("[test] SparseMatrixMPI setindex! fast path (matching partitions)")
-    flush(stdout)
-end
+println(io0(), "[test] SparseMatrixMPI setindex! fast path (matching partitions)")
 
 # Create source and dest with same size so partitions will match
 n_match = 20
@@ -1646,10 +1427,7 @@ A_dest_match[1:n_match, 1:n_match] = src_match
 # MatrixMPI getindex with VectorMPI rows and Int column (cross-rank)
 # ============================================================================
 
-if rank == 0
-    println("[test] MatrixMPI getindex with VectorMPI rows and Int column (cross-rank)")
-    flush(stdout)
-end
+println(io0(), "[test] MatrixMPI getindex with VectorMPI rows and Int column (cross-rank)")
 
 # Create larger matrix to ensure indices span multiple ranks
 n_cross = 40
@@ -1676,10 +1454,7 @@ end
 # MatrixMPI setindex! with VectorMPI rows and range columns (cross-rank send)
 # ============================================================================
 
-if rank == 0
-    println("[test] MatrixMPI setindex! with VectorMPI rows, range columns (cross-rank)")
-    flush(stdout)
-end
+println(io0(), "[test] MatrixMPI setindex! with VectorMPI rows, range columns (cross-rank)")
 
 M_set_cross = MatrixMPI(zeros(n_cross, 10))
 row_idx_set_cross = VectorMPI(vcat(1:2, n_cross-1:n_cross))  # First and last rows
@@ -1702,10 +1477,7 @@ end
 # SparseMatrixMPI setindex! with MatrixMPI source, VectorMPI rows (cross-rank)
 # ============================================================================
 
-if rank == 0
-    println("[test] SparseMatrixMPI setindex! with MatrixMPI source, VectorMPI rows (cross-rank)")
-    flush(stdout)
-end
+println(io0(), "[test] SparseMatrixMPI setindex! with MatrixMPI source, VectorMPI rows (cross-rank)")
 
 A_sparse_set_cross = SparseMatrixMPI{Float64}(spzeros(n_cross, 10))
 row_idx_sparse_cross = VectorMPI(vcat(1:2, n_cross-1:n_cross))
@@ -1728,10 +1500,7 @@ end
 # Cross-type assignment (Float64 -> ComplexF64)
 # ============================================================================
 
-if rank == 0
-    println("[test] VectorMPI cross-type setindex! (Float64 -> ComplexF64)")
-    flush(stdout)
-end
+println(io0(), "[test] VectorMPI cross-type setindex! (Float64 -> ComplexF64)")
 
 # Create a ComplexF64 vector and assign Float64 values to a range
 n_cross_type = 8
@@ -1752,10 +1521,7 @@ if rank == 0
 end
 
 
-if rank == 0
-    println("[test] MatrixMPI cross-type setindex! (Float64 -> ComplexF64)")
-    flush(stdout)
-end
+println(io0(), "[test] MatrixMPI cross-type setindex! (Float64 -> ComplexF64)")
 
 # Create a ComplexF64 matrix and assign Float64 values to a submatrix
 m_cross_type = 6
@@ -1793,10 +1559,7 @@ local_counts = [
 global_counts = similar(local_counts)
 MPI.Allreduce!(local_counts, global_counts, +, comm)
 
-if rank == 0
-    println("Test Summary: Indexing | Pass: $(global_counts[1])  Fail: $(global_counts[2])  Error: $(global_counts[3])")
-    flush(stdout)
-end
+println(io0(), "Test Summary: Indexing | Pass: $(global_counts[1])  Fail: $(global_counts[2])  Error: $(global_counts[3])")
 
 MPI.Finalize()
 

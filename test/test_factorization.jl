@@ -121,10 +121,7 @@ end
 ts = @testset QuietTestSet "Distributed Factorization Tests" begin
 
 # Test 1: LU factorization of small matrix
-if rank == 0
-    println("[test] LU factorization - small matrix")
-    flush(stdout)
-end
+println(io0(), "[test] LU factorization - small matrix")
 
 n = 8
 A_full = create_general_tridiagonal(n)
@@ -142,17 +139,12 @@ x_full = Vector(x)
 residual = A_full * x_full - b_full
 err = norm(residual, Inf)
 
-if rank == 0
-    println("  LU solve residual: $err")
-end
+println(io0(), "  LU solve residual: $err")
 @test err < TOL
 
 
 # Test 2: LDLT factorization of SPD matrix
-if rank == 0
-    println("[test] LDLT factorization - SPD matrix")
-    flush(stdout)
-end
+println(io0(), "[test] LDLT factorization - SPD matrix")
 
 n = 10
 A_full = create_spd_tridiagonal(n)
@@ -170,17 +162,12 @@ x_full = Vector(x)
 residual = A_full * x_full - b_full
 err = norm(residual, Inf)
 
-if rank == 0
-    println("  LDLT solve residual (SPD): $err")
-end
+println(io0(), "  LDLT solve residual (SPD): $err")
 @test err < TOL
 
 
 # Test 3: LDLT with symmetric indefinite matrix
-if rank == 0
-    println("[test] LDLT factorization - indefinite matrix")
-    flush(stdout)
-end
+println(io0(), "[test] LDLT factorization - indefinite matrix")
 
 n = 8
 A_full = create_symmetric_indefinite(n)
@@ -196,17 +183,12 @@ x_full = Vector(x)
 residual = A_full * x_full - b_full
 err = norm(residual, Inf)
 
-if rank == 0
-    println("  LDLT solve residual (indefinite): $err")
-end
+println(io0(), "  LDLT solve residual (indefinite): $err")
 @test err < TOL
 
 
 # Test 4: Plan reuse (same structure, different values)
-if rank == 0
-    println("[test] Plan reuse")
-    flush(stdout)
-end
+println(io0(), "[test] Plan reuse")
 
 n = 8
 A1_full = create_spd_tridiagonal(n)
@@ -230,20 +212,15 @@ x2_full = Vector(x2)
 err1 = norm(A1_full * x1_full - b_full, Inf)
 err2 = norm(A2_full * x2_full - b_full, Inf)
 
-if rank == 0
-    println("  Residual 1: $err1")
-    println("  Residual 2: $err2")
-end
+println(io0(), "  Residual 1: $err1")
+println(io0(), "  Residual 2: $err2")
 
 @test err1 < TOL
 @test err2 < TOL
 
 
 # Test 5: Complex-valued matrix (LU)
-if rank == 0
-    println("[test] LU factorization - complex")
-    flush(stdout)
-end
+println(io0(), "[test] LU factorization - complex")
 
 n = 6
 A_full_real = create_general_tridiagonal(n)
@@ -260,9 +237,7 @@ x_full = Vector(x)
 residual = A_full * x_full - b_full
 err = norm(residual, Inf)
 
-if rank == 0
-    println("  LU solve residual (complex): $err")
-end
+println(io0(), "  LU solve residual (complex): $err")
 @test err < TOL
 
 # Setup for transpose/adjoint/division tests
@@ -273,10 +248,7 @@ b_full = ones(n)
 b = VectorMPI(b_full)
 
 # Test 7: Transpose solve - transpose(A) \ b
-if rank == 0
-    println("[test] Transpose solve")
-    flush(stdout)
-end
+println(io0(), "[test] Transpose solve")
 
 x_t = transpose(A) \ b
 
@@ -284,17 +256,12 @@ x_t_full = Vector(x_t)
 residual_t = transpose(A_full) * x_t_full - b_full
 err_t = norm(residual_t, Inf)
 
-if rank == 0
-    println("  Transpose solve residual: $err_t")
-end
+println(io0(), "  Transpose solve residual: $err_t")
 @test err_t < TOL
 
 
 # Test 8: Adjoint solve - A' \ b
-if rank == 0
-    println("[test] Adjoint solve")
-    flush(stdout)
-end
+println(io0(), "[test] Adjoint solve")
 
 x_a = A' \ b
 
@@ -302,19 +269,14 @@ x_a_full = Vector(x_a)
 residual_a = A_full' * x_a_full - b_full
 err_a = norm(residual_a, Inf)
 
-if rank == 0
-    println("  Adjoint solve residual: $err_a")
-end
+println(io0(), "  Adjoint solve residual: $err_a")
 @test err_a < TOL
 
 
 # (Test 9 removed - factorization transpose/adjoint for LU was deleted)
 
 # Test 10: Right division - transpose(v) / A
-if rank == 0
-    println("[test] Right division - transpose(v) / A")
-    flush(stdout)
-end
+println(io0(), "[test] Right division - transpose(v) / A")
 
 # transpose(v) / A solves x * A = transpose(v)
 x_rd = transpose(b) / A
@@ -326,69 +288,49 @@ x_rd_full = Vector(x_rd_parent)
 residual_rd = x_rd_full' * A_full - b_full'
 err_rd = norm(residual_rd, Inf)
 
-if rank == 0
-    println("  Right division residual: $err_rd")
-end
+println(io0(), "  Right division residual: $err_rd")
 @test err_rd < TOL
 
 
 # Test 11: Right division - transpose(v) / transpose(A)
-if rank == 0
-    println("[test] Right division - transpose(v) / transpose(A)")
-    flush(stdout)
-end
+println(io0(), "[test] Right division - transpose(v) / transpose(A)")
 
 x_rdt = transpose(b) / transpose(A)
 x_rdt_full = Vector(x_rdt.parent)
 residual_rdt = x_rdt_full' * transpose(A_full) - b_full'
 err_rdt = norm(residual_rdt, Inf)
 
-if rank == 0
-    println("  Right division (transpose) residual: $err_rdt")
-end
+println(io0(), "  Right division (transpose) residual: $err_rdt")
 @test err_rdt < TOL
 
 
 # Test 12: Right division - v' / A (adjoint)
-if rank == 0
-    println("[test] Right division - v' / A")
-    flush(stdout)
-end
+println(io0(), "[test] Right division - v' / A")
 
 x_rda = b' / A
 x_rda_full = Vector(x_rda.parent)
 residual_rda = x_rda_full' * A_full - b_full'
 err_rda = norm(residual_rda, Inf)
 
-if rank == 0
-    println("  Right division (adjoint) residual: $err_rda")
-end
+println(io0(), "  Right division (adjoint) residual: $err_rda")
 @test err_rda < TOL
 
 
 # Test 13: Right division - v' / A'
-if rank == 0
-    println("[test] Right division - v' / A'")
-    flush(stdout)
-end
+println(io0(), "[test] Right division - v' / A'")
 
 x_rdaa = b' / A'
 x_rdaa_full = Vector(x_rdaa.parent)
 residual_rdaa = x_rdaa_full' * A_full' - b_full'
 err_rdaa = norm(residual_rdaa, Inf)
 
-if rank == 0
-    println("  Right division (adjoint/adjoint) residual: $err_rdaa")
-end
+println(io0(), "  Right division (adjoint/adjoint) residual: $err_rdaa")
 @test err_rdaa < TOL
 
 
 # Test 13b: Right division - transpose(v) / A' (complex)
 # Tests the complex branch: x = conj(A \ conj(v))
-if rank == 0
-    println("[test] Right division - transpose(v) / A' (complex)")
-    flush(stdout)
-end
+println(io0(), "[test] Right division - transpose(v) / A' (complex)")
 
 n = 6
 A_cx_full = Complex{Float64}.(create_general_tridiagonal(n)) + im * spdiagm(0 => 0.1*ones(n))
@@ -403,18 +345,13 @@ x_tac_full = Vector(x_tac.parent)
 residual_tac = transpose(x_tac_full) * A_cx_full' - transpose(b_cx_full)
 err_tac = norm(residual_tac, Inf)
 
-if rank == 0
-    println("  Right division (transpose/adjoint complex) residual: $err_tac")
-end
+println(io0(), "  Right division (transpose/adjoint complex) residual: $err_tac")
 @test err_tac < TOL
 
 
 # Test 13c: Right division - v' / transpose(A) (complex)
 # Tests the complex branch: x = conj(A) \ v
-if rank == 0
-    println("[test] Right division - v' / transpose(A) (complex)")
-    flush(stdout)
-end
+println(io0(), "[test] Right division - v' / transpose(A) (complex)")
 
 # v' / transpose(A) solves x * transpose(A) = v'
 x_at = b_cx' / transpose(A_cx)
@@ -423,17 +360,12 @@ x_at_full = Vector(x_at.parent)
 residual_at = transpose(x_at_full) * transpose(A_cx_full) - b_cx_full'
 err_at = norm(residual_at, Inf)
 
-if rank == 0
-    println("  Right division (adjoint/transpose complex) residual: $err_at")
-end
+println(io0(), "  Right division (adjoint/transpose complex) residual: $err_at")
 @test err_at < TOL
 
 
 # Test 14: LDLT transpose solve via factorization (real symmetric)
-if rank == 0
-    println("[test] LDLT factorization transpose")
-    flush(stdout)
-end
+println(io0(), "[test] LDLT factorization transpose")
 
 n = 10
 A_ldlt_full = create_spd_tridiagonal(n)
@@ -448,17 +380,12 @@ x_ldlt_t = transpose(F_ldlt) \ b_ldlt
 x_ldlt_t_full = Vector(x_ldlt_t)
 err_ldlt_t = norm(A_ldlt_full * x_ldlt_t_full - b_ldlt_full, Inf)
 
-if rank == 0
-    println("  LDLT transpose solve residual: $err_ldlt_t")
-end
+println(io0(), "  LDLT transpose solve residual: $err_ldlt_t")
 @test err_ldlt_t < TOL
 
 
 # Test 15: Complex symmetric LDLT
-if rank == 0
-    println("[test] LDLT factorization - complex symmetric")
-    flush(stdout)
-end
+println(io0(), "[test] LDLT factorization - complex symmetric")
 
 n = 6
 A_cx_full = create_complex_symmetric(n)
@@ -474,19 +401,14 @@ x_cx_full = Vector(x_cx)
 residual_cx = A_cx_full * x_cx_full - b_cx_full
 err_cx = norm(residual_cx, Inf)
 
-if rank == 0
-    println("  Complex symmetric LDLT residual: $err_cx")
-end
+println(io0(), "  Complex symmetric LDLT residual: $err_cx")
 @test err_cx < TOL
 
 
 # (Test 16 removed - complex symmetric LDLT adjoint solve was deleted)
 
 # Test 17: 2D Laplacian - exercises extend_add_sym! with supernode children
-if rank == 0
-    println("[test] LDLT factorization - 2D Laplacian (supernode extend-add)")
-    flush(stdout)
-end
+println(io0(), "[test] LDLT factorization - 2D Laplacian (supernode extend-add)")
 
 A_2d_full = create_2d_laplacian(6, 6)  # 36-element grid
 A_2d = SparseMatrixMPI{Float64}(A_2d_full)
@@ -501,18 +423,13 @@ x_2d_full = Vector(x_2d)
 residual_2d = A_2d_full * x_2d_full - b_2d_full
 err_2d = norm(residual_2d, Inf)
 
-if rank == 0
-    println("  2D Laplacian LDLT residual: $err_2d")
-end
+println(io0(), "  2D Laplacian LDLT residual: $err_2d")
 @test err_2d < TOL
 
 
 # Test 18: LDLT with 2x2 Bunch-Kaufman pivots
 # Uses a dense symmetric indefinite matrix with small diagonal to force 2x2 pivots
-if rank == 0
-    println("[test] LDLT with 2x2 Bunch-Kaufman pivots")
-    flush(stdout)
-end
+println(io0(), "[test] LDLT with 2x2 Bunch-Kaufman pivots")
 
 n_bk = 4
 A_bk = zeros(n_bk, n_bk)
@@ -538,19 +455,14 @@ x_bk = solve(F_bk, b_bk)
 x_bk_full = Vector(x_bk)
 err_bk = norm(A_bk_sp * x_bk_full - b_bk_full, Inf)
 
-if rank == 0
-    println("  2x2 pivots used: $has_2x2_pivots")
-    println("  Bunch-Kaufman LDLT residual: $err_bk")
-end
+println(io0(), "  2x2 pivots used: $has_2x2_pivots")
+println(io0(), "  Bunch-Kaufman LDLT residual: $err_bk")
 @test err_bk < TOL
 
 
 # Test 19: Multi-rank supernode distribution
 # Uses block diagonal matrix to create multiple elimination tree roots
-if rank == 0
-    println("[test] Multi-rank supernode distribution")
-    flush(stdout)
-end
+println(io0(), "[test] Multi-rank supernode distribution")
 
 # Create 2-block diagonal matrix (disconnected components)
 block_size = 10
@@ -585,18 +497,13 @@ x_multi = solve(F_multi, b_multi)
 x_multi_full = Vector(x_multi)
 err_multi = norm(A_multi * x_multi_full - b_multi_full, Inf)
 
-if rank == 0
-    println("  Multi-rank distribution: $has_multi_rank (nranks=$nranks)")
-    println("  Block diagonal LDLT residual: $err_multi")
-end
+println(io0(), "  Multi-rank distribution: $has_multi_rank (nranks=$nranks)")
+println(io0(), "  Block diagonal LDLT residual: $err_multi")
 @test err_multi < TOL
 
 
 # Test 20: LU with 2D Laplacian - exercises extend_add! (unsymmetric version)
-if rank == 0
-    println("[test] LU factorization - 2D Laplacian (extend_add!)")
-    flush(stdout)
-end
+println(io0(), "[test] LU factorization - 2D Laplacian (extend_add!)")
 
 A_2d_lu_full = create_2d_laplacian(5, 5)  # 25-element grid
 A_2d_lu = SparseMatrixMPI{Float64}(A_2d_lu_full)
@@ -611,18 +518,13 @@ x_2d_lu_full = Vector(x_2d_lu)
 residual_2d_lu = A_2d_lu_full * x_2d_lu_full - b_2d_lu_full
 err_2d_lu = norm(residual_2d_lu, Inf)
 
-if rank == 0
-    println("  2D Laplacian LU residual: $err_2d_lu")
-end
+println(io0(), "  2D Laplacian LU residual: $err_2d_lu")
 @test err_2d_lu < TOL
 
 
 # Test 21: LU with partial pivoting - matrix requiring row swaps
 # Off-diagonal elements larger than diagonal forces pivot selection
-if rank == 0
-    println("[test] LU with row pivoting")
-    flush(stdout)
-end
+println(io0(), "[test] LU with row pivoting")
 
 n_piv = 6
 A_piv = zeros(n_piv, n_piv)
@@ -646,17 +548,12 @@ x_piv = solve(F_piv, b_piv)
 x_piv_full = Vector(x_piv)
 err_piv = norm(A_piv_sp * x_piv_full - b_piv_full, Inf)
 
-if rank == 0
-    println("  LU with pivoting residual: $err_piv")
-end
+println(io0(), "  LU with pivoting residual: $err_piv")
 @test err_piv < TOL
 
 
 # Test 22: LU with near-zero pivot (triggers small pivot warning path)
-if rank == 0
-    println("[test] LU with small pivot")
-    flush(stdout)
-end
+println(io0(), "[test] LU with small pivot")
 
 n_small = 4
 A_small = zeros(n_small, n_small)
@@ -682,18 +579,13 @@ x_small = solve(F_small, b_small)
 x_small_full = Vector(x_small)
 err_small = norm(A_small_sp * x_small_full - b_small_full, Inf)
 
-if rank == 0
-    println("  LU with small pivot residual: $err_small")
-end
+println(io0(), "  LU with small pivot residual: $err_small")
 # Use looser tolerance due to ill-conditioning
 @test err_small < 1e-6
 
 
 # Test 23: LU with exactly zero pivot (tests abs(diag_val) == 0 branch)
-if rank == 0
-    println("[test] LU with zero pivot")
-    flush(stdout)
-end
+println(io0(), "[test] LU with zero pivot")
 
 n_zero = 4
 A_zero = zeros(n_zero, n_zero)
@@ -720,17 +612,12 @@ b_zero = VectorMPI(b_zero_full)
 x_zero = solve(F_zero, b_zero)
 x_zero_full = Vector(x_zero)
 
-if rank == 0
-    println("  LU with zero pivot: solve completed")
-end
+println(io0(), "  LU with zero pivot: solve completed")
 @test length(x_zero_full) == n_zero  # Just verify solve completes
 
 
 # Test 24: LDLT with exactly zero 1x1 pivot (tests abs(d_kk) == 0 branch)
-if rank == 0
-    println("[test] LDLT with zero 1x1 pivot")
-    flush(stdout)
-end
+println(io0(), "[test] LDLT with zero 1x1 pivot")
 
 n_ldlt_zero = 4
 A_ldlt_zero = zeros(n_ldlt_zero, n_ldlt_zero)
@@ -757,18 +644,13 @@ b_ldlt_zero = VectorMPI(b_ldlt_zero_full)
 x_ldlt_zero = solve(F_ldlt_zero, b_ldlt_zero)
 x_ldlt_zero_full = Vector(x_ldlt_zero)
 
-if rank == 0
-    println("  LDLT with zero 1x1 pivot: solve completed")
-end
+println(io0(), "  LDLT with zero 1x1 pivot: solve completed")
 @test length(x_ldlt_zero_full) == n_ldlt_zero
 
 
 # Test 25: LDLT with near-zero 2x2 pivot determinant
 # Uses similar structure to Test 18 but with det(2x2 block) ≈ 0
-if rank == 0
-    println("[test] LDLT with small 2x2 determinant")
-    flush(stdout)
-end
+println(io0(), "[test] LDLT with small 2x2 determinant")
 
 n_det = 4
 A_det = zeros(n_det, n_det)
@@ -798,9 +680,7 @@ F_det = ldlt(A_det_mpi)
 # Check that 2x2 pivot was used
 has_2x2_det = any(F_det.pivots .< 0)
 
-if rank == 0
-    println("  2x2 pivot used: $has_2x2_det")
-end
+println(io0(), "  2x2 pivot used: $has_2x2_det")
 @test has_2x2_det  # Should use 2x2 pivots
 
 b_det_full = ones(n_det)
@@ -808,18 +688,13 @@ b_det = VectorMPI(b_det_full)
 x_det = solve(F_det, b_det)
 x_det_full = Vector(x_det)
 
-if rank == 0
-    println("  LDLT with small 2x2 determinant: solve completed")
-end
+println(io0(), "  LDLT with small 2x2 determinant: solve completed")
 @test length(x_det_full) == n_det
 
 
 # Test 26: Test swap_rows_cols_sym! with i==j (no-op branch)
 # This occurs when Bunch-Kaufman selects the diagonal element as pivot
-if rank == 0
-    println("[test] LDLT diagonal pivot (no swap)")
-    flush(stdout)
-end
+println(io0(), "[test] LDLT diagonal pivot (no swap)")
 
 n_diag = 4
 A_diag = zeros(n_diag, n_diag)
@@ -845,18 +720,13 @@ x_diag = solve(F_diag, b_diag)
 x_diag_full = Vector(x_diag)
 err_diag = norm(A_diag_sp * x_diag_full - b_diag_full, Inf)
 
-if rank == 0
-    println("  Diagonal pivot residual: $err_diag")
-end
+println(io0(), "  Diagonal pivot residual: $err_diag")
 @test err_diag < TOL
 
 
 # Test 27: LDLT 2x2 pivot with update rows - exercises extract_L_D! else branch
 # Need a matrix where 2x2 pivots are used and there are update rows
-if rank == 0
-    println("[test] LDLT 2x2 pivot with update structure")
-    flush(stdout)
-end
+println(io0(), "[test] LDLT 2x2 pivot with update structure")
 
 # Use a 2D Laplacian variant that forces 2x2 pivots with update rows
 # The AMD ordering creates supernodes with children, and we make diagonals
@@ -882,10 +752,8 @@ b_2x2 = VectorMPI(b_2x2_full)
 x_2x2 = solve(F_2x2, b_2x2)
 x_2x2_full = Vector(x_2x2)
 
-if rank == 0
-    println("  2x2 pivots with updates used: $has_2x2_update")
-    println("  LDLT 2x2 with updates: solve completed")
-end
+println(io0(), "  2x2 pivots with updates used: $has_2x2_update")
+println(io0(), "  LDLT 2x2 with updates: solve completed")
 @test length(x_2x2_full) == 9
 
 end  # QuietTestSet
@@ -895,11 +763,8 @@ local_counts = [ts.counts[:pass], ts.counts[:fail], ts.counts[:error], ts.counts
 global_counts = similar(local_counts)
 MPI.Allreduce!(local_counts, global_counts, +, comm)
 
-if rank == 0
-    total = sum(global_counts)
-    println("\nTest Summary: distributed factorization | Pass: $(global_counts[1])  Fail: $(global_counts[2])  Error: $(global_counts[3])  Broken: $(global_counts[4])  Skip: $(global_counts[5])  Total: $total")
-    flush(stdout)
-end
+total = sum(global_counts)
+println(io0(), "\nTest Summary: distributed factorization | Pass: $(global_counts[1])  Fail: $(global_counts[2])  Error: $(global_counts[3])  Broken: $(global_counts[4])  Skip: $(global_counts[5])  Total: $total")
 
 MPI.Finalize()
 

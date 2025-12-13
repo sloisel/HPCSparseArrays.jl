@@ -13,17 +13,12 @@ include(joinpath(@__DIR__, "mpi_test_harness.jl"))
 using .MPITestHarness: QuietTestSet
 
 comm = MPI.COMM_WORLD
-rank = MPI.Comm_rank(comm)
-nranks = MPI.Comm_size(comm)
 
 const TOL = 1e-12
 
 ts = @testset QuietTestSet "Matrix Multiplication" begin
 
-if rank == 0
-    println("[test] Matrix multiplication")
-    flush(stdout)
-end
+println(io0(), "[test] Matrix multiplication")
 
 n = 8
 I_A = [1:n; 1:n-1; 2:n]
@@ -44,10 +39,7 @@ C_ref_dist = SparseMatrixMPI{Float64}(C_ref)
 err = norm(Cdist - C_ref_dist, Inf)
 @test err < TOL
 
-if rank == 0
-    println("[test] Matrix multiplication with ComplexF64")
-    flush(stdout)
-end
+println(io0(), "[test] Matrix multiplication with ComplexF64")
 
 V_A_c = ComplexF64.([2.0*ones(n); -0.5*ones(n-1); -0.5*ones(n-1)]) .+
         im .* ComplexF64.([0.1*ones(n); 0.2*ones(n-1); -0.2*ones(n-1)])
@@ -65,10 +57,7 @@ C_ref_dist_c = SparseMatrixMPI{ComplexF64}(C_ref_c)
 err_c = norm(Cdist_c - C_ref_dist_c, Inf)
 @test err_c < TOL
 
-if rank == 0
-    println("[test] Non-square matrix multiplication")
-    flush(stdout)
-end
+println(io0(), "[test] Non-square matrix multiplication")
 
 m, k, n2 = 6, 8, 10
 I_A2 = [1, 2, 3, 4, 5, 6, 1, 2, 3, 4]
@@ -102,10 +91,7 @@ local_counts = [
 global_counts = similar(local_counts)
 MPI.Allreduce!(local_counts, global_counts, +, comm)
 
-if rank == 0
-    println("Test Summary: Matrix Multiplication | Pass: $(global_counts[1])  Fail: $(global_counts[2])  Error: $(global_counts[3])")
-    flush(stdout)
-end
+println(io0(), "Test Summary: Matrix Multiplication | Pass: $(global_counts[1])  Fail: $(global_counts[2])  Error: $(global_counts[3])")
 
 MPI.Finalize()
 

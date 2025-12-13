@@ -13,17 +13,12 @@ include(joinpath(@__DIR__, "mpi_test_harness.jl"))
 using .MPITestHarness: QuietTestSet
 
 comm = MPI.COMM_WORLD
-rank = MPI.Comm_rank(comm)
-nranks = MPI.Comm_size(comm)
 
 const TOL = 1e-12
 
 ts = @testset QuietTestSet "Transpose" begin
 
-if rank == 0
-    println("[test] Transpose")
-    flush(stdout)
-end
+println(io0(), "[test] Transpose")
 
 m, n = 10, 8
 I_idx = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 1, 3, 5, 7, 9]
@@ -39,10 +34,7 @@ AT_ref_dist = SparseMatrixMPI{Float64}(AT_ref)
 err = norm(ATdist - AT_ref_dist, Inf)
 @test err < TOL
 
-if rank == 0
-    println("[test] Transpose with ComplexF64")
-    flush(stdout)
-end
+println(io0(), "[test] Transpose with ComplexF64")
 
 V_c = ComplexF64.(1:length(I_idx)) .+ im .* ComplexF64.(length(I_idx):-1:1)
 A_c = sparse(I_idx, J_idx, V_c, m, n)
@@ -55,10 +47,7 @@ AT_ref_dist_c = SparseMatrixMPI{ComplexF64}(AT_ref_c)
 err_c = norm(ATdist_c - AT_ref_dist_c, Inf)
 @test err_c < TOL
 
-if rank == 0
-    println("[test] Square matrix transpose")
-    flush(stdout)
-end
+println(io0(), "[test] Square matrix transpose")
 
 n2 = 8
 I_idx2 = [1:n2; 1:n2-1; 2:n2]
@@ -81,10 +70,7 @@ local_counts = [ts.counts[:pass], ts.counts[:fail], ts.counts[:error], ts.counts
 global_counts = similar(local_counts)
 MPI.Allreduce!(local_counts, global_counts, +, comm)
 
-if rank == 0
-    println("Test Summary: Transpose | Pass: $(global_counts[1])  Fail: $(global_counts[2])  Error: $(global_counts[3])")
-    flush(stdout)
-end
+println(io0(), "Test Summary: Transpose | Pass: $(global_counts[1])  Fail: $(global_counts[2])  Error: $(global_counts[3])")
 
 MPI.Finalize()
 

@@ -20,10 +20,7 @@ const TOL = 1e-12
 
 ts = @testset QuietTestSet "Matrix-Vector Multiplication" begin
 
-if rank == 0
-    println("[test] Matrix-vector multiplication")
-    flush(stdout)
-end
+println(io0(), "[test] Matrix-vector multiplication")
 
 # Create deterministic test matrix (same on all ranks)
 n = 8
@@ -55,10 +52,7 @@ err = maximum(abs.(ydist.v .- local_ref))
 @test err < TOL
 
 
-if rank == 0
-    println("[test] Matrix-vector multiplication (in-place)")
-    flush(stdout)
-end
+println(io0(), "[test] Matrix-vector multiplication (in-place)")
 
 n = 8
 I_A = [1:n; 1:n-1; 2:n]
@@ -88,10 +82,7 @@ err = maximum(abs.(ydist.v .- local_ref))
 @test err < TOL
 
 
-if rank == 0
-    println("[test] Matrix-vector multiplication with ComplexF64")
-    flush(stdout)
-end
+println(io0(), "[test] Matrix-vector multiplication with ComplexF64")
 
 n = 8
 I_A = [1:n; 1:n-1; 2:n]
@@ -116,10 +107,7 @@ err = maximum(abs.(ydist.v .- local_ref))
 @test err < TOL
 
 
-if rank == 0
-    println("[test] Non-square matrix-vector multiplication")
-    flush(stdout)
-end
+println(io0(), "[test] Non-square matrix-vector multiplication")
 
 # A is 6x8, x is length 8, y should be length 6
 m, n = 6, 8
@@ -144,10 +132,7 @@ err = maximum(abs.(ydist.v .- local_ref); init=0.0)
 @test err < TOL
 
 
-if rank == 0
-    println("[test] Vector transpose and adjoint")
-    flush(stdout)
-end
+println(io0(), "[test] Vector transpose and adjoint")
 
 n = 8
 I_A = [1:n; 1:n-1; 2:n]
@@ -191,10 +176,7 @@ err_adjoint = maximum(abs.(yt_adj.parent.v .- local_adj_ref))
 @test err_adjoint < TOL
 
 
-if rank == 0
-    println("[test] Vector norms")
-    flush(stdout)
-end
+println(io0(), "[test] Vector norms")
 
 n = 10
 x_global = collect(1.0:n)
@@ -234,10 +216,7 @@ cnorm2_ref = norm(z_global)
 @test abs(cnorm2 - cnorm2_ref) < TOL
 
 
-if rank == 0
-    println("[test] Vector reductions")
-    flush(stdout)
-end
+println(io0(), "[test] Vector reductions")
 
 n = 8
 x_global = collect(1.0:n)
@@ -264,10 +243,7 @@ mn_ref = minimum(x_global)
 @test abs(mn - mn_ref) < TOL
 
 
-if rank == 0
-    println("[test] Vector addition and subtraction")
-    flush(stdout)
-end
+println(io0(), "[test] Vector addition and subtraction")
 
 n = 8
 u_global = collect(1.0:n)
@@ -298,10 +274,7 @@ err_neg = maximum(abs.(wdist.v .- w_ref[my_start:my_end]))
 @test err_neg < TOL
 
 
-if rank == 0
-    println("[test] Vector operations with different partitions")
-    flush(stdout)
-end
+println(io0(), "[test] Vector operations with different partitions")
 
 # Skip this test if running with fewer than 2 ranks (need different partitions)
 if nranks < 2
@@ -372,10 +345,7 @@ else
 end
 
 
-if rank == 0
-    println("[test] Scalar multiplication")
-    flush(stdout)
-end
+println(io0(), "[test] Scalar multiplication")
 
 n = 8
 v_global = collect(1.0:n)
@@ -420,10 +390,7 @@ err_vtdiv = maximum(abs.(wt.parent.v .- w_ref[my_start:my_end]))
 @test err_vtdiv < TOL
 
 
-if rank == 0
-    println("[test] Vector size and eltype")
-    flush(stdout)
-end
+println(io0(), "[test] Vector size and eltype")
 
 n = 8
 v_global = collect(1.0:n)
@@ -449,10 +416,7 @@ local_counts = [
 global_counts = similar(local_counts)
 MPI.Allreduce!(local_counts, global_counts, +, comm)
 
-if rank == 0
-    println("Test Summary: Matrix-Vector Multiplication | Pass: $(global_counts[1])  Fail: $(global_counts[2])  Error: $(global_counts[3])")
-    flush(stdout)
-end
+println(io0(), "Test Summary: Matrix-Vector Multiplication | Pass: $(global_counts[1])  Fail: $(global_counts[2])  Error: $(global_counts[3])")
 
 MPI.Finalize()
 

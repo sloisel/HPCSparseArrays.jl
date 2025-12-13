@@ -192,10 +192,6 @@ using LinearAlgebraMPI
 using SparseArrays
 using LinearAlgebra
 
-comm = MPI.COMM_WORLD
-rank = MPI.Comm_rank(comm)
-nranks = MPI.Comm_size(comm)
-
 # Create matrices (identical on all ranks)
 A = create_my_matrix()  # Your matrix creation function
 B = create_my_matrix()
@@ -210,9 +206,7 @@ Cdist = Adist * Bdist
 # Get results (e.g., norm is computed globally)
 result_norm = norm(Cdist)
 
-if rank == 0
-    println("Result norm: $result_norm")
-end
+println(io0(), "Result norm: $result_norm")
 
 MPI.Finalize()
 ```

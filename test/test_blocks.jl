@@ -75,10 +75,7 @@ end
 
 ts = @testset QuietTestSet "Block Matrices" begin
 
-if rank == 0
-    println("[test] cat dims=1 (vcat)")
-    flush(stdout)
-end
+println(io0(), "[test] cat dims=1 (vcat)")
 
 # Create random matrices to stack vertically (same number of columns)
 A = make_random_sparse(8, 10)
@@ -99,10 +96,7 @@ result = gather_sparse(result_dist)
 @test result == ref
 
 
-if rank == 0
-    println("[test] cat dims=2 (hcat)")
-    flush(stdout)
-end
+println(io0(), "[test] cat dims=2 (hcat)")
 
 # Create random matrices to stack horizontally (same number of rows)
 A = make_random_sparse(10, 8)
@@ -123,10 +117,7 @@ result = gather_sparse(result_dist)
 @test result == ref
 
 
-if rank == 0
-    println("[test] cat dims=(2,2) block matrix")
-    flush(stdout)
-end
+println(io0(), "[test] cat dims=(2,2) block matrix")
 
 # Create 4 matrices for 2x2 block
 # Block layout: [A B; C D]
@@ -152,10 +143,7 @@ result = gather_sparse(result_dist)
 @test result == ref
 
 
-if rank == 0
-    println("[test] cat dims=(3,2) block matrix")
-    flush(stdout)
-end
+println(io0(), "[test] cat dims=(3,2) block matrix")
 
 # 3 rows, 2 columns of blocks
 # [A B]
@@ -185,10 +173,7 @@ result = gather_sparse(result_dist)
 @test result == ref
 
 
-if rank == 0
-    println("[test] cat dims=(2,3) block matrix")
-    flush(stdout)
-end
+println(io0(), "[test] cat dims=(2,3) block matrix")
 
 # 2 rows, 3 columns of blocks
 # [A B C]
@@ -217,10 +202,7 @@ result = gather_sparse(result_dist)
 @test result == ref
 
 
-if rank == 0
-    println("[test] VectorMPI vcat")
-    flush(stdout)
-end
+println(io0(), "[test] VectorMPI vcat")
 
 v1 = rand(10)
 v2 = rand(8)
@@ -238,10 +220,7 @@ result = gather_vector(result_dist)
 @test result == ref
 
 
-if rank == 0
-    println("[test] VectorMPI hcat")
-    flush(stdout)
-end
+println(io0(), "[test] VectorMPI hcat")
 
 # Create vectors with same length
 v1 = rand(10)
@@ -262,10 +241,7 @@ expected_local = hcat(v1dist.v, v2dist.v, v3dist.v)
 @test size(result_dist) == (10, 3)
 
 
-if rank == 0
-    println("[test] ComplexF64 cat")
-    flush(stdout)
-end
+println(io0(), "[test] ComplexF64 cat")
 
 A = sprand(ComplexF64, 8, 6, 0.3)
 B = sprand(ComplexF64, 8, 5, 0.3)
@@ -285,10 +261,7 @@ result = gather_sparse(result_dist)
 @test result == ref
 
 
-if rank == 0
-    println("[test] blockdiag")
-    flush(stdout)
-end
+println(io0(), "[test] blockdiag")
 
 A = make_random_sparse(8, 6)
 B = make_random_sparse(5, 7)
@@ -307,10 +280,7 @@ result = gather_sparse(result_dist)
 @test size(result) == (8 + 5 + 4, 6 + 7 + 3)
 
 
-if rank == 0
-    println("[test] blockdiag ComplexF64")
-    flush(stdout)
-end
+println(io0(), "[test] blockdiag ComplexF64")
 
 A = sprand(ComplexF64, 6, 5, 0.3)
 B = sprand(ComplexF64, 4, 8, 0.3)
@@ -326,10 +296,7 @@ result = gather_sparse(result_dist)
 @test result == ref
 
 
-if rank == 0
-    println("[test] MatrixMPI vcat")
-    flush(stdout)
-end
+println(io0(), "[test] MatrixMPI vcat")
 
 # Create random dense matrices to stack vertically
 A_dense = rand(8, 10)
@@ -353,10 +320,7 @@ my_row_end = result_dist.row_partition[rank + 2] - 1
 @test result_dist.A == ref[my_row_start:my_row_end, :]
 
 
-if rank == 0
-    println("[test] MatrixMPI hcat")
-    flush(stdout)
-end
+println(io0(), "[test] MatrixMPI hcat")
 
 # Create random dense matrices to stack horizontally
 A_dense = rand(10, 8)
@@ -379,10 +343,7 @@ my_row_end = result_dist.row_partition[rank + 2] - 1
 @test result_dist.A == ref[my_row_start:my_row_end, :]
 
 
-if rank == 0
-    println("[test] MatrixMPI cat dims=(2,2)")
-    flush(stdout)
-end
+println(io0(), "[test] MatrixMPI cat dims=(2,2)")
 
 # Create 4 matrices for 2x2 block [A B; C D]
 A_dense = rand(8, 6)
@@ -407,10 +368,7 @@ my_row_end = result_dist.row_partition[rank + 2] - 1
 @test result_dist.A == ref[my_row_start:my_row_end, :]
 
 
-if rank == 0
-    println("[test] VectorMPI cat with tuple dims")
-    flush(stdout)
-end
+println(io0(), "[test] VectorMPI cat with tuple dims")
 
 # Test dims=(n,1) same as vcat
 v1 = rand(10)
@@ -463,10 +421,7 @@ local_counts = [
 global_counts = similar(local_counts)
 MPI.Allreduce!(local_counts, global_counts, +, comm)
 
-if rank == 0
-    println("Test Summary: Block Matrices | Pass: $(global_counts[1])  Fail: $(global_counts[2])  Error: $(global_counts[3])")
-    flush(stdout)
-end
+println("Test Summary: Block Matrices | Pass: $(global_counts[1])  Fail: $(global_counts[2])  Error: $(global_counts[3])")
 
 MPI.Finalize()
 

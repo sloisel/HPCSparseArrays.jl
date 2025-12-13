@@ -37,10 +37,7 @@ Adist_complex = SparseMatrixMPI{ComplexF64}(A_complex)
 
 ts = @testset QuietTestSet "Sparse API" begin
 
-if rank == 0
-    println("[test] Structural queries")
-    flush(stdout)
-end
+println(io0(), "[test] Structural queries")
 
 # Test structural queries - compute values BEFORE @test to avoid MPI issues
 dist_nnz = nnz(Adist)
@@ -49,10 +46,7 @@ dist_issparse = issparse(Adist)
 @test dist_issparse == true
 
 
-if rank == 0
-    println("[test] Copy")
-    flush(stdout)
-end
+println(io0(), "[test] Copy")
 
 # Test copy
 B = copy(Adist)
@@ -62,10 +56,7 @@ b_size = size(B)
 @test b_size == size(A_global)
 
 
-if rank == 0
-    println("[test] Element-wise operations")
-    flush(stdout)
-end
+println(io0(), "[test] Element-wise operations")
 
 # Test element-wise operations
 B = abs(Adist)
@@ -85,10 +76,7 @@ bi_sum = sum(B_imag)
 @test bi_sum ≈ sum(imag.(A_complex)) atol=TOL
 
 
-if rank == 0
-    println("[test] Reductions")
-    flush(stdout)
-end
+println(io0(), "[test] Reductions")
 
 # Test reductions
 dist_sum = sum(Adist)
@@ -103,10 +91,7 @@ dist_tr = tr(Adist)
 @test dist_tr ≈ tr(A_global) atol=TOL
 
 
-if rank == 0
-    println("[test] Sum with dims")
-    flush(stdout)
-end
+println(io0(), "[test] Sum with dims")
 
 # Test sum with dims
 col_sums = sum(Adist; dims=1)
@@ -126,10 +111,7 @@ err2 = norm(full_row_sums - ref_row_sums)
 @test err2 < TOL
 
 
-if rank == 0
-    println("[test] Dropzeros")
-    flush(stdout)
-end
+println(io0(), "[test] Dropzeros")
 
 # Test dropzeros
 A_with_zeros = copy(A_global)
@@ -141,10 +123,7 @@ b_nnz = nnz(B)
 @test b_nnz <= ref_nnz_zeros
 
 
-if rank == 0
-    println("[test] Diagonal extraction")
-    flush(stdout)
-end
+println(io0(), "[test] Diagonal extraction")
 
 # Test diag
 d = diag(Adist)
@@ -164,10 +143,7 @@ err2 = norm(full_d1 - ref_d1)
 @test err2 < TOL
 
 
-if rank == 0
-    println("[test] Triangular parts")
-    flush(stdout)
-end
+println(io0(), "[test] Triangular parts")
 
 # Test triu and tril
 U = triu(Adist)
@@ -186,10 +162,7 @@ u1_nnz = nnz(U1)
 @test u1_nnz == nnz(ref_U1)
 
 
-if rank == 0
-    println("[test] VectorMPI extensions")
-    flush(stdout)
-end
+println(io0(), "[test] VectorMPI extensions")
 
 # Test VectorMPI extensions
 v_global = collect(1.0:Float64(n))
@@ -217,10 +190,7 @@ vi_sum = sum(imag(v_complex))
 @test vi_sum ≈ sum(imag.(v_complex_global)) atol=TOL
 
 
-if rank == 0
-    println("[test] spdiagm")
-    flush(stdout)
-end
+println(io0(), "[test] spdiagm")
 
 # Test spdiagm
 # Test main diagonal only
@@ -264,10 +234,7 @@ d_sum = sum(D)
 @test d_sum ≈ sum(ref_D) atol=TOL
 
 
-if rank == 0
-    println("[test] VectorMPI broadcasting")
-    flush(stdout)
-end
+println(io0(), "[test] VectorMPI broadcasting")
 
 # Test VectorMPI broadcasting
 v_global = collect(1.0:10.0)
@@ -334,10 +301,7 @@ v_sqrt_sum = sum(v_sqrt)
 @test v_sqrt_sum ≈ sum(sqrt.(Float64.(v_int_global))) atol=TOL
 
 
-if rank == 0
-    println("[test] VectorMPI broadcasting with different partitions")
-    flush(stdout)
-end
+println(io0(), "[test] VectorMPI broadcasting with different partitions")
 
 # Test broadcasting with different partitions (requires MPI communication)
 n_part = 12
@@ -412,10 +376,7 @@ local_counts = [
 global_counts = similar(local_counts)
 MPI.Allreduce!(local_counts, global_counts, +, comm)
 
-if rank == 0
-    println("Test Summary: Sparse API | Pass: $(global_counts[1])  Fail: $(global_counts[2])  Error: $(global_counts[3])")
-    flush(stdout)
-end
+println("Test Summary: Sparse API | Pass: $(global_counts[1])  Fail: $(global_counts[2])  Error: $(global_counts[3])")
 
 MPI.Finalize()
 

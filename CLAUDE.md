@@ -34,6 +34,10 @@ LinearAlgebraMPI implements distributed sparse and dense matrix operations using
 
 Distributed matrices (sparse and dense) and vectors should not be allgathered in the main library, although gathering constructors are available to the user. It is normal to have to move data from one rank to another, and for this, point-to-point communication (e.g. Isend/Irecv) should be favored. For communication that is performance-sensitive, like algebraic operations between matrices, a plan should be generated and cached based upon the hash of the relevant structures.
 
+### MPI programmiing pitfalls.
+
+Many operations in this module are collective and should not be run on a subset of all the ranks. The programming pattern `if rank == 0 println(...)` is almost always wrong and one should use instead `println(io0(),...)`, without the `if rank == 0`, or else MPI desynchronization is almost guaranteed.
+
 ### Core Data Structures
 
 **SparseMatrixMPI{T}**

@@ -14,9 +14,6 @@ using LinearAlgebraMPI
 using SparseArrays
 using LinearAlgebra
 
-comm = MPI.COMM_WORLD
-rank = MPI.Comm_rank(comm)
-
 # Create a tridiagonal matrix (same on all ranks)
 n = 100
 I = [1:n; 1:n-1; 2:n]
@@ -40,9 +37,7 @@ C_ref = A * B
 C_ref_dist = SparseMatrixMPI{Float64}(C_ref)
 err = norm(Cdist - C_ref_dist, Inf)
 
-if rank == 0
-    println("Multiplication error: $err")
-end
+println(io0(), "Multiplication error: $err")
 
 MPI.Finalize()
 ```
@@ -56,8 +51,6 @@ MPI.Init()
 using LinearAlgebraMPI
 using SparseArrays
 using LinearAlgebra
-
-rank = MPI.Comm_rank(MPI.COMM_WORLD)
 
 # A is 6x8, B is 8x10, result is 6x10
 m, k, n = 6, 8, 10
@@ -79,9 +72,7 @@ Cdist = Adist * Bdist
 
 @assert size(Cdist) == (m, n)
 
-if rank == 0
-    println("Result size: $(size(Cdist))")
-end
+println(io0(), "Result size: $(size(Cdist))")
 
 MPI.Finalize()
 ```
@@ -95,8 +86,6 @@ MPI.Init()
 using LinearAlgebraMPI
 using SparseArrays
 using LinearAlgebra
-
-rank = MPI.Comm_rank(MPI.COMM_WORLD)
 
 n = 8
 I = [1:n; 1:n-1; 2:n]
@@ -126,9 +115,7 @@ Aadj = Adist'
 # Using adjoint in multiplication (materializes automatically)
 result = Aadj * Bdist
 
-if rank == 0
-    println("Complex matrix operations completed")
-end
+println(io0(), "Complex matrix operations completed")
 
 MPI.Finalize()
 ```
@@ -142,8 +129,6 @@ MPI.Init()
 using LinearAlgebraMPI
 using SparseArrays
 using LinearAlgebra
-
-rank = MPI.Comm_rank(MPI.COMM_WORLD)
 
 n = 8
 
@@ -173,9 +158,7 @@ Ddist = Adist - Bdist
 C_ref_dist = SparseMatrixMPI{Float64}(A + B)
 err = norm(Cdist - C_ref_dist, Inf)
 
-if rank == 0
-    println("Addition error: $err")
-end
+println(io0(), "Addition error: $err")
 
 MPI.Finalize()
 ```
@@ -193,8 +176,6 @@ MPI.Init()
 using LinearAlgebraMPI
 using SparseArrays
 using LinearAlgebra
-
-rank = MPI.Comm_rank(MPI.COMM_WORLD)
 
 m, n = 8, 6
 I_C = [1, 2, 3, 4, 5, 6, 7, 8, 1, 3]
@@ -214,9 +195,7 @@ Ddist = SparseMatrixMPI{Float64}(D)
 # This is computed efficiently without explicitly transposing
 result = transpose(Cdist) * transpose(Ddist)
 
-if rank == 0
-    println("Lazy transpose multiplication completed")
-end
+println(io0(), "Lazy transpose multiplication completed")
 
 MPI.Finalize()
 ```
@@ -230,8 +209,6 @@ MPI.Init()
 using LinearAlgebraMPI
 using SparseArrays
 using LinearAlgebra
-
-rank = MPI.Comm_rank(MPI.COMM_WORLD)
 
 # A is 8x6, so A' is 6x8
 # B is 8x10, so A' * B is 6x10
@@ -258,9 +235,7 @@ ref = sparse(A') * B
 ref_dist = SparseMatrixMPI{Float64}(ref)
 err = norm(result_dist - ref_dist, Inf)
 
-if rank == 0
-    println("transpose(A) * B error: $err")
-end
+println(io0(), "transpose(A) * B error: $err")
 
 MPI.Finalize()
 ```
@@ -274,8 +249,6 @@ MPI.Init()
 using LinearAlgebraMPI
 using SparseArrays
 using LinearAlgebra
-
-rank = MPI.Comm_rank(MPI.COMM_WORLD)
 
 m, n = 6, 8
 I = [1, 2, 3, 4, 5, 6, 1, 3]
@@ -299,9 +272,7 @@ ref_dist = SparseMatrixMPI{Float64}(a * A)
 err1 = norm(result1 - ref_dist, Inf)
 err2 = norm(result2 - ref_dist, Inf)
 
-if rank == 0
-    println("Scalar multiplication errors: $err1, $err2")
-end
+println(io0(), "Scalar multiplication errors: $err1, $err2")
 
 MPI.Finalize()
 ```
@@ -315,8 +286,6 @@ MPI.Init()
 using LinearAlgebraMPI
 using SparseArrays
 using LinearAlgebra
-
-rank = MPI.Comm_rank(MPI.COMM_WORLD)
 
 m, n = 6, 8
 I = [1, 2, 3, 4, 5, 6, 1, 3, 2, 4]
@@ -336,14 +305,12 @@ p_norm = norm(Adist, 3)        # General p-norm
 op_1 = opnorm(Adist, 1)        # Max absolute column sum
 op_inf = opnorm(Adist, Inf)    # Max absolute row sum
 
-if rank == 0
-    println("Frobenius norm: $frob_norm")
-    println("1-norm: $one_norm")
-    println("Inf-norm: $inf_norm")
-    println("3-norm: $p_norm")
-    println("Operator 1-norm: $op_1")
-    println("Operator Inf-norm: $op_inf")
-end
+println(io0(), "Frobenius norm: $frob_norm")
+println(io0(), "1-norm: $one_norm")
+println(io0(), "Inf-norm: $inf_norm")
+println(io0(), "3-norm: $p_norm")
+println(io0(), "Operator 1-norm: $op_1")
+println(io0(), "Operator Inf-norm: $op_inf")
 
 MPI.Finalize()
 ```
@@ -359,9 +326,6 @@ MPI.Init()
 using LinearAlgebraMPI
 using SparseArrays
 using LinearAlgebra
-
-comm = MPI.COMM_WORLD
-rank = MPI.Comm_rank(comm)
 
 # Create a symmetric positive definite matrix
 n = 100
@@ -382,10 +346,8 @@ A2dist = Adist * Adist
 # Compute the Frobenius norm of A^2
 norm_A2 = norm(A2dist)
 
-if rank == 0
-    println("||A^2||_F = $norm_A2")
-    # For SPD matrices, this relates to the eigenvalues
-end
+println(io0(), "||A^2||_F = $norm_A2")
+# For SPD matrices, this relates to the eigenvalues
 
 MPI.Finalize()
 ```
@@ -403,9 +365,6 @@ MPI.Init()
 using LinearAlgebraMPI
 using SparseArrays
 using LinearAlgebra
-
-comm = MPI.COMM_WORLD
-rank = MPI.Comm_rank(comm)
 
 # Create a symmetric positive definite tridiagonal matrix
 n = 100
@@ -433,9 +392,7 @@ x = F \ b
 x_full = Vector(x)
 residual = norm(A * x_full - ones(n), Inf)
 
-if rank == 0
-    println("LDLT solve residual: $residual")
-end
+println(io0(), "LDLT solve residual: $residual")
 
 MPI.Finalize()
 ```
@@ -449,9 +406,6 @@ MPI.Init()
 using LinearAlgebraMPI
 using SparseArrays
 using LinearAlgebra
-
-comm = MPI.COMM_WORLD
-rank = MPI.Comm_rank(comm)
 
 # Create a general (non-symmetric) tridiagonal matrix
 n = 100
@@ -472,9 +426,7 @@ x = solve(F, b)
 x_full = Vector(x)
 residual = norm(A * x_full - ones(n), Inf)
 
-if rank == 0
-    println("LU solve residual: $residual")
-end
+println(io0(), "LU solve residual: $residual")
 
 MPI.Finalize()
 ```
@@ -490,8 +442,6 @@ MPI.Init()
 using LinearAlgebraMPI
 using SparseArrays
 using LinearAlgebra
-
-rank = MPI.Comm_rank(MPI.COMM_WORLD)
 
 # Symmetric indefinite matrix (alternating signs on diagonal)
 n = 50
@@ -510,9 +460,7 @@ x = solve(F, b)
 x_full = Vector(x)
 residual = norm(A * x_full - collect(1.0:n), Inf)
 
-if rank == 0
-    println("Indefinite LDLT residual: $residual")
-end
+println(io0(), "Indefinite LDLT residual: $residual")
 
 MPI.Finalize()
 ```
@@ -528,8 +476,6 @@ MPI.Init()
 using LinearAlgebraMPI
 using SparseArrays
 using LinearAlgebra
-
-rank = MPI.Comm_rank(MPI.COMM_WORLD)
 
 n = 100
 I = [1:n; 1:n-1; 2:n]
@@ -556,12 +502,10 @@ b = VectorMPI(ones(n))
 x1 = solve(F1, b)
 x2 = solve(F2, b)
 
-if rank == 0
-    x1_full = Vector(x1)
-    x2_full = Vector(x2)
-    println("F1 residual: ", norm(A1 * x1_full - ones(n), Inf))
-    println("F2 residual: ", norm(A2 * x2_full - ones(n), Inf))
-end
+x1_full = Vector(x1)
+x2_full = Vector(x2)
+println(io0(), "F1 residual: ", norm(A1 * x1_full - ones(n), Inf))
+println(io0(), "F2 residual: ", norm(A2 * x2_full - ones(n), Inf))
 
 MPI.Finalize()
 ```
@@ -574,8 +518,6 @@ MPI.Init()
 
 using LinearAlgebraMPI
 using SparseArrays
-
-rank = MPI.Comm_rank(MPI.COMM_WORLD)
 
 n = 100
 A = spdiagm(0 => 2.0*ones(n), 1 => -ones(n-1), -1 => -ones(n-1))
@@ -600,9 +542,7 @@ clear_plan_cache!()  # Clears all caches including factorization
 # clear_symbolic_cache!()           # Symbolic factorizations only
 # clear_factorization_plan_cache!() # Factorization plans only
 
-if rank == 0
-    println("Cached multiplication completed")
-end
+println(io0(), "Cached multiplication completed")
 
 MPI.Finalize()
 ```
@@ -622,8 +562,6 @@ MPI.Init()
 using LinearAlgebraMPI
 using LinearAlgebra
 
-rank = MPI.Comm_rank(MPI.COMM_WORLD)
-
 # Create a deterministic dense matrix (same on all ranks)
 m, n = 100, 10
 A_global = Float64.([i + 0.1*j for i in 1:m, j in 1:n])
@@ -635,9 +573,7 @@ Adist = MatrixMPI(A_global)
 # This transforms 100×10 matrix to 100×3 matrix
 row_stats = mapslices(x -> [norm(x), maximum(x), sum(x)], Adist; dims=2)
 
-if rank == 0
-    println("Row statistics shape: $(size(row_stats))")  # (100, 3)
-end
+println(io0(), "Row statistics shape: $(size(row_stats))")  # (100, 3)
 
 MPI.Finalize()
 ```
@@ -653,8 +589,6 @@ MPI.Init()
 using LinearAlgebraMPI
 using LinearAlgebra
 
-rank = MPI.Comm_rank(MPI.COMM_WORLD)
-
 # Create a deterministic dense matrix
 m, n = 100, 10
 A_global = Float64.([i + 0.1*j for i in 1:m, j in 1:n])
@@ -665,9 +599,7 @@ Adist = MatrixMPI(A_global)
 # This transforms 100×10 matrix to 2×10 matrix
 col_stats = mapslices(x -> [norm(x), maximum(x)], Adist; dims=1)
 
-if rank == 0
-    println("Column statistics shape: $(size(col_stats))")  # (2, 10)
-end
+println(io0(), "Column statistics shape: $(size(col_stats))")  # (2, 10)
 
 MPI.Finalize()
 ```
@@ -683,8 +615,6 @@ MPI.Init()
 using LinearAlgebraMPI
 using LinearAlgebra
 
-rank = MPI.Comm_rank(MPI.COMM_WORLD)
-
 # Standard Julia pattern (for comparison):
 # A = randn(5, 2)
 # f(x) = transpose([norm(x), maximum(x)])
@@ -699,9 +629,7 @@ Adist = MatrixMPI(A_global)
 g(x) = [norm(x), maximum(x)]
 Bdist = mapslices(g, Adist; dims=2)
 
-if rank == 0
-    println("Result: $(size(Bdist))")  # (100, 2)
-end
+println(io0(), "Result: $(size(Bdist))")  # (100, 2)
 
 MPI.Finalize()
 ```

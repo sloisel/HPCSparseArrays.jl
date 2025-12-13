@@ -16,10 +16,7 @@ nranks = MPI.Comm_size(comm)
 
 ts = @testset QuietTestSet "Local Constructors" begin
 
-if rank == 0
-    println("[test] VectorMPI_local basic")
-    flush(stdout)
-end
+println(io0(), "[test] VectorMPI_local basic")
 
 # Test VectorMPI_local: each rank provides different-sized local parts
 # Create local vectors that, when concatenated, form [1, 2, 3, ..., 10]
@@ -36,10 +33,7 @@ v_global = Vector(v_mpi)
 @test length(v_mpi) == 10
 
 
-if rank == 0
-    println("[test] VectorMPI_local roundtrip consistency")
-    flush(stdout)
-end
+println(io0(), "[test] VectorMPI_local roundtrip consistency")
 
 # Test that VectorMPI_local produces same result as VectorMPI for default partition
 v_original = Float64[1.5, -2.3, 3.7, 4.1, -5.9, 6.2, 7.8, -8.4]
@@ -54,10 +48,7 @@ v_back = Vector(v_from_local)
 @test v_from_local.partition == v_from_global.partition
 
 
-if rank == 0
-    println("[test] VectorMPI_local complex")
-    flush(stdout)
-end
+println(io0(), "[test] VectorMPI_local complex")
 
 # Test with complex values
 v_complex_local = ComplexF64[(rank+1) + (rank+1)*im, (rank+1)*2 - (rank+1)*2im]
@@ -66,10 +57,7 @@ v_complex_mpi = VectorMPI_local(v_complex_local)
 @test eltype(v_complex_mpi) == ComplexF64
 
 
-if rank == 0
-    println("[test] MatrixMPI_local basic")
-    flush(stdout)
-end
+println(io0(), "[test] MatrixMPI_local basic")
 
 # Test MatrixMPI_local: each rank provides some rows of a matrix
 # Create a 10x4 matrix distributed across ranks
@@ -93,10 +81,7 @@ M_expected = Float64[(i + j*0.1) for i in 1:m_global, j in 1:n_cols]
 @test M_gathered ≈ M_expected
 
 
-if rank == 0
-    println("[test] MatrixMPI_local roundtrip consistency")
-    flush(stdout)
-end
+println(io0(), "[test] MatrixMPI_local roundtrip consistency")
 
 # Test that MatrixMPI_local produces same result as MatrixMPI for default partition
 M_original = Float64[1.1 2.2 3.3;
@@ -115,10 +100,7 @@ M_back = Matrix(M_from_local)
 @test M_from_local.row_partition == M_from_global.row_partition
 
 
-if rank == 0
-    println("[test] MatrixMPI_local complex")
-    flush(stdout)
-end
+println(io0(), "[test] MatrixMPI_local complex")
 
 # Test with complex values
 M_complex_local = ComplexF64[(rank+1) + j*im for _ in 1:(rank == 0 ? 2 : 1), j in 1:3]
@@ -127,10 +109,7 @@ M_complex_mpi = MatrixMPI_local(M_complex_local)
 @test eltype(M_complex_mpi) == ComplexF64
 
 
-if rank == 0
-    println("[test] SparseMatrixMPI_local basic")
-    flush(stdout)
-end
+println(io0(), "[test] SparseMatrixMPI_local basic")
 
 # Test SparseMatrixMPI_local: each rank provides local rows
 # Create a 12x8 sparse matrix with known structure
@@ -172,10 +151,7 @@ S_mpi = SparseMatrixMPI_local(local_transpose)
 @test size(S_mpi) == (m_sparse, n_sparse)
 
 
-if rank == 0
-    println("[test] SparseMatrixMPI_local roundtrip consistency")
-    flush(stdout)
-end
+println(io0(), "[test] SparseMatrixMPI_local roundtrip consistency")
 
 # Test roundtrip: global -> partition -> local -> rebuild
 # Use a deterministic sparse matrix
@@ -208,10 +184,7 @@ S_back = SparseMatrixCSC(S_from_local)
 @test S_from_local.row_partition == S_from_global.row_partition
 
 
-if rank == 0
-    println("[test] SparseMatrixMPI_local with Adjoint")
-    flush(stdout)
-end
+println(io0(), "[test] SparseMatrixMPI_local with Adjoint")
 
 # Test with Adjoint (values should be conjugated)
 I_adj = [1, 2, 3]
@@ -230,10 +203,7 @@ S_adj_csc = SparseMatrixCSC(S_adj)
 @test nnz(S_adj_csc) > 0
 
 
-if rank == 0
-    println("[test] MatrixMPI_local * VectorMPI_local")
-    flush(stdout)
-end
+println(io0(), "[test] MatrixMPI_local * VectorMPI_local")
 
 # Test that locally constructed matrices work with operations
 # Create compatible matrix and vector
@@ -265,10 +235,7 @@ y_result = Vector(y_mpi)
 @test y_result ≈ y_expected
 
 
-if rank == 0
-    println("[test] SparseMatrixMPI_local * VectorMPI_local")
-    flush(stdout)
-end
+println(io0(), "[test] SparseMatrixMPI_local * VectorMPI_local")
 
 # Test sparse matrix-vector multiplication with local constructors
 # First create global matrix and vector, then extract local parts
@@ -292,10 +259,7 @@ y_sp_result = Vector(y_sp)
 end  # testset
 
 # Report results from rank 0
-if rank == 0
-    println("Test Summary: Local Constructors | Pass: $(ts.counts[:pass])  Fail: $(ts.counts[:fail])  Error: $(ts.counts[:error])")
-    flush(stdout)
-end
+println("Test Summary: Local Constructors | Pass: $(ts.counts[:pass])  Fail: $(ts.counts[:fail])  Error: $(ts.counts[:error])")
 
 # Exit with appropriate code
 exit_code = (ts.counts[:fail] + ts.counts[:error] > 0) ? 1 : 0

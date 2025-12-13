@@ -10,18 +10,13 @@ include(joinpath(@__DIR__, "mpi_test_harness.jl"))
 using .MPITestHarness: QuietTestSet
 
 comm = MPI.COMM_WORLD
-rank = MPI.Comm_rank(comm)
-nranks = MPI.Comm_size(comm)
 
 # Tolerance for comparing results
 const TOL = 1e-12
 
 ts = @testset QuietTestSet "Lazy Transpose" begin
 
-if rank == 0
-    println("[test] transpose(A) * transpose(B) = transpose(B * A)")
-    flush(stdout)
-end
+println(io0(), "[test] transpose(A) * transpose(B) = transpose(B * A)")
 
 # C is 8x6, D is 6x8
 # C' is 6x8, D' is 8x6
@@ -54,10 +49,7 @@ ref_dist = SparseMatrixMPI{Float64}(ref)
 err = norm(result_dist - ref_dist, Inf)
 @test err < TOL
 
-if rank == 0
-    println("[test] transpose(A) * B (materialize left)")
-    flush(stdout)
-end
+println(io0(), "[test] transpose(A) * B (materialize left)")
 
 # A is 8x6, so A' is 6x8
 # B is 8x10, so A' * B is 6x10
@@ -82,10 +74,7 @@ ref_dist = SparseMatrixMPI{Float64}(ref)
 err = norm(result_dist - ref_dist, Inf)
 @test err < TOL
 
-if rank == 0
-    println("[test] A * transpose(B) (materialize right)")
-    flush(stdout)
-end
+println(io0(), "[test] A * transpose(B) (materialize right)")
 
 # A is 8x10, B is 6x10, so B' is 10x6
 # A * B' is 8x6
@@ -110,10 +99,7 @@ ref_dist = SparseMatrixMPI{Float64}(ref)
 err = norm(result_dist - ref_dist, Inf)
 @test err < TOL
 
-if rank == 0
-    println("[test] Adjoint (conjugate transpose) with ComplexF64")
-    flush(stdout)
-end
+println(io0(), "[test] Adjoint (conjugate transpose) with ComplexF64")
 
 m, n = 6, 8
 I_A = [1, 2, 3, 4, 5, 6, 1, 3]
@@ -136,10 +122,7 @@ ref_dist = SparseMatrixMPI{ComplexF64}(ref)
 err = norm(result_dist - ref_dist, Inf)
 @test err < TOL
 
-if rank == 0
-    println("[test] conj(A) with ComplexF64")
-    flush(stdout)
-end
+println(io0(), "[test] conj(A) with ComplexF64")
 
 m, n = 6, 8
 I_A = [1, 2, 3, 4, 5, 6, 1, 3]
@@ -155,10 +138,7 @@ ref_dist = SparseMatrixMPI{ComplexF64}(ref)
 err = norm(result_dist - ref_dist, Inf)
 @test err < TOL
 
-if rank == 0
-    println("[test] Scalar multiplication")
-    flush(stdout)
-end
+println(io0(), "[test] Scalar multiplication")
 
 m, n = 6, 8
 I_A = [1, 2, 3, 4, 5, 6, 1, 3]
@@ -196,10 +176,7 @@ result_dist = LinearAlgebraMPI.execute_plan!(plan, result_lazy.parent)
 err4 = norm(result_dist - ref_dist, Inf)
 @test err4 < TOL
 
-if rank == 0
-    println("[test] Scalar multiplication with ComplexF64")
-    flush(stdout)
-end
+println(io0(), "[test] Scalar multiplication with ComplexF64")
 
 m, n = 6, 8
 I_A = [1, 2, 3, 4, 5, 6, 1, 3]
@@ -232,10 +209,7 @@ ref_dist = SparseMatrixMPI{ComplexF64}(ref)
 err3 = norm(result_dist - ref_dist, Inf)
 @test err3 < TOL
 
-if rank == 0
-    println("[test] norm")
-    flush(stdout)
-end
+println(io0(), "[test] norm")
 
 m, n = 6, 8
 I_A = [1, 2, 3, 4, 5, 6, 1, 3]
@@ -255,10 +229,7 @@ err4 = abs(norm(Adist, 3) - norm(A, 3))
 @test err3 < TOL
 @test err4 < TOL
 
-if rank == 0
-    println("[test] norm with ComplexF64")
-    flush(stdout)
-end
+println(io0(), "[test] norm with ComplexF64")
 
 m, n = 6, 8
 I_A = [1, 2, 3, 4, 5, 6, 1, 3]
@@ -276,10 +247,7 @@ err3 = abs(norm(Adist, Inf) - norm(A, Inf))
 @test err2 < TOL
 @test err3 < TOL
 
-if rank == 0
-    println("[test] opnorm")
-    flush(stdout)
-end
+println(io0(), "[test] opnorm")
 
 m, n = 6, 8
 I_A = [1, 2, 3, 4, 5, 6, 1, 3, 2, 4]
@@ -295,10 +263,7 @@ err2 = abs(opnorm(Adist, Inf) - opnorm(A, Inf))
 @test err1 < TOL
 @test err2 < TOL
 
-if rank == 0
-    println("[test] opnorm with ComplexF64")
-    flush(stdout)
-end
+println(io0(), "[test] opnorm with ComplexF64")
 
 m, n = 6, 8
 I_A = [1, 2, 3, 4, 5, 6, 1, 3, 2, 4]
@@ -327,10 +292,7 @@ local_counts = [
 global_counts = similar(local_counts)
 MPI.Allreduce!(local_counts, global_counts, +, comm)
 
-if rank == 0
-    println("Test Summary: Lazy Transpose | Pass: $(global_counts[1])  Fail: $(global_counts[2])  Error: $(global_counts[3])")
-    flush(stdout)
-end
+println(io0(), "Test Summary: Lazy Transpose | Pass: $(global_counts[1])  Fail: $(global_counts[2])  Error: $(global_counts[3])")
 
 MPI.Finalize()
 

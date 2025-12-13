@@ -16,10 +16,7 @@ nranks = MPI.Comm_size(comm)
 
 ts = @testset QuietTestSet "Utilities" begin
 
-if rank == 0
-    println("[test] io0 rank selection")
-    flush(stdout)
-end
+println(io0(), "[test] io0 rank selection")
 
 # Test io0 - capture output to buffer
 io_buf = IOBuffer()
@@ -52,10 +49,7 @@ else
 end
 
 
-if rank == 0
-    println("[test] Vector conversion roundtrip")
-    flush(stdout)
-end
+println(io0(), "[test] Vector conversion roundtrip")
 
 # Test Vector conversion: native -> MPI -> native (bit-for-bit)
 v_original = Float64[1.5, -2.3, 3.7, 4.1, -5.9, 6.2, 7.8, -8.4, 9.0, 10.1]
@@ -73,10 +67,7 @@ v_back_c = Vector(v_mpi_c)
 @test eltype(v_back_c) == ComplexF64
 
 
-if rank == 0
-    println("[test] Matrix conversion roundtrip")
-    flush(stdout)
-end
+println(io0(), "[test] Matrix conversion roundtrip")
 
 # Test Matrix conversion: native -> MPI -> native (bit-for-bit)
 M_original = Float64[1.1 2.2 3.3 4.4;
@@ -102,10 +93,7 @@ M_back_c = Matrix(M_mpi_c)
 @test eltype(M_back_c) == ComplexF64
 
 
-if rank == 0
-    println("[test] SparseMatrixCSC conversion roundtrip")
-    flush(stdout)
-end
+println(io0(), "[test] SparseMatrixCSC conversion roundtrip")
 
 # Test SparseMatrixCSC conversion: native -> MPI -> native (bit-for-bit)
 # Create a nontrivial sparse matrix with various patterns
@@ -140,10 +128,7 @@ S_back_c = SparseMatrixCSC(S_mpi_c)
 @test eltype(S_back_c) == ComplexF64
 
 
-if rank == 0
-    println("[test] VectorMPI show methods")
-    flush(stdout)
-end
+println(io0(), "[test] VectorMPI show methods")
 
 # Test show methods for VectorMPI
 v_test = VectorMPI(Float64[1.0, 2.0, 3.0, 4.0])
@@ -164,10 +149,7 @@ s_interp = "$v_test"
 @test occursin("VectorMPI", s_interp)
 
 
-if rank == 0
-    println("[test] MatrixMPI show methods")
-    flush(stdout)
-end
+println(io0(), "[test] MatrixMPI show methods")
 
 # Test show methods for MatrixMPI
 M_test = MatrixMPI(Float64[1.0 2.0; 3.0 4.0; 5.0 6.0])
@@ -187,10 +169,7 @@ s_interp = "$M_test"
 @test occursin("MatrixMPI", s_interp)
 
 
-if rank == 0
-    println("[test] SparseMatrixMPI show methods")
-    flush(stdout)
-end
+println(io0(), "[test] SparseMatrixMPI show methods")
 
 # Test show methods for SparseMatrixMPI
 S_test = SparseMatrixMPI{Float64}(sparse([1, 2, 3], [1, 2, 3], [1.0, 2.0, 3.0], 5, 5))
@@ -211,10 +190,7 @@ s_interp = "$S_test"
 @test occursin("SparseMatrixMPI", s_interp)
 
 
-if rank == 0
-    println("[test] io0 with show/print integration")
-    flush(stdout)
-end
+println(io0(), "[test] io0 with show/print integration")
 
 # Test that io0 works with println and MPI types
 io_buf = IOBuffer()
@@ -240,10 +216,7 @@ end
 end  # testset
 
 # Report results from rank 0
-if rank == 0
-    println("Test Summary: Utilities | Pass: $(ts.counts[:pass])  Fail: $(ts.counts[:fail])  Error: $(ts.counts[:error])")
-    flush(stdout)
-end
+println("Test Summary: Utilities | Pass: $(ts.counts[:pass])  Fail: $(ts.counts[:fail])  Error: $(ts.counts[:error])")
 
 # Exit with appropriate code
 exit_code = (ts.counts[:fail] + ts.counts[:error] > 0) ? 1 : 0
