@@ -197,6 +197,95 @@ if rank == 0
 end
 @test err < TOL
 
+# Test 6: Direct A \ b solve
+if rank == 0
+    println("[test] Direct A \\ b solve")
+    flush(stdout)
+end
+
+n = 8
+A_full = create_general_tridiagonal(n)
+A = SparseMatrixMPI{Float64}(A_full)
+b_full = ones(n)
+b = VectorMPI(b_full)
+
+# Direct solve without explicit factorization
+x = A \ b
+
+x_full = Vector(x)
+residual = A_full * x_full - b_full
+err = norm(residual, Inf)
+
+if rank == 0
+    println("  Direct solve residual: $err")
+end
+@test err < TOL
+
+MPI.Barrier(comm)
+
+# Test 7: Transpose solve - transpose(A) \ b
+if rank == 0
+    println("[test] Transpose solve")
+    flush(stdout)
+end
+
+x_t = transpose(A) \ b
+
+x_t_full = Vector(x_t)
+residual_t = transpose(A_full) * x_t_full - b_full
+err_t = norm(residual_t, Inf)
+
+if rank == 0
+    println("  Transpose solve residual: $err_t")
+end
+@test err_t < TOL
+
+MPI.Barrier(comm)
+
+# Test 8: Adjoint solve - A' \ b
+if rank == 0
+    println("[test] Adjoint solve")
+    flush(stdout)
+end
+
+x_a = A' \ b
+
+x_a_full = Vector(x_a)
+residual_a = A_full' * x_a_full - b_full
+err_a = norm(residual_a, Inf)
+
+if rank == 0
+    println("  Adjoint solve residual: $err_a")
+end
+@test err_a < TOL
+
+MPI.Barrier(comm)
+
+# Test 9: Factorization transpose/adjoint with F
+if rank == 0
+    println("[test] Factorization transpose/adjoint")
+    flush(stdout)
+end
+
+F = lu(A)
+
+# transpose(F) \ b should solve transpose(A) * x = b
+x_Ft = transpose(F) \ b
+x_Ft_full = Vector(x_Ft)
+err_Ft = norm(transpose(A_full) * x_Ft_full - b_full, Inf)
+
+# F' \ b should solve A' * x = b
+x_Fa = F' \ b
+x_Fa_full = Vector(x_Fa)
+err_Fa = norm(A_full' * x_Fa_full - b_full, Inf)
+
+if rank == 0
+    println("  F transpose solve residual: $err_Ft")
+    println("  F adjoint solve residual: $err_Fa")
+end
+@test err_Ft < TOL
+@test err_Fa < TOL
+
 end  # QuietTestSet
 
 # Aggregate results across ranks

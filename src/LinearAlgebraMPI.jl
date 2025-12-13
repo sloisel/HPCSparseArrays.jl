@@ -14,7 +14,7 @@ export io0   # Utility for rank-selective output
 
 # Factorization exports
 export LUFactorizationMPI, LDLTFactorizationMPI, SymbolicFactorization
-export solve, solve!
+export solve, solve!, solve_transpose, solve_adjoint
 export clear_symbolic_cache!, clear_factorization_plan_cache!
 
 # Type alias for 256-bit Blake3 hash
@@ -120,6 +120,46 @@ include("numeric_lu.jl")
 include("numeric_ldlt.jl")
 include("solve_lu.jl")
 include("solve_ldlt.jl")
+
+# ============================================================================
+# Direct Solve Interface (A \ b)
+# ============================================================================
+
+"""
+    Base.:\\(A::SparseMatrixMPI{T}, b::VectorMPI{T}) where T
+
+Solve A*x = b by automatically computing an LU factorization.
+For repeated solves with the same matrix, it's more efficient to compute
+the factorization once with `lu(A)` or `ldlt(A)` and reuse it.
+"""
+function Base.:\(A::SparseMatrixMPI{T}, b::VectorMPI{T}) where T
+    F = LinearAlgebra.lu(A)
+    return solve(F, b)
+end
+
+"""
+    Base.:\\(At::Transpose{T,SparseMatrixMPI{T}}, b::VectorMPI{T}) where T
+
+Solve transpose(A)*x = b by computing an LU factorization of A and using
+the transpose solve.
+"""
+function Base.:\(At::Transpose{T,SparseMatrixMPI{T}}, b::VectorMPI{T}) where T
+    A = At.parent
+    F = LinearAlgebra.lu(A)
+    return solve_transpose(F, b)
+end
+
+"""
+    Base.:\\(Ac::Adjoint{T,SparseMatrixMPI{T}}, b::VectorMPI{T}) where T
+
+Solve A'*x = b (adjoint) by computing an LU factorization of A and using
+the adjoint solve.
+"""
+function Base.:\(Ac::Adjoint{T,SparseMatrixMPI{T}}, b::VectorMPI{T}) where T
+    A = Ac.parent
+    F = LinearAlgebra.lu(A)
+    return solve_adjoint(F, b)
+end
 
 # ============================================================================
 # Lazy Hash Computation
