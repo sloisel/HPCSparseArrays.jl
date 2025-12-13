@@ -162,6 +162,98 @@ function Base.:\(Ac::Adjoint{T,SparseMatrixMPI{T}}, b::VectorMPI{T}) where T
 end
 
 # ============================================================================
+# Right Division Interface (b / A)
+# ============================================================================
+
+# Right division: x * A = b, so x = b * A^(-1) = transpose(transpose(A) \ transpose(b))
+# For row vectors: transpose(v) / A solves x * A = transpose(v)
+
+"""
+    Base.:/(vt::Transpose{T,VectorMPI{T}}, A::SparseMatrixMPI{T}) where T
+
+Solve x * A = transpose(v), returning x as a transposed VectorMPI.
+Equivalent to transpose(transpose(A) \\ v).
+"""
+function Base.:/(vt::Transpose{T,VectorMPI{T}}, A::SparseMatrixMPI{T}) where T
+    v = vt.parent
+    x = transpose(A) \ v
+    return transpose(x)
+end
+
+"""
+    Base.:/(vt::Transpose{T,VectorMPI{T}}, At::Transpose{T,SparseMatrixMPI{T}}) where T
+
+Solve x * transpose(A) = transpose(v), returning x as a transposed VectorMPI.
+"""
+function Base.:/(vt::Transpose{T,VectorMPI{T}}, At::Transpose{T,SparseMatrixMPI{T}}) where T
+    v = vt.parent
+    A = At.parent
+    x = A \ v
+    return transpose(x)
+end
+
+"""
+    Base.:/(vt::Transpose{T,VectorMPI{T}}, Ac::Adjoint{T,SparseMatrixMPI{T}}) where T
+
+Solve x * A' = transpose(v), returning x as a transposed VectorMPI.
+"""
+function Base.:/(vt::Transpose{T,VectorMPI{T}}, Ac::Adjoint{T,SparseMatrixMPI{T}}) where T
+    v = vt.parent
+    A = Ac.parent
+    # x * A' = transpose(v)  =>  conj(A) * conj(x') = v  =>  conj(x') = conj(A) \ v
+    # For real: x = transpose(A \ v)
+    # For complex: x * A' = vt means A * x' = conj(v), so x' = A \ conj(v), x = conj(A \ conj(v))
+    if T <: Real
+        x = A \ v
+    else
+        x = conj(A \ conj(v))
+    end
+    return transpose(x)
+end
+
+"""
+    Base.:/(va::Adjoint{T,VectorMPI{T}}, A::SparseMatrixMPI{T}) where T
+
+Solve x * A = v' (adjoint), returning x as an adjoint VectorMPI.
+"""
+function Base.:/(va::Adjoint{T,VectorMPI{T}}, A::SparseMatrixMPI{T}) where T
+    v = va.parent
+    # x * A = v'  =>  A' * x' = v  =>  x' = A' \ v
+    x = A' \ v
+    return x'
+end
+
+"""
+    Base.:/(va::Adjoint{T,VectorMPI{T}}, At::Transpose{T,SparseMatrixMPI{T}}) where T
+
+Solve x * transpose(A) = v', returning x as an adjoint VectorMPI.
+"""
+function Base.:/(va::Adjoint{T,VectorMPI{T}}, At::Transpose{T,SparseMatrixMPI{T}}) where T
+    v = va.parent
+    A = At.parent
+    # x * transpose(A) = v'  =>  conj(A) * x' = v
+    if T <: Real
+        x = A \ v
+    else
+        x = conj(A) \ v
+    end
+    return x'
+end
+
+"""
+    Base.:/(va::Adjoint{T,VectorMPI{T}}, Ac::Adjoint{T,SparseMatrixMPI{T}}) where T
+
+Solve x * A' = v', returning x as an adjoint VectorMPI.
+"""
+function Base.:/(va::Adjoint{T,VectorMPI{T}}, Ac::Adjoint{T,SparseMatrixMPI{T}}) where T
+    v = va.parent
+    A = Ac.parent
+    # x * A' = v'  =>  A * x' = v  =>  x' = A \ v
+    x = A \ v
+    return x'
+end
+
+# ============================================================================
 # Lazy Hash Computation
 # ============================================================================
 

@@ -286,6 +286,83 @@ end
 @test err_Ft < TOL
 @test err_Fa < TOL
 
+MPI.Barrier(comm)
+
+# Test 10: Right division - transpose(v) / A
+if rank == 0
+    println("[test] Right division - transpose(v) / A")
+    flush(stdout)
+end
+
+# transpose(v) / A solves x * A = transpose(v)
+x_rd = transpose(b) / A
+
+# Verify: x * A should equal transpose(b)
+# x is a transposed VectorMPI, so x.parent * A should give b
+x_rd_parent = x_rd.parent
+x_rd_full = Vector(x_rd_parent)
+residual_rd = x_rd_full' * A_full - b_full'
+err_rd = norm(residual_rd, Inf)
+
+if rank == 0
+    println("  Right division residual: $err_rd")
+end
+@test err_rd < TOL
+
+MPI.Barrier(comm)
+
+# Test 11: Right division - transpose(v) / transpose(A)
+if rank == 0
+    println("[test] Right division - transpose(v) / transpose(A)")
+    flush(stdout)
+end
+
+x_rdt = transpose(b) / transpose(A)
+x_rdt_full = Vector(x_rdt.parent)
+residual_rdt = x_rdt_full' * transpose(A_full) - b_full'
+err_rdt = norm(residual_rdt, Inf)
+
+if rank == 0
+    println("  Right division (transpose) residual: $err_rdt")
+end
+@test err_rdt < TOL
+
+MPI.Barrier(comm)
+
+# Test 12: Right division - v' / A (adjoint)
+if rank == 0
+    println("[test] Right division - v' / A")
+    flush(stdout)
+end
+
+x_rda = b' / A
+x_rda_full = Vector(x_rda.parent)
+residual_rda = x_rda_full' * A_full - b_full'
+err_rda = norm(residual_rda, Inf)
+
+if rank == 0
+    println("  Right division (adjoint) residual: $err_rda")
+end
+@test err_rda < TOL
+
+MPI.Barrier(comm)
+
+# Test 13: Right division - v' / A'
+if rank == 0
+    println("[test] Right division - v' / A'")
+    flush(stdout)
+end
+
+x_rdaa = b' / A'
+x_rdaa_full = Vector(x_rdaa.parent)
+residual_rdaa = x_rdaa_full' * A_full' - b_full'
+err_rdaa = norm(residual_rdaa, Inf)
+
+if rank == 0
+    println("  Right division (adjoint/adjoint) residual: $err_rdaa")
+end
+@test err_rdaa < TOL
+
 end  # QuietTestSet
 
 # Aggregate results across ranks

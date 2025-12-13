@@ -461,6 +461,23 @@ F_lu = lu(A_nonsym)
 x = solve(F_lu, b)
 ```
 
+### Direct Solve Syntax
+
+Both left division (`\`) and right division (`/`) are supported:
+
+```julia
+# Left division: solve A*x = b
+x = A \ b
+x = transpose(A) \ b    # solve transpose(A)*x = b
+x = A' \ b              # solve A'*x = b
+
+# Right division: solve x*A = b (for row vectors)
+x = transpose(b) / A           # solve x*A = transpose(b)
+x = transpose(b) / transpose(A)  # solve x*transpose(A) = transpose(b)
+x = b' / A                     # solve x*A = b'
+x = b' / A'                    # solve x*A' = b'
+```
+
 ### Plan Reuse
 
 The symbolic factorization (fill-reducing ordering, elimination tree, supernode detection) is cached and reused for matrices with the same sparsity pattern:
