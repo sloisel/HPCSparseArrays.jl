@@ -85,8 +85,6 @@ plan = LinearAlgebraMPI.get_or_create_solve_plan(F)
 @test plan.initialized == true
 @test plan.myrank == rank
 @test plan.nranks == nranks
-# Some ranks may not own supernodes for small matrices
-# @test length(plan.my_supernodes_postorder) > 0
 
 # Check that global_to_local and local_to_global are consistent
 for local_idx in 1:length(plan.local_to_global)
@@ -111,9 +109,9 @@ end
 
 MPI.Barrier(comm)
 
-# Test 2: Compare distributed solve with gathered solve (small matrix)
+# Test 2: Distributed LU solve - small matrix
 if rank == 0
-    println("[test] Distributed vs gathered solve - small matrix")
+    println("[test] Distributed LU solve - small matrix")
     flush(stdout)
 end
 
@@ -121,46 +119,26 @@ n_small = 8
 A_small_full = create_general_tridiagonal(n_small)
 A_small_mpi = SparseMatrixMPI{Float64}(A_small_full)
 
-b_small_full = [1.0 + 0.1*i for i in 1:n_small]  # Deterministic RHS
+b_small_full = [1.0 + 0.1*i for i in 1:n_small]
 b_small = VectorMPI(b_small_full)
 
 F_small = lu(A_small_mpi)
+x_small = solve(F_small, b_small)
+x_small_full = Vector(x_small)
 
-# Solve using gathered method (existing implementation)
-x_gathered = solve(F_small, b_small)
-x_gathered_full = Vector(x_gathered)
+residual_small = norm(A_small_full * x_small_full - b_small_full, Inf)
 
-# Create a new VectorMPI for distributed solve result
-x_distributed = VectorMPI(zeros(Float64, n_small); partition=b_small.partition)
-
-# Try the distributed solve
-try
-    distributed_solve_lu!(x_distributed, F_small, b_small)
-    x_distributed_full = Vector(x_distributed)
-
-    # Compare results
-    diff = norm(x_gathered_full - x_distributed_full, Inf)
-
-    if rank == 0
-        println("  Gathered solve residual: $(norm(A_small_full * x_gathered_full - b_small_full, Inf))")
-        println("  Distributed solve residual: $(norm(A_small_full * x_distributed_full - b_small_full, Inf))")
-        println("  Difference between solutions: $diff")
-    end
-
-    @test diff < TOL
-catch e
-    if rank == 0
-        println("  Distributed solve failed: $e")
-        println("  (This is expected - implementation in progress)")
-    end
-    @test_broken false
+if rank == 0
+    println("  LU solve residual: $residual_small")
 end
+
+@test residual_small < TOL
 
 MPI.Barrier(comm)
 
-# Test 3: Larger matrix to exercise multi-supernode structure
+# Test 3: Distributed LU solve - 2D Laplacian
 if rank == 0
-    println("[test] Distributed vs gathered solve - 2D Laplacian")
+    println("[test] Distributed LU solve - 2D Laplacian")
     flush(stdout)
 end
 
@@ -172,84 +150,22 @@ b_2d_full = [1.0 + 0.1*i for i in 1:n_2d]
 b_2d = VectorMPI(b_2d_full)
 
 F_2d = lu(A_2d_mpi)
+x_2d = solve(F_2d, b_2d)
+x_2d_full = Vector(x_2d)
 
-# Solve using gathered method
-x_2d_gathered = solve(F_2d, b_2d)
-x_2d_gathered_full = Vector(x_2d_gathered)
+residual_2d = norm(A_2d_full * x_2d_full - b_2d_full, Inf)
 
-# Try distributed solve
-x_2d_distributed = VectorMPI(zeros(Float64, n_2d); partition=b_2d.partition)
-
-try
-    distributed_solve_lu!(x_2d_distributed, F_2d, b_2d)
-    x_2d_distributed_full = Vector(x_2d_distributed)
-
-    diff_2d = norm(x_2d_gathered_full - x_2d_distributed_full, Inf)
-
-    if rank == 0
-        println("  2D Laplacian gathered solve residual: $(norm(A_2d_full * x_2d_gathered_full - b_2d_full, Inf))")
-        println("  2D Laplacian distributed solve residual: $(norm(A_2d_full * x_2d_distributed_full - b_2d_full, Inf))")
-        println("  Difference between solutions: $diff_2d")
-    end
-
-    @test diff_2d < TOL
-catch e
-    if rank == 0
-        println("  Distributed solve failed: $e")
-        println("  (This is expected - implementation in progress)")
-    end
-    @test_broken false
+if rank == 0
+    println("  2D Laplacian LU solve residual: $residual_2d")
 end
+
+@test residual_2d < TOL
 
 MPI.Barrier(comm)
 
-# Test 4: Distributed input for LU factorization
+# Test 4: Distributed LDLT solve
 if rank == 0
-    println("[test] Distributed input for LU factorization")
-    flush(stdout)
-end
-
-n_input = 12
-A_input_full = create_general_tridiagonal(n_input)
-A_input_mpi = SparseMatrixMPI{Float64}(A_input_full)
-
-b_input_full = [1.0 + 0.1*i for i in 1:n_input]
-b_input = VectorMPI(b_input_full)
-
-# Factorize with gathered input (default)
-F_gathered = lu(A_input_mpi; distributed_input=false)
-x_gathered = solve(F_gathered, b_input)
-x_gathered_full = Vector(x_gathered)
-
-# Factorize with distributed input
-try
-    F_distributed_input = lu(A_input_mpi; distributed_input=true)
-    x_distributed_input = solve(F_distributed_input, b_input)
-    x_distributed_input_full = Vector(x_distributed_input)
-
-    diff_input = norm(x_gathered_full - x_distributed_input_full, Inf)
-
-    if rank == 0
-        println("  Gathered input solve residual: $(norm(A_input_full * x_gathered_full - b_input_full, Inf))")
-        println("  Distributed input solve residual: $(norm(A_input_full * x_distributed_input_full - b_input_full, Inf))")
-        println("  Difference between solutions: $diff_input")
-    end
-
-    @test diff_input < TOL
-catch e
-    if rank == 0
-        println("  Distributed input failed: $e")
-        showerror(stdout, e, catch_backtrace())
-        println()
-    end
-    @test_broken false
-end
-
-MPI.Barrier(comm)
-
-# Test 5: Distributed input for LDLT factorization
-if rank == 0
-    println("[test] Distributed input for LDLT factorization")
+    println("[test] Distributed LDLT solve")
     flush(stdout)
 end
 
@@ -260,34 +176,44 @@ A_ldlt_mpi = SparseMatrixMPI{Float64}(A_ldlt_full)
 b_ldlt_full = [1.0 + 0.1*i for i in 1:n_ldlt]
 b_ldlt = VectorMPI(b_ldlt_full)
 
-# Factorize with gathered input (default)
-F_ldlt_gathered = ldlt(A_ldlt_mpi; distributed_input=false)
-x_ldlt_gathered = solve(F_ldlt_gathered, b_ldlt)
-x_ldlt_gathered_full = Vector(x_ldlt_gathered)
+F_ldlt = ldlt(A_ldlt_mpi)
+x_ldlt = solve(F_ldlt, b_ldlt)
+x_ldlt_full = Vector(x_ldlt)
 
-# Factorize with distributed input
-try
-    F_ldlt_distributed_input = ldlt(A_ldlt_mpi; distributed_input=true)
-    x_ldlt_distributed_input = solve(F_ldlt_distributed_input, b_ldlt)
-    x_ldlt_distributed_input_full = Vector(x_ldlt_distributed_input)
+residual_ldlt = norm(A_ldlt_full * x_ldlt_full - b_ldlt_full, Inf)
 
-    diff_ldlt_input = norm(x_ldlt_gathered_full - x_ldlt_distributed_input_full, Inf)
-
-    if rank == 0
-        println("  LDLT gathered input solve residual: $(norm(A_ldlt_full * x_ldlt_gathered_full - b_ldlt_full, Inf))")
-        println("  LDLT distributed input solve residual: $(norm(A_ldlt_full * x_ldlt_distributed_input_full - b_ldlt_full, Inf))")
-        println("  Difference between solutions: $diff_ldlt_input")
-    end
-
-    @test diff_ldlt_input < TOL
-catch e
-    if rank == 0
-        println("  LDLT distributed input failed: $e")
-        showerror(stdout, e, catch_backtrace())
-        println()
-    end
-    @test_broken false
+if rank == 0
+    println("  LDLT solve residual: $residual_ldlt")
 end
+
+@test residual_ldlt < TOL
+
+MPI.Barrier(comm)
+
+# Test 5: Distributed LDLT solve - 2D Laplacian
+if rank == 0
+    println("[test] Distributed LDLT solve - 2D Laplacian")
+    flush(stdout)
+end
+
+A_ldlt_2d_full = create_2d_laplacian(5, 5)  # 25 nodes
+n_ldlt_2d = size(A_ldlt_2d_full, 1)
+A_ldlt_2d_mpi = SparseMatrixMPI{Float64}(A_ldlt_2d_full)
+
+b_ldlt_2d_full = [1.0 + 0.1*i for i in 1:n_ldlt_2d]
+b_ldlt_2d = VectorMPI(b_ldlt_2d_full)
+
+F_ldlt_2d = ldlt(A_ldlt_2d_mpi)
+x_ldlt_2d = solve(F_ldlt_2d, b_ldlt_2d)
+x_ldlt_2d_full = Vector(x_ldlt_2d)
+
+residual_ldlt_2d = norm(A_ldlt_2d_full * x_ldlt_2d_full - b_ldlt_2d_full, Inf)
+
+if rank == 0
+    println("  2D Laplacian LDLT solve residual: $residual_ldlt_2d")
+end
+
+@test residual_ldlt_2d < TOL
 
 MPI.Barrier(comm)
 

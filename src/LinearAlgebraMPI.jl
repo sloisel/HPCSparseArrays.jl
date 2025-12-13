@@ -14,7 +14,7 @@ export io0   # Utility for rank-selective output
 
 # Factorization exports
 export LUFactorizationMPI, LDLTFactorizationMPI, SymbolicFactorization
-export solve, solve!, solve_transpose, solve_adjoint
+export solve, solve!, solve_transpose
 export clear_symbolic_cache!, clear_solve_plan_cache!
 export distributed_solve_lu!, distributed_solve_ldlt!  # Distributed solve without gathering
 export clear_input_plan_cache!  # Factorization input plan cache
@@ -146,25 +146,29 @@ end
 """
     Base.:\\(At::Transpose{T,SparseMatrixMPI{T}}, b::VectorMPI{T}) where T
 
-Solve transpose(A)*x = b by computing an LU factorization of A and using
-the transpose solve.
+Solve transpose(A)*x = b by materializing the transpose and computing
+an LU factorization of it.
 """
 function Base.:\(At::Transpose{T,SparseMatrixMPI{T}}, b::VectorMPI{T}) where T
-    A = At.parent
-    F = LinearAlgebra.lu(A)
-    return solve_transpose(F, b)
+    # Materialize the transpose and factorize directly
+    A_t = materialize_transpose(At.parent)
+    F = LinearAlgebra.lu(A_t)
+    return solve(F, b)
 end
 
 """
     Base.:\\(Ac::Adjoint{T,SparseMatrixMPI{T}}, b::VectorMPI{T}) where T
 
-Solve A'*x = b (adjoint) by computing an LU factorization of A and using
-the adjoint solve.
+Solve A'*x = b (adjoint) by materializing the adjoint and computing
+an LU factorization of it.
 """
 function Base.:\(Ac::Adjoint{T,SparseMatrixMPI{T}}, b::VectorMPI{T}) where T
-    A = Ac.parent
-    F = LinearAlgebra.lu(A)
-    return solve_adjoint(F, b)
+    # Materialize the adjoint: A' = conj(transpose(A))
+    # First materialize transpose, then conjugate
+    A_t = materialize_transpose(Ac.parent)
+    A_adj = conj(A_t)
+    F = LinearAlgebra.lu(A_adj)
+    return solve(F, b)
 end
 
 # ============================================================================

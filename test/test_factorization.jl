@@ -333,32 +333,7 @@ end
 
 MPI.Barrier(comm)
 
-# Test 9: Factorization transpose/adjoint with F
-if rank == 0
-    println("[test] Factorization transpose/adjoint")
-    flush(stdout)
-end
-
-F = lu(A)
-
-# transpose(F) \ b should solve transpose(A) * x = b
-x_Ft = transpose(F) \ b
-x_Ft_full = Vector(x_Ft)
-err_Ft = norm(transpose(A_full) * x_Ft_full - b_full, Inf)
-
-# F' \ b should solve A' * x = b
-x_Fa = F' \ b
-x_Fa_full = Vector(x_Fa)
-err_Fa = norm(A_full' * x_Fa_full - b_full, Inf)
-
-if rank == 0
-    println("  F transpose solve residual: $err_Ft")
-    println("  F adjoint solve residual: $err_Fa")
-end
-@test err_Ft < TOL
-@test err_Fa < TOL
-
-MPI.Barrier(comm)
+# (Test 9 removed - factorization transpose/adjoint for LU was deleted)
 
 # Test 10: Right division - transpose(v) / A
 if rank == 0
@@ -437,9 +412,9 @@ end
 
 MPI.Barrier(comm)
 
-# Test 14: LDLT transpose/adjoint solves via factorization (real symmetric)
+# Test 14: LDLT transpose solve via factorization (real symmetric)
 if rank == 0
-    println("[test] LDLT factorization transpose/adjoint")
+    println("[test] LDLT factorization transpose")
     flush(stdout)
 end
 
@@ -456,17 +431,10 @@ x_ldlt_t = transpose(F_ldlt) \ b_ldlt
 x_ldlt_t_full = Vector(x_ldlt_t)
 err_ldlt_t = norm(A_ldlt_full * x_ldlt_t_full - b_ldlt_full, Inf)
 
-# F' \ b should solve A' * x = b (same as A * x = b for real symmetric)
-x_ldlt_a = F_ldlt' \ b_ldlt
-x_ldlt_a_full = Vector(x_ldlt_a)
-err_ldlt_a = norm(A_ldlt_full * x_ldlt_a_full - b_ldlt_full, Inf)
-
 if rank == 0
     println("  LDLT transpose solve residual: $err_ldlt_t")
-    println("  LDLT adjoint solve residual: $err_ldlt_a")
 end
 @test err_ldlt_t < TOL
-@test err_ldlt_a < TOL
 
 MPI.Barrier(comm)
 
@@ -497,25 +465,7 @@ end
 
 MPI.Barrier(comm)
 
-# Test 16: Complex symmetric LDLT adjoint solve (exercises conj helpers)
-if rank == 0
-    println("[test] LDLT adjoint solve - complex symmetric")
-    flush(stdout)
-end
-
-# For complex symmetric A (A = A^T but A != A'), adjoint solve is different
-# solve A' * x = b where A' = conj(A)
-x_cx_adj = F_cx' \ b_cx
-x_cx_adj_full = Vector(x_cx_adj)
-residual_cx_adj = A_cx_full' * x_cx_adj_full - b_cx_full
-err_cx_adj = norm(residual_cx_adj, Inf)
-
-if rank == 0
-    println("  Complex symmetric LDLT adjoint residual: $err_cx_adj")
-end
-@test err_cx_adj < TOL
-
-MPI.Barrier(comm)
+# (Test 16 removed - complex symmetric LDLT adjoint solve was deleted)
 
 # Test 17: 2D Laplacian - exercises extend_add_sym! with supernode children
 if rank == 0

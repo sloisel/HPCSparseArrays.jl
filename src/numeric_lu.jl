@@ -4,7 +4,7 @@ Numerical LU factorization using the distributed multifrontal method.
 Main algorithm:
 1. Process supernodes in postorder (leaves to root)
 2. For each supernode owned by this rank:
-   a. Initialize frontal matrix from gathered sparse entries
+   a. Initialize frontal matrix from distributed sparse entries
    b. Extend-add contributions from children (all local since subtrees are on same rank)
    c. Partial factorization with pivoting
    d. Extract L and U factors to local storage
@@ -15,7 +15,7 @@ using MPI
 using SparseArrays
 
 """
-    lu(A::SparseMatrixMPI{T}; reuse_symbolic=true, distributed_input=false) -> LUFactorizationMPI{T}
+    lu(A::SparseMatrixMPI{T}; reuse_symbolic=true) -> LUFactorizationMPI{T}
 
 Compute LU factorization of a distributed sparse matrix.
 
@@ -23,56 +23,43 @@ Uses the multifrontal method with:
 - AMD fill-reducing ordering
 - Partial pivoting for numerical stability
 - MUMPS-style subtree-to-rank mapping
+- MUMPS-style distributed matrix input (each rank only provides its local portion)
 
 If `reuse_symbolic=true`, caches and reuses symbolic factorization for matrices
 with the same sparsity pattern.
-
-If `distributed_input=true`, uses MUMPS-style distributed matrix input where each
-rank only provides its local portion of the matrix, avoiding the O(nnz) gather.
 """
-function LinearAlgebra.lu(A::SparseMatrixMPI{T}; reuse_symbolic::Bool=true, distributed_input::Bool=false) where T
+function LinearAlgebra.lu(A::SparseMatrixMPI{T}; reuse_symbolic::Bool=true) where T
     # Get or compute symbolic factorization
     symbolic = reuse_symbolic ?
         get_symbolic_factorization(A; symmetric=false) :
         compute_symbolic_factorization(A; symmetric=false)
 
     # Perform numerical factorization
-    return numerical_factorization_lu(A, symbolic; distributed_input=distributed_input)
+    return numerical_factorization_lu(A, symbolic)
 end
 
 """
-    numerical_factorization_lu(A, symbolic; distributed_input=false) -> LUFactorizationMPI{T}
+    numerical_factorization_lu(A, symbolic) -> LUFactorizationMPI{T}
 
 Perform the numerical LU factorization.
 
-If `distributed_input=true`, uses distributed matrix input where each rank only
-provides its local portion of the matrix.
+Uses MUMPS-style distributed matrix input where each rank only provides its
+local portion of the matrix.
 
 Note: The current supernode assignment places complete subtrees on single ranks,
 so all parent-child communication is local (no MPI communication during factorization).
 """
 function numerical_factorization_lu(A::SparseMatrixMPI{T},
-                                    symbolic::SymbolicFactorization;
-                                    distributed_input::Bool=false) where T
+                                    symbolic::SymbolicFactorization) where T
     comm = MPI.COMM_WORLD
     rank = MPI.Comm_rank(comm)
 
     n = symbolic.n
     nsupernodes = length(symbolic.supernodes)
 
-    # Get matrix input (either gathered or distributed)
-    local input_plan::Union{Nothing, FactorizationInputPlan{T}} = nothing
-    local Ap::Union{Nothing, SparseMatrixCSC{T,Int}} = nothing
-
-    if distributed_input
-        # Use distributed input plan
-        input_plan = get_or_create_input_plan(symbolic, A)
-        execute_input_plan!(input_plan, A)
-    else
-        # Gather the permuted matrix on all ranks for local access
-        A_full = SparseMatrixCSC(A)
-        Ap = A_full[symbolic.perm, symbolic.perm]
-    end
+    # Use distributed input plan
+    input_plan = get_or_create_input_plan(symbolic, A)
+    execute_input_plan!(input_plan, A)
 
     # Storage for update matrices (keyed by supernode index)
     updates = Dict{Int, Matrix{T}}()
@@ -100,12 +87,8 @@ function numerical_factorization_lu(A::SparseMatrixMPI{T},
         if rank == snode_owner
             # This rank owns this supernode
 
-            # 1. Initialize frontal matrix
-            if distributed_input
-                F = initialize_frontal_distributed(input_plan, A, snode, info)
-            else
-                F = initialize_frontal(Ap, snode, info)
-            end
+            # 1. Initialize frontal matrix from distributed input
+            F = initialize_frontal_distributed(input_plan, A, snode, info)
 
             # 2. Extend-add update matrices from children
             # Note: All children are on the same rank (subtrees assigned to single ranks)
@@ -165,72 +148,4 @@ function numerical_factorization_lu(A::SparseMatrixMPI{T},
     end
 
     return LUFactorizationMPI{T}(symbolic, L_local, U_local, row_perm, inv_row_perm)
-end
-
-"""
-    gather_L_U(lu::LUFactorizationMPI{T}) -> (SparseMatrixCSC{T,Int}, SparseMatrixCSC{T,Int})
-
-Gather the distributed L and U factors to full matrices on all ranks.
-Useful for debugging and verification.
-"""
-function gather_L_U(lu::LUFactorizationMPI{T}) where T
-    comm = MPI.COMM_WORLD
-    n = lu.symbolic.n
-
-    # Gather L
-    L_I_local = Int[]
-    L_J_local = Int[]
-    L_V_local = T[]
-
-    for j in 1:n
-        for idx in nzrange(lu.L_local, j)
-            push!(L_I_local, rowvals(lu.L_local)[idx])
-            push!(L_J_local, j)
-            push!(L_V_local, nonzeros(lu.L_local)[idx])
-        end
-    end
-
-    # Gather counts
-    L_count = Int32(length(L_I_local))
-    L_counts = MPI.Allgather(L_count, comm)
-    L_total = sum(L_counts)
-
-    L_I_global = Vector{Int}(undef, L_total)
-    L_J_global = Vector{Int}(undef, L_total)
-    L_V_global = Vector{T}(undef, L_total)
-
-    MPI.Allgatherv!(L_I_local, MPI.VBuffer(L_I_global, L_counts), comm)
-    MPI.Allgatherv!(L_J_local, MPI.VBuffer(L_J_global, L_counts), comm)
-    MPI.Allgatherv!(L_V_local, MPI.VBuffer(L_V_global, L_counts), comm)
-
-    L_full = sparse(L_I_global, L_J_global, L_V_global, n, n)
-
-    # Gather U similarly
-    U_I_local = Int[]
-    U_J_local = Int[]
-    U_V_local = T[]
-
-    for j in 1:n
-        for idx in nzrange(lu.U_local, j)
-            push!(U_I_local, rowvals(lu.U_local)[idx])
-            push!(U_J_local, j)
-            push!(U_V_local, nonzeros(lu.U_local)[idx])
-        end
-    end
-
-    U_count = Int32(length(U_I_local))
-    U_counts = MPI.Allgather(U_count, comm)
-    U_total = sum(U_counts)
-
-    U_I_global = Vector{Int}(undef, U_total)
-    U_J_global = Vector{Int}(undef, U_total)
-    U_V_global = Vector{T}(undef, U_total)
-
-    MPI.Allgatherv!(U_I_local, MPI.VBuffer(U_I_global, U_counts), comm)
-    MPI.Allgatherv!(U_J_local, MPI.VBuffer(U_J_global, U_counts), comm)
-    MPI.Allgatherv!(U_V_local, MPI.VBuffer(U_V_global, U_counts), comm)
-
-    U_full = sparse(U_I_global, U_J_global, U_V_global, n, n)
-
-    return L_full, U_full
 end

@@ -2,10 +2,12 @@
 Utility functions for multifrontal factorization.
 
 These functions operate on local frontal matrices and handle:
-- Initialization from sparse matrix entries
 - Extend-add operations for assembling child contributions
 - Partial factorization with pivoting
 - Extraction of L/U and L/D factors
+
+Note: Frontal matrix initialization is done via distributed input plans
+in factorization_input.jl (initialize_frontal_distributed, initialize_frontal_sym_distributed).
 """
 
 # Bunch-Kaufman parameter: alpha = (1 + sqrt(17)) / 8
@@ -14,58 +16,6 @@ const BK_ALPHA = (1.0 + sqrt(17.0)) / 8.0
 # ============================================================================
 # LU Factorization Utilities
 # ============================================================================
-
-"""
-    initialize_frontal(A, snode, info) -> FrontalMatrix
-
-Initialize a frontal matrix from the original matrix entries.
-
-The frontal matrix is a dense submatrix indexed by row_indices (which also
-serve as column indices). Structure:
-- F[i,j] corresponds to A[row_indices[i], row_indices[j]]
-- Rows/cols 1:nfs are the supernode columns (fully summed)
-- Rows/cols nfs+1:end are update rows/columns
-
-For unsymmetric matrices, we fill:
-- F11 and F21: all rows, supernode columns (local_col <= nfs)
-- F12: supernode rows (local_row <= nfs), update columns (local_col > nfs)
-- F22: NOT filled from A (only receives children's Schur complements)
-"""
-function initialize_frontal(A::SparseMatrixCSC{T},
-                           snode::Supernode,
-                           info::FrontalInfo) where T
-    row_indices = info.row_indices
-    nfs = info.nfs
-    nrows = length(row_indices)
-
-    F = FrontalMatrix{T}(copy(row_indices), copy(row_indices), nfs)
-
-    # Create mapping from global indices to local positions
-    global_to_local = Dict{Int, Int}()
-    for (local_idx, global_idx) in enumerate(row_indices)
-        global_to_local[global_idx] = local_idx
-    end
-
-    # Fill frontal matrix from A
-    for (local_col, global_col) in enumerate(row_indices)
-        for i in nzrange(A, global_col)
-            global_row = rowvals(A)[i]
-            if haskey(global_to_local, global_row)
-                local_row = global_to_local[global_row]
-
-                # Fill if:
-                # - Column is a supernode column (local_col <= nfs): fills F11 and F21
-                # - OR row is a supernode row (local_row <= nfs): fills F12
-                # This captures U[i,j] where row i is in this supernode
-                if local_col <= nfs || local_row <= nfs
-                    F.F[local_row, local_col] = nonzeros(A)[i]
-                end
-            end
-        end
-    end
-
-    return F
-end
 
 """
     extend_add!(F, update, child_rows, child_cols)
@@ -265,52 +215,6 @@ end
 # ============================================================================
 # LDLT Factorization Utilities (Symmetric with Bunch-Kaufman pivoting)
 # ============================================================================
-
-"""
-    initialize_frontal_sym(A, snode, info) -> FrontalMatrix
-
-Initialize a frontal matrix from the original matrix entries for symmetric factorization.
-Only accesses the lower triangular part of A.
-
-The frontal matrix is symmetric, so row_indices == col_indices.
-"""
-function initialize_frontal_sym(A::SparseMatrixCSC{T},
-                                snode::Supernode,
-                                info::FrontalInfo) where T
-    row_indices = info.row_indices
-    nfs = info.nfs
-    nrows = length(row_indices)
-
-    F = FrontalMatrix{T}(copy(row_indices), copy(row_indices), nfs)
-
-    # Create mapping from global indices to local positions
-    global_to_local = Dict{Int, Int}()
-    for (local_idx, global_idx) in enumerate(row_indices)
-        global_to_local[global_idx] = local_idx
-    end
-
-    # Fill frontal matrix from lower triangle of A
-    # For symmetric matrices, A[i,j] = A[j,i], so we fill both F[i,j] and F[j,i]
-    for (local_col, global_col) in enumerate(row_indices)
-        for i in nzrange(A, global_col)
-            global_row = rowvals(A)[i]
-            if haskey(global_to_local, global_row)
-                local_row = global_to_local[global_row]
-                val = nonzeros(A)[i]
-
-                # Fill entry and its symmetric counterpart
-                if local_col <= nfs || local_row <= nfs
-                    F.F[local_row, local_col] = val
-                    if local_row != local_col
-                        F.F[local_col, local_row] = val  # Symmetric
-                    end
-                end
-            end
-        end
-    end
-
-    return F
-end
 
 """
     extend_add_sym!(F, update, child_rows)
