@@ -195,8 +195,10 @@ function numerical_factorization_ldlt(A::SparseMatrixMPI{T},
     D_local = sparse(D_I, D_J, D_V, n, n)
 
     # Gather global symmetric permutation and pivots via Allreduce
+    # Use MAX for sym_perm (values are positive indices or 0)
+    # Use SUM for pivots (values are 1 or -1, with only one rank setting each position)
     sym_perm = MPI.Allreduce(sym_perm_local, MPI.MAX, comm)
-    pivots = MPI.Allreduce(pivots_local, MPI.MAX, comm)
+    pivots = MPI.Allreduce(pivots_local, MPI.SUM, comm)
 
     # Build inverse symmetric permutation
     inv_sym_perm = zeros(Int, n)

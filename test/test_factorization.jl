@@ -541,6 +541,93 @@ if rank == 0
 end
 @test err_2d < TOL
 
+MPI.Barrier(comm)
+
+# Test 18: LDLT with 2x2 Bunch-Kaufman pivots
+# Uses a dense symmetric indefinite matrix with small diagonal to force 2x2 pivots
+if rank == 0
+    println("[test] LDLT with 2x2 Bunch-Kaufman pivots")
+    flush(stdout)
+end
+
+n_bk = 4
+A_bk = zeros(n_bk, n_bk)
+for i in 1:n_bk
+    A_bk[i, i] = 1e-16  # Tiny diagonal forces 2x2 pivot selection
+    for j in i+1:n_bk
+        A_bk[i, j] = 1.0 + 0.1 * (i + j)  # Large off-diagonal
+        A_bk[j, i] = A_bk[i, j]
+    end
+end
+A_bk_sp = sparse(A_bk)
+A_bk_mpi = SparseMatrixMPI{Float64}(A_bk_sp)
+
+F_bk = ldlt(A_bk_mpi)
+
+# Verify 2x2 pivots were used (pivots[k] < 0 indicates 2x2 pivot)
+has_2x2_pivots = any(F_bk.pivots .< 0)
+@test has_2x2_pivots
+
+b_bk_full = ones(n_bk)
+b_bk = VectorMPI(b_bk_full)
+x_bk = solve(F_bk, b_bk)
+x_bk_full = Vector(x_bk)
+err_bk = norm(A_bk_sp * x_bk_full - b_bk_full, Inf)
+
+if rank == 0
+    println("  2x2 pivots used: $has_2x2_pivots")
+    println("  Bunch-Kaufman LDLT residual: $err_bk")
+end
+@test err_bk < TOL
+
+MPI.Barrier(comm)
+
+# Test 19: Multi-rank supernode distribution
+# Uses block diagonal matrix to create multiple elimination tree roots
+if rank == 0
+    println("[test] Multi-rank supernode distribution")
+    flush(stdout)
+end
+
+# Create 2-block diagonal matrix (disconnected components)
+block_size = 10
+n_multi = 2 * block_size
+A_multi = spzeros(n_multi, n_multi)
+for b in 0:1
+    offset = b * block_size
+    for i in 1:block_size
+        A_multi[offset + i, offset + i] = 4.0
+        if i > 1
+            A_multi[offset + i, offset + i - 1] = -1.0
+            A_multi[offset + i - 1, offset + i] = -1.0
+        end
+    end
+end
+A_multi_mpi = SparseMatrixMPI{Float64}(A_multi)
+
+F_multi = ldlt(A_multi_mpi)
+
+# Verify multi-rank distribution (supernodes on different ranks)
+unique_owners = unique(F_multi.symbolic.snode_owner)
+has_multi_rank = length(unique_owners) > 1 && nranks > 1
+
+# Note: multi-rank is expected only if running with 2+ ranks
+if nranks > 1
+    @test has_multi_rank
+end
+
+b_multi_full = ones(n_multi)
+b_multi = VectorMPI(b_multi_full)
+x_multi = solve(F_multi, b_multi)
+x_multi_full = Vector(x_multi)
+err_multi = norm(A_multi * x_multi_full - b_multi_full, Inf)
+
+if rank == 0
+    println("  Multi-rank distribution: $has_multi_rank (nranks=$nranks)")
+    println("  Block diagonal LDLT residual: $err_multi")
+end
+@test err_multi < TOL
+
 end  # QuietTestSet
 
 # Aggregate results across ranks
