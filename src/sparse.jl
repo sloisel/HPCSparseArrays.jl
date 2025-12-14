@@ -79,6 +79,49 @@ function reindex_global_to_union(AT::SparseMatrixCSC{T,Int}, union_indices::Vect
 end
 
 """
+    reindex_to_union_cached(AT, col_to_union_map, union_size)
+
+Optimized reindex using precomputed mapping vector.
+col_to_union_map[local_idx] gives the union index for local column index local_idx.
+"""
+function reindex_to_union_cached(AT::SparseMatrixCSC{T,Int}, col_to_union_map::Vector{Int}, union_size::Int) where T
+    if isempty(AT.rowval)
+        return SparseMatrixCSC(union_size, AT.n, AT.colptr, Int[], T[])
+    end
+    new_rowval = [col_to_union_map[r] for r in AT.rowval]
+    return SparseMatrixCSC(union_size, AT.n, AT.colptr, new_rowval, AT.nzval)
+end
+
+"""
+    reindex_global_to_union_cached(AT, global_to_union_map, union_size)
+
+Optimized reindex using precomputed mapping vector.
+global_to_union_map[global_idx] gives the union index for global column index global_idx.
+For indices not in union, the value should be 0 (but this shouldn't happen for valid inputs).
+"""
+function reindex_global_to_union_cached(AT::SparseMatrixCSC{T,Int}, global_to_union_map::Vector{Int}, union_size::Int) where T
+    if isempty(AT.rowval)
+        return SparseMatrixCSC(union_size, AT.n, AT.colptr, Int[], T[])
+    end
+    new_rowval = [global_to_union_map[r] for r in AT.rowval]
+    return SparseMatrixCSC(union_size, AT.n, AT.colptr, new_rowval, AT.nzval)
+end
+
+"""
+    compress_AT_cached(AT, compress_map)
+
+Optimized compress_AT using precomputed mapping vector.
+compress_map[global_idx] gives the local index for global column index global_idx.
+"""
+function compress_AT_cached(AT::SparseMatrixCSC{T,Int}, compress_map::Vector{Int}, local_size::Int) where T
+    if isempty(AT.rowval)
+        return SparseMatrixCSC(local_size, AT.n, AT.colptr, Int[], T[])
+    end
+    compressed_rowval = [compress_map[r] for r in AT.rowval]
+    return SparseMatrixCSC(local_size, AT.n, AT.colptr, compressed_rowval, AT.nzval)
+end
+
+"""
     _rebuild_AT_with_insertions(AT, col_indices, insertions, row_offset) -> (new_AT, new_col_indices)
 
 Rebuild AT with a batch of insertions for structural setindex!.
@@ -377,6 +420,19 @@ mutable struct MatrixPlan{T}
     recv_offsets::Vector{Int}
     local_ranges::Vector{Tuple{UnitRange{Int},Int}}
     AT::SparseMatrixCSC{T,Int}
+    # Cached hash for product result (computed lazily on first execution)
+    product_structural_hash::OptionalBlake3Hash
+    product_col_indices::Union{Nothing, Vector{Int}}
+    product_row_partition::Union{Nothing, Vector{Int}}
+    product_compress_map::Union{Nothing, Vector{Int}}  # global_col -> local_col mapping for compress_AT
+    # Cached hash for addition result (computed lazily on first execution)
+    addition_structural_hash::OptionalBlake3Hash
+    addition_col_indices::Union{Nothing, Vector{Int}}
+    addition_union_indices::Union{Nothing, Vector{Int}}
+    # Cached reindex mappings for addition (computed lazily)
+    addition_A_col_to_union::Union{Nothing, Vector{Int}}  # A's local col indices -> union indices
+    addition_plan_global_to_union::Union{Nothing, Vector{Int}}  # plan.AT global -> union (dense vector, 0 = not present)
+    addition_result_col_indices_local::Union{Nothing, Vector{Int}}  # local col indices in result
 end
 
 """
@@ -647,7 +703,10 @@ function MatrixPlan(row_indices::Vector{Int}, B::SparseMatrixMPI{T}) where T
         rank_ids, send_ranges_vec, send_bufs, send_reqs,
         recv_rank_ids, recv_bufs, recv_reqs, recv_offsets_vec,
         local_ranges,
-        plan_AT
+        plan_AT,
+        nothing, nothing, nothing, nothing,  # product: hash, col_indices, row_partition, compress_map
+        nothing, nothing, nothing,           # addition: hash, col_indices, union_indices
+        nothing, nothing, nothing            # addition: A_col_to_union, plan_global_to_union, result_col_indices_local
     )
 end
 
@@ -833,14 +892,33 @@ function Base.:*(A::SparseMatrixMPI{T}, B::SparseMatrixMPI{T}) where T
     # result is (ncols_B, local_nrows_A) = shape of C.AT
     result_AT = plan.AT ⊛ A.A.parent
 
-    # col_indices are the columns of C that have nonzeros in our local rows (global indices from plan.AT)
-    result_col_indices = isempty(result_AT.rowval) ? Int[] : unique(sort(result_AT.rowval))
+    # Check if hash is already cached in the plan (computed on first execution)
+    if plan.product_structural_hash === nothing
+        # First execution: compute col_indices, compress_map, hash, and cache them
+        result_col_indices = isempty(result_AT.rowval) ? Int[] : unique(sort(result_AT.rowval))
 
-    # Compress result_AT: convert global column indices to local indices
-    compressed_result_AT = compress_AT(result_AT, result_col_indices)
+        # Build compress_map: compress_map[global_col] = local_col
+        if isempty(result_col_indices)
+            compress_map = Int[]
+        else
+            max_col = maximum(result_col_indices)
+            compress_map = zeros(Int, max_col)
+            for (local_idx, global_idx) in enumerate(result_col_indices)
+                compress_map[global_idx] = local_idx
+            end
+        end
 
-    # Compute structural hash (identical across all ranks)
-    result_hash = compute_structural_hash(A.row_partition, result_col_indices, compressed_result_AT, comm)
+        compressed_result_AT = compress_AT_cached(result_AT, compress_map, length(result_col_indices))
+        plan.product_structural_hash = compute_structural_hash(A.row_partition, result_col_indices, compressed_result_AT, comm)
+        plan.product_col_indices = result_col_indices
+        plan.product_row_partition = A.row_partition
+        plan.product_compress_map = compress_map
+    else
+        # Subsequent executions: use cached col_indices and compress_map (skip unique/sort and Dict creation)
+        result_col_indices = plan.product_col_indices
+        compressed_result_AT = compress_AT_cached(result_AT, plan.product_compress_map, length(result_col_indices))
+    end
+    result_hash = plan.product_structural_hash
 
     # C = A * B has rows from A and columns from B
     return SparseMatrixMPI{T}(result_hash, A.row_partition, B.col_partition, result_col_indices, transpose(compressed_result_AT),
@@ -888,31 +966,68 @@ function Base.:+(A::SparseMatrixMPI{T}, B::SparseMatrixMPI{T}) where T
     plan = get_addition_plan(A, B)
     execute_plan!(plan, B)
 
-    # A.A.parent has compressed local indices (m = length(A.col_indices))
-    # plan.AT has global indices (m = ncols_B)
-    # We need to reindex both to a common "union" space before adding
+    # Check if mappings are already cached in the plan
+    if plan.addition_A_col_to_union === nothing
+        # First execution: compute everything and cache
 
-    # Compute union of column indices
-    plan_col_indices = isempty(plan.AT.rowval) ? Int[] : unique(sort(plan.AT.rowval))
-    union_indices = sort(unique(vcat(A.col_indices, plan_col_indices)))
+        # A.A.parent has compressed local indices (m = length(A.col_indices))
+        # plan.AT has global indices (m = ncols_B)
+        # We need to reindex both to a common "union" space before adding
 
-    # Reindex both to union space
-    A_union = reindex_to_union(A.A.parent, A.col_indices, union_indices)
-    plan_union = reindex_global_to_union(plan.AT, union_indices)
+        # Compute union of column indices
+        plan_col_indices = isempty(plan.AT.rowval) ? Int[] : unique(sort(plan.AT.rowval))
+        union_indices = sort(unique(vcat(A.col_indices, plan_col_indices)))
+        union_size = length(union_indices)
 
-    # Add in union space
-    result_union = A_union + plan_union
+        # Build and cache mapping: A's local col indices -> union indices
+        global_to_union = Dict(g => l for (l, g) in enumerate(union_indices))
+        A_col_to_union = [global_to_union[g] for g in A.col_indices]
 
-    # Convert result back to global col_indices
-    result_col_indices_local = isempty(result_union.rowval) ? Int[] : unique(sort(result_union.rowval))
-    result_col_indices = isempty(result_col_indices_local) ? Int[] : union_indices[result_col_indices_local]
+        # Build and cache mapping: plan.AT global indices -> union indices (dense vector)
+        ncols_B = plan.AT.m
+        plan_global_to_union = zeros(Int, ncols_B)
+        for g in plan_col_indices
+            plan_global_to_union[g] = global_to_union[g]
+        end
 
-    # Compress result
-    compressed_result = compress_AT(result_union, result_col_indices_local)
+        # Reindex both to union space using the mappings
+        A_union = reindex_to_union_cached(A.A.parent, A_col_to_union, union_size)
+        plan_union = reindex_global_to_union_cached(plan.AT, plan_global_to_union, union_size)
 
-    structural_hash = compute_structural_hash(A.row_partition, result_col_indices, compressed_result, comm)
+        # Add in union space
+        result_union = A_union + plan_union
 
-    return SparseMatrixMPI{T}(structural_hash, A.row_partition, A.col_partition,
+        # Convert result back to global col_indices
+        result_col_indices_local = isempty(result_union.rowval) ? Int[] : unique(sort(result_union.rowval))
+        result_col_indices = isempty(result_col_indices_local) ? Int[] : union_indices[result_col_indices_local]
+
+        # Compress result
+        compressed_result = compress_AT(result_union, result_col_indices_local)
+
+        # Compute and cache everything
+        plan.addition_structural_hash = compute_structural_hash(A.row_partition, result_col_indices, compressed_result, comm)
+        plan.addition_col_indices = result_col_indices
+        plan.addition_union_indices = union_indices
+        plan.addition_A_col_to_union = A_col_to_union
+        plan.addition_plan_global_to_union = plan_global_to_union
+        plan.addition_result_col_indices_local = result_col_indices_local
+    else
+        # Subsequent executions: use cached mappings
+        union_indices = plan.addition_union_indices
+        union_size = length(union_indices)
+        result_col_indices = plan.addition_col_indices
+        result_col_indices_local = plan.addition_result_col_indices_local
+
+        # Use cached mappings for reindexing
+        A_union = reindex_to_union_cached(A.A.parent, plan.addition_A_col_to_union, union_size)
+        plan_union = reindex_global_to_union_cached(plan.AT, plan.addition_plan_global_to_union, union_size)
+        result_union = A_union + plan_union
+
+        # Compress using cached local indices
+        compressed_result = compress_AT(result_union, result_col_indices_local)
+    end
+
+    return SparseMatrixMPI{T}(plan.addition_structural_hash, A.row_partition, A.col_partition,
         result_col_indices, transpose(compressed_result), nothing)
 end
 
@@ -928,31 +1043,68 @@ function Base.:-(A::SparseMatrixMPI{T}, B::SparseMatrixMPI{T}) where T
     plan = get_addition_plan(A, B)
     execute_plan!(plan, B)
 
-    # A.A.parent has compressed local indices (m = length(A.col_indices))
-    # plan.AT has global indices (m = ncols_B)
-    # We need to reindex both to a common "union" space before subtracting
+    # Check if mappings are already cached in the plan (same structure as addition)
+    if plan.addition_A_col_to_union === nothing
+        # First execution: compute everything and cache
 
-    # Compute union of column indices
-    plan_col_indices = isempty(plan.AT.rowval) ? Int[] : unique(sort(plan.AT.rowval))
-    union_indices = sort(unique(vcat(A.col_indices, plan_col_indices)))
+        # A.A.parent has compressed local indices (m = length(A.col_indices))
+        # plan.AT has global indices (m = ncols_B)
+        # We need to reindex both to a common "union" space before subtracting
 
-    # Reindex both to union space
-    A_union = reindex_to_union(A.A.parent, A.col_indices, union_indices)
-    plan_union = reindex_global_to_union(plan.AT, union_indices)
+        # Compute union of column indices
+        plan_col_indices = isempty(plan.AT.rowval) ? Int[] : unique(sort(plan.AT.rowval))
+        union_indices = sort(unique(vcat(A.col_indices, plan_col_indices)))
+        union_size = length(union_indices)
 
-    # Subtract in union space
-    result_union = A_union - plan_union
+        # Build and cache mapping: A's local col indices -> union indices
+        global_to_union = Dict(g => l for (l, g) in enumerate(union_indices))
+        A_col_to_union = [global_to_union[g] for g in A.col_indices]
 
-    # Convert result back to global col_indices
-    result_col_indices_local = isempty(result_union.rowval) ? Int[] : unique(sort(result_union.rowval))
-    result_col_indices = isempty(result_col_indices_local) ? Int[] : union_indices[result_col_indices_local]
+        # Build and cache mapping: plan.AT global indices -> union indices (dense vector)
+        ncols_B = plan.AT.m
+        plan_global_to_union = zeros(Int, ncols_B)
+        for g in plan_col_indices
+            plan_global_to_union[g] = global_to_union[g]
+        end
 
-    # Compress result
-    compressed_result = compress_AT(result_union, result_col_indices_local)
+        # Reindex both to union space using the mappings
+        A_union = reindex_to_union_cached(A.A.parent, A_col_to_union, union_size)
+        plan_union = reindex_global_to_union_cached(plan.AT, plan_global_to_union, union_size)
 
-    structural_hash = compute_structural_hash(A.row_partition, result_col_indices, compressed_result, comm)
+        # Subtract in union space
+        result_union = A_union - plan_union
 
-    return SparseMatrixMPI{T}(structural_hash, A.row_partition, A.col_partition,
+        # Convert result back to global col_indices
+        result_col_indices_local = isempty(result_union.rowval) ? Int[] : unique(sort(result_union.rowval))
+        result_col_indices = isempty(result_col_indices_local) ? Int[] : union_indices[result_col_indices_local]
+
+        # Compress result
+        compressed_result = compress_AT(result_union, result_col_indices_local)
+
+        # Compute and cache everything (same structure as addition)
+        plan.addition_structural_hash = compute_structural_hash(A.row_partition, result_col_indices, compressed_result, comm)
+        plan.addition_col_indices = result_col_indices
+        plan.addition_union_indices = union_indices
+        plan.addition_A_col_to_union = A_col_to_union
+        plan.addition_plan_global_to_union = plan_global_to_union
+        plan.addition_result_col_indices_local = result_col_indices_local
+    else
+        # Subsequent executions: use cached mappings
+        union_indices = plan.addition_union_indices
+        union_size = length(union_indices)
+        result_col_indices = plan.addition_col_indices
+        result_col_indices_local = plan.addition_result_col_indices_local
+
+        # Use cached mappings for reindexing
+        A_union = reindex_to_union_cached(A.A.parent, plan.addition_A_col_to_union, union_size)
+        plan_union = reindex_global_to_union_cached(plan.AT, plan.addition_plan_global_to_union, union_size)
+        result_union = A_union - plan_union
+
+        # Compress using cached local indices
+        compressed_result = compress_AT(result_union, result_col_indices_local)
+    end
+
+    return SparseMatrixMPI{T}(plan.addition_structural_hash, A.row_partition, A.col_partition,
         result_col_indices, transpose(compressed_result), nothing)
 end
 
@@ -996,6 +1148,10 @@ mutable struct TransposePlan{T}
     row_partition::Vector{Int}
     col_partition::Vector{Int}
     col_indices::Vector{Int}
+    # Precomputed compress_map: compress_map[global_col] = local_col
+    compress_map::Vector{Int}
+    # Cached structural hash for transpose result (computed lazily on first execution)
+    structural_hash::OptionalBlake3Hash
 end
 
 """
@@ -1176,11 +1332,24 @@ function TransposePlan(A::SparseMatrixMPI{T}) where T
     # Compute col_indices for result
     result_col_indices = isempty(rowval) ? Int[] : unique(sort(rowval))
 
+    # Precompute compress_map: compress_map[global_col] = local_col
+    if isempty(result_col_indices)
+        compress_map = Int[]
+    else
+        max_col = maximum(result_col_indices)
+        compress_map = zeros(Int, max_col)
+        for (local_idx, global_idx) in enumerate(result_col_indices)
+            compress_map[global_idx] = local_idx
+        end
+    end
+
     return TransposePlan{T}(
         rank_ids, send_indices_final, send_bufs, send_reqs,
         recv_rank_ids, recv_bufs, recv_reqs, recv_perm,
         local_src_indices, local_dst_indices,
-        result_AT, result_row_partition, result_col_partition, result_col_indices
+        result_AT, result_row_partition, result_col_partition, result_col_indices,
+        compress_map,
+        nothing  # structural_hash (computed lazily on first execution)
     )
 end
 
@@ -1241,13 +1410,15 @@ function execute_plan!(plan::TransposePlan{T}, A::SparseMatrixMPI{T}) where T
         copy(plan.AT.nzval)
     )
 
-    # Compress result_AT: convert global column indices to local indices
-    compressed_result_AT = compress_AT(result_AT, plan.col_indices)
+    # Compress result_AT: convert global column indices to local indices (using precomputed map)
+    compressed_result_AT = compress_AT_cached(result_AT, plan.compress_map, length(plan.col_indices))
 
-    # Compute structural hash
-    structural_hash = compute_structural_hash(plan.row_partition, plan.col_indices, compressed_result_AT, comm)
+    # Use cached hash if available, otherwise compute and cache
+    if plan.structural_hash === nothing
+        plan.structural_hash = compute_structural_hash(plan.row_partition, plan.col_indices, compressed_result_AT, comm)
+    end
 
-    return SparseMatrixMPI{T}(structural_hash, plan.row_partition, plan.col_partition,
+    return SparseMatrixMPI{T}(plan.structural_hash, plan.row_partition, plan.col_partition,
         plan.col_indices, transpose(compressed_result_AT), nothing)
 end
 
@@ -1378,7 +1549,8 @@ function VectorPlan(A::SparseMatrixMPI{T}, x::VectorMPI{T}) where T
     return VectorPlan{T}(
         send_rank_ids, send_indices_final, send_bufs, send_reqs,
         recv_rank_ids, recv_bufs, recv_reqs, recv_perm_final,
-        local_src_indices, local_dst_indices, gathered
+        local_src_indices, local_dst_indices, gathered,
+        nothing, nothing  # result_partition_hash, result_partition (computed lazily)
     )
 end
 
@@ -1436,12 +1608,24 @@ The result has the same row partition as A.
 function Base.:*(A::SparseMatrixMPI{T}, x::VectorMPI{T}) where T
     rank = MPI.Comm_rank(MPI.COMM_WORLD)
     local_rows = A.row_partition[rank+2] - A.row_partition[rank+1]
+
+    # Get the plan and use cached partition hash if available
+    plan = get_vector_plan(A, x)
+    if plan.result_partition_hash === nothing
+        plan.result_partition_hash = compute_partition_hash(A.row_partition)
+        plan.result_partition = copy(A.row_partition)
+    end
+
     y = VectorMPI{T}(
-        compute_partition_hash(A.row_partition),
-        copy(A.row_partition),
+        plan.result_partition_hash,
+        plan.result_partition,  # Partition is immutable, no need to copy
         Vector{T}(undef, local_rows)
     )
-    return LinearAlgebra.mul!(y, A, x)
+
+    # Execute the plan directly since we already have it
+    gathered = execute_plan!(plan, x)
+    LinearAlgebra.mul!(y.v, transpose(A.A.parent), gathered)
+    return y
 end
 
 """
@@ -1843,9 +2027,9 @@ function Base.sum(A::SparseMatrixMPI{T}; dims=nothing) where T
             end
         end
 
-        # Result has A's row partition
+        # Result has A's row partition (partition is immutable, no need to copy)
         hash = compute_partition_hash(A.row_partition)
-        return VectorMPI{T}(hash, copy(A.row_partition), local_row_sums)
+        return VectorMPI{T}(hash, A.row_partition, local_row_sums)
     else
         throw(ArgumentError("dims must be nothing, 1, or 2"))
     end

@@ -109,6 +109,9 @@ mutable struct VectorPlan{T}
     local_src_indices::Vector{Int}
     local_dst_indices::Vector{Int}
     gathered::Vector{T}
+    # Cached partition hash for result vector (computed lazily on first use)
+    result_partition_hash::OptionalBlake3Hash
+    result_partition::Union{Nothing, Vector{Int}}
 end
 
 """
@@ -216,7 +219,8 @@ function VectorPlan(target_partition::Vector{Int}, source::VectorMPI{T}) where T
     return VectorPlan{T}(
         send_rank_ids, send_indices_final, send_bufs, send_reqs,
         recv_rank_ids, recv_bufs, recv_reqs, recv_perm_final,
-        local_src_indices, local_dst_indices, gathered
+        local_src_indices, local_dst_indices, gathered,
+        nothing, nothing  # result_partition_hash, result_partition (computed lazily)
     )
 end
 
@@ -528,7 +532,7 @@ function Base.:+(u::VectorMPI{T}, v::VectorMPI{T}) where T
         # Align v to u's partition
         plan = get_vector_align_plan(u, v)
         v_aligned = execute_plan!(plan, v)
-        return VectorMPI{T}(u.structural_hash, copy(u.partition), u.v .+ v_aligned)
+        return VectorMPI{T}(u.structural_hash, u.partition, u.v .+ v_aligned)
     end
 end
 
@@ -545,7 +549,7 @@ function Base.:-(u::VectorMPI{T}, v::VectorMPI{T}) where T
         # Align v to u's partition
         plan = get_vector_align_plan(u, v)
         v_aligned = execute_plan!(plan, v)
-        return VectorMPI{T}(u.structural_hash, copy(u.partition), u.v .- v_aligned)
+        return VectorMPI{T}(u.structural_hash, u.partition, u.v .- v_aligned)
     end
 end
 
@@ -890,8 +894,8 @@ function Base.similar(bc::Broadcasted{VectorMPIStyle}, ::Type{ElType}) where ElT
     if v === nothing
         error("No VectorMPI found in broadcast arguments")
     end
-    # Create output with same partition
-    return VectorMPI{ElType}(v.structural_hash, copy(v.partition), Vector{ElType}(undef, length(v.v)))
+    # Create output with same partition (partition is immutable, no need to copy)
+    return VectorMPI{ElType}(v.structural_hash, v.partition, Vector{ElType}(undef, length(v.v)))
 end
 
 """

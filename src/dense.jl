@@ -344,6 +344,9 @@ mutable struct DenseMatrixVectorPlan{T}
     local_src_indices::Vector{Int}
     local_dst_indices::Vector{Int}
     gathered::Vector{T}
+    # Cached partition hash for result vector (computed lazily on first use)
+    result_partition_hash::OptionalBlake3Hash
+    result_partition::Union{Nothing, Vector{Int}}
 end
 
 """
@@ -446,7 +449,8 @@ function DenseMatrixVectorPlan(A::MatrixMPI{T}, x::VectorMPI{T}) where T
     return DenseMatrixVectorPlan{T}(
         send_rank_ids, send_indices_final, send_bufs, send_reqs,
         recv_rank_ids, recv_bufs, recv_reqs, recv_perm_final,
-        local_src_indices, local_dst_indices, gathered
+        local_src_indices, local_dst_indices, gathered,
+        nothing, nothing  # result_partition_hash, result_partition (computed lazily)
     )
 end
 
@@ -536,12 +540,24 @@ The result has the same row partition as A.
 function Base.:*(A::MatrixMPI{T}, x::VectorMPI{T}) where T
     rank = MPI.Comm_rank(MPI.COMM_WORLD)
     local_rows = A.row_partition[rank + 2] - A.row_partition[rank + 1]
+
+    # Get the plan and use cached partition hash if available
+    plan = get_dense_vector_plan(A, x)
+    if plan.result_partition_hash === nothing
+        plan.result_partition_hash = compute_partition_hash(A.row_partition)
+        plan.result_partition = copy(A.row_partition)
+    end
+
     y = VectorMPI{T}(
-        compute_partition_hash(A.row_partition),
-        copy(A.row_partition),
+        plan.result_partition_hash,
+        plan.result_partition,  # Partition is immutable, no need to copy
         Vector{T}(undef, local_rows)
     )
-    return LinearAlgebra.mul!(y, A, x)
+
+    # Execute the plan directly since we already have it
+    gathered = execute_plan!(plan, x)
+    LinearAlgebra.mul!(y.v, A.A, gathered)
+    return y
 end
 
 # Dense transpose plan
@@ -588,6 +604,8 @@ mutable struct DenseTransposePlan{T}
     AT::Matrix{T}
     row_partition::Vector{Int}
     col_partition::Vector{Int}
+    # Cached structural hash for transpose result (computed lazily on first execution)
+    structural_hash::OptionalBlake3Hash
 end
 
 """
@@ -715,7 +733,8 @@ function DenseTransposePlan(A::MatrixMPI{T}) where T
         rank_ids, send_row_ranges, send_col_ranges, send_bufs, send_reqs,
         recv_rank_ids, recv_row_ranges, recv_col_ranges, recv_bufs, recv_reqs,
         local_row_range, local_col_range,
-        AT, result_row_partition, result_col_partition
+        AT, result_row_partition, result_col_partition,
+        nothing  # structural_hash (computed lazily on first execution)
     )
 end
 
@@ -790,11 +809,13 @@ function execute_plan!(plan::DenseTransposePlan{T}, A::MatrixMPI{T}) where T
     # Create result with a copy of AT
     result_AT = copy(plan.AT)
 
-    # Compute structural hash
-    structural_hash = compute_dense_structural_hash(
-        plan.row_partition, plan.col_partition, size(result_AT), comm)
+    # Use cached hash if available, otherwise compute and cache
+    if plan.structural_hash === nothing
+        plan.structural_hash = compute_dense_structural_hash(
+            plan.row_partition, plan.col_partition, size(result_AT), comm)
+    end
 
-    return MatrixMPI{T}(structural_hash, plan.row_partition, plan.col_partition, result_AT)
+    return MatrixMPI{T}(plan.structural_hash, plan.row_partition, plan.col_partition, result_AT)
 end
 
 """
@@ -876,6 +897,9 @@ mutable struct DenseTransposeVectorPlan{T}
     local_src_indices::Vector{Int}
     local_dst_indices::Vector{Int}
     gathered::Vector{T}
+    # Cached partition hash for result vector (computed lazily on first use)
+    result_partition_hash::OptionalBlake3Hash
+    result_partition::Union{Nothing, Vector{Int}}
 end
 
 # Cache for DenseTransposeVectorPlans
@@ -981,7 +1005,8 @@ function DenseTransposeVectorPlan(A::MatrixMPI{T}, x::VectorMPI{T}) where T
     return DenseTransposeVectorPlan{T}(
         send_rank_ids, send_indices_final, send_bufs, send_reqs,
         recv_rank_ids, recv_bufs, recv_reqs, recv_perm_final,
-        local_src_indices, local_dst_indices, gathered
+        local_src_indices, local_dst_indices, gathered,
+        nothing, nothing  # result_partition_hash, result_partition (computed lazily)
     )
 end
 
@@ -1056,6 +1081,13 @@ function Base.:*(At::Transpose{T,MatrixMPI{T}}, x::VectorMPI{T}) where T
     rank = MPI.Comm_rank(comm)
 
     plan = get_dense_transpose_vector_plan(A, x)
+
+    # Use cached partition hash if available
+    if plan.result_partition_hash === nothing
+        plan.result_partition_hash = compute_partition_hash(A.col_partition)
+        plan.result_partition = copy(A.col_partition)
+    end
+
     gathered = execute_plan!(plan, x)
 
     # Local computation: transpose(A.A) * local_gathered
@@ -1078,10 +1110,10 @@ function Base.:*(At::Transpose{T,MatrixMPI{T}}, x::VectorMPI{T}) where T
     my_col_end = A.col_partition[rank+2] - 1
     local_result = full_result[my_col_start:my_col_end]
 
-    # Create result vector
+    # Create result vector (partition is immutable, no need to copy)
     y = VectorMPI{T}(
-        compute_partition_hash(A.col_partition),
-        copy(A.col_partition),
+        plan.result_partition_hash,
+        plan.result_partition,
         local_result
     )
     return y
