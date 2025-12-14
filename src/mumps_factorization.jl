@@ -8,7 +8,8 @@ parallel direct solve of sparse linear systems.
 using MPI
 using SparseArrays
 using MUMPS
-using MUMPS: Mumps, set_icntl!, invoke_mumps!, MUMPS_INT, MUMPS_INT8, suppress_printing!
+using MUMPS: Mumps, set_icntl!, MUMPS_INT, MUMPS_INT8, suppress_printing!
+import MUMPS: invoke_mumps_unsafe!
 
 # ============================================================================
 # MUMPS Factorization Type
@@ -21,6 +22,22 @@ Distributed MUMPS factorization result.
 
 Wraps a MUMPS object that has been analyzed and factorized. The factorization
 can be reused for multiple solves with different right-hand sides.
+
+# Important: Manual Cleanup Required
+
+Unlike other types in LinearAlgebraMPI, factorization objects require explicit cleanup
+via `finalize!(F)` when you are done using them. This is necessary because MUMPS
+cleanup routines call MPI functions, and Julia's garbage collector may run finalizers
+after MPI has shut down, causing crashes.
+
+```julia
+F = lu(A)
+x = F \\ b
+finalize!(F)  # Required! Call when done with factorization
+```
+
+If you forget to call `finalize!`, the program will still work but MUMPS resources
+will not be released until program exit (minor memory leak, but no crash).
 
 # Fields
 - `mumps`: MUMPS solver object
@@ -120,6 +137,7 @@ function _create_mumps_factorization(A::SparseMatrixMPI{T}, symmetric::Bool) whe
     # sym=0: unsymmetric, sym=1: SPD, sym=2: general symmetric
     mumps_sym = symmetric ? MUMPS.mumps_definite : MUMPS.mumps_unsymmetric
     mumps = Mumps{T}(mumps_sym, MUMPS.default_icntl, MUMPS.default_cntl64)
+    mumps._finalized = true  # Disable GC finalizer to avoid post-MPI crash
 
     # Suppress all MUMPS output
     suppress_printing!(mumps)
@@ -143,12 +161,12 @@ function _create_mumps_factorization(A::SparseMatrixMPI{T}, symmetric::Bool) whe
 
     # Analysis phase (job = 1)
     mumps.job = MUMPS_INT(1)
-    invoke_mumps!(mumps)
+    invoke_mumps_unsafe!(mumps)
     _check_mumps_error(mumps, "analysis")
 
     # Factorization phase (job = 2)
     mumps.job = MUMPS_INT(2)
-    invoke_mumps!(mumps)
+    invoke_mumps_unsafe!(mumps)
     _check_mumps_error(mumps, "factorization")
 
     # Pre-allocate RHS buffer on rank 0
@@ -182,6 +200,16 @@ Compute LU factorization of a distributed sparse matrix using MUMPS.
 
 Returns a `MUMPSFactorizationMPI` that can be used with the backslash operator
 or `solve` function.
+
+**Important:** Call `finalize!(F)` when done to release MUMPS resources.
+See `MUMPSFactorizationMPI` for details.
+
+# Example
+```julia
+F = lu(A)
+x = F \\ b
+finalize!(F)
+```
 """
 function LinearAlgebra.lu(A::SparseMatrixMPI{T}) where T
     return _create_mumps_factorization(A, false)
@@ -195,6 +223,16 @@ Compute LDLT factorization of a distributed symmetric sparse matrix using MUMPS.
 The matrix must be symmetric. MUMPS uses only the lower triangular part.
 Returns a `MUMPSFactorizationMPI` that can be used with the backslash operator
 or `solve` function.
+
+**Important:** Call `finalize!(F)` when done to release MUMPS resources.
+See `MUMPSFactorizationMPI` for details.
+
+# Example
+```julia
+F = ldlt(A)
+x = F \\ b
+finalize!(F)
+```
 """
 function LinearAlgebra.ldlt(A::SparseMatrixMPI{T}) where T
     return _create_mumps_factorization(A, true)
@@ -241,7 +279,7 @@ function solve!(x::VectorMPI{T}, F::MUMPSFactorizationMPI{T}, b::VectorMPI{T}) w
 
     # Solve phase (job = 3)
     F.mumps.job = MUMPS_INT(3)
-    invoke_mumps!(F.mumps)
+    invoke_mumps_unsafe!(F.mumps)
     _check_mumps_error(F.mumps, "solve")
 
     # Scatter solution from rank 0
@@ -271,21 +309,26 @@ end
 """
     finalize!(F)
 
-Release resources associated with a factorization.
+Release resources associated with a MUMPS factorization. **This must be called
+explicitly** when you are done using a factorization returned by `lu()` or `ldlt()`.
 
-Call this when you are done using a factorization returned by `lu()` or `ldlt()`
-to immediately free MUMPS resources. If not called, resources are freed when
-the garbage collector runs, but this may cause warnings at program exit if
-MPI has already been finalized.
+Unlike most Julia objects, MUMPS factorizations cannot rely on garbage collection
+for cleanup because MUMPS internally uses MPI, and Julia's GC may run after MPI
+has shut down. To avoid crashes at program exit, automatic GC finalization is
+disabled for these objects.
+
+If you forget to call `finalize!`, the program will still run correctly, but
+MUMPS memory will not be released until the program exits (a minor memory leak).
 
 # Example
 ```julia
 F = lu(A)
 x = F \\ b
-finalize!(F)  # Free resources immediately
+finalize!(F)  # Required! Free resources when done
 ```
 """
 function finalize!(F::MUMPSFactorizationMPI)
+    F.mumps._finalized = false  # Re-enable finalization
     MUMPS.finalize!(F.mumps)
     return F
 end
