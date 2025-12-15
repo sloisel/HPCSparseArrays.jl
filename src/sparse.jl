@@ -740,55 +740,6 @@ function execute_plan!(plan::MatrixPlan{T}, B::SparseMatrixMPI{T}) where T
 
     return plan.AT
 end
-
-"""
-    _merge_thread_columns(m, n, thread_cols, thread_colptrs, thread_rowvals, thread_nzvals, Ti)
-
-Merge thread-local column data into a single SparseMatrixCSC.
-Each thread computed a subset of columns; this function combines them in column order.
-"""
-function _merge_thread_columns(m::Int, n::Int, thread_cols, thread_colptrs, thread_rowvals, thread_nzvals, ::Type{Tv}, ::Type{Ti}) where {Tv,Ti}
-    nthreads = length(thread_cols)
-
-    # Count total nonzeros
-    total_nnz = sum(length(rv) for rv in thread_rowvals)
-
-    # Build mapping: for each column j, find (thread_id, local_col_index)
-    col_to_thread = Vector{Tuple{Int,Int}}(undef, n)
-    for tid in 1:nthreads
-        for (local_idx, j) in enumerate(thread_cols[tid])
-            col_to_thread[j] = (tid, local_idx)
-        end
-    end
-
-    # Build final CSC structure
-    colptr = Vector{Ti}(undef, n + 1)
-    rowval = Vector{Ti}(undef, total_nnz)
-    nzval = Vector{Tv}(undef, total_nnz)
-
-    colptr[1] = 1
-    pos = 1
-
-    for j in 1:n
-        tid, local_idx = col_to_thread[j]
-
-        # Get range for this column in thread's data
-        start_ptr = thread_colptrs[tid][local_idx]
-        end_ptr = local_idx < length(thread_colptrs[tid]) ? thread_colptrs[tid][local_idx+1] - 1 : length(thread_rowvals[tid])
-
-        # Copy this column's data
-        for k in start_ptr:end_ptr
-            rowval[pos] = thread_rowvals[tid][k]
-            nzval[pos] = thread_nzvals[tid][k]
-            pos += 1
-        end
-
-        colptr[j+1] = pos
-    end
-
-    return SparseMatrixCSC{Tv,Ti}(m, n, colptr, rowval, nzval)
-end
-
 """
     ⊛(A::SparseMatrixCSC{Tv,Ti}, B::SparseMatrixCSC{Tv,Ti}; max_threads=Threads.nthreads()) where {Tv,Ti}
 

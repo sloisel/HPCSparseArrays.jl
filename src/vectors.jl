@@ -789,23 +789,6 @@ _find_all_vectormpi_impl(v::VectorMPI, args...) = (v, _find_all_vectormpi_impl(a
 _find_all_vectormpi_impl(::Any, args...) = _find_all_vectormpi_impl(args...)
 
 """
-    _check_same_partition(vs::Tuple)
-
-Check that all VectorMPI in the tuple have the same partition.
-Returns true if all partitions match, false otherwise.
-"""
-function _check_same_partition(vs::Tuple)
-    isempty(vs) && return true
-    first_partition = vs[1].partition
-    for v in vs[2:end]
-        if v.partition != first_partition
-            return false
-        end
-    end
-    return true
-end
-
-"""
     _prepare_broadcast_arg(arg, ref_partition, comm)
 
 Prepare a broadcast argument for local computation.
