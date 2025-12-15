@@ -89,4 +89,7 @@ end
     @testset "Threaded Sparse Multiplication" begin
         run_mpi_test(joinpath(@__DIR__, "test_threaded_mul.jl"); nprocs=4, expect_success=true)
     end
+    @testset "Mixed Sparse-Dense Operations" begin
+        run_mpi_test(joinpath(@__DIR__, "test_new_operations.jl"); nprocs=4, expect_success=true)
+    end
 end
