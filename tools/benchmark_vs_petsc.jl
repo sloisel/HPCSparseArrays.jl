@@ -1,8 +1,10 @@
 #!/usr/bin/env julia
 #
-# Benchmark LinearAlgebraMPI.jl vs SafePETSc.jl for sparse direct solves.
+# Benchmark LinearAlgebraMPI.jl vs SafePETSc.jl for sparse operations.
 #
-# This script compares solve performance on a 2D Laplacian system.
+# This script compares performance on:
+# 1. Matrix-matrix multiplication (A * A)
+# 2. Sparse direct solves (LDLT factorization)
 #
 # Usage: mpiexec -n 4 julia --project=tools --threads=2 tools/benchmark_vs_petsc.jl
 #
@@ -44,6 +46,60 @@ function laplacian_2d_sparse(n)
     I_g = sparse(I, grid_size, grid_size)
     L2D = kron(I_g, L1D) + kron(L1D, I_g)
     return L2D
+end
+
+"""
+    benchmark_matmat_linearalgebrampi(A_local, n_samples)
+
+Benchmark LinearAlgebraMPI.jl matrix-matrix multiplication (A * A).
+Returns median time in seconds.
+"""
+function benchmark_matmat_linearalgebrampi(A_local, n_samples)
+    A_mpi = SparseMatrixMPI{Float64}(A_local)
+
+    # Warmup
+    C = A_mpi * A_mpi
+
+    # Benchmark
+    MPI.Barrier(comm)
+    times = Float64[]
+    for _ in 1:n_samples
+        MPI.Barrier(comm)
+        t_start = MPI.Wtime()
+        C = A_mpi * A_mpi
+        MPI.Barrier(comm)
+        t_end = MPI.Wtime()
+        push!(times, t_end - t_start)
+    end
+
+    return median(times)
+end
+
+"""
+    benchmark_matmat_safepetsc(A_local, n_samples)
+
+Benchmark SafePETSc.jl matrix-matrix multiplication (A * A).
+Returns median time in seconds.
+"""
+function benchmark_matmat_safepetsc(A_local, n_samples)
+    A_petsc = SafePETSc.Mat_uniform(A_local)
+
+    # Warmup
+    C = A_petsc * A_petsc
+
+    # Benchmark
+    MPI.Barrier(comm)
+    times = Float64[]
+    for _ in 1:n_samples
+        MPI.Barrier(comm)
+        t_start = MPI.Wtime()
+        C = A_petsc * A_petsc
+        MPI.Barrier(comm)
+        t_end = MPI.Wtime()
+        push!(times, t_end - t_start)
+    end
+
+    return median(times)
 end
 
 """
@@ -197,6 +253,53 @@ function run_benchmarks()
         println()
     end
 
+    # ========================================================================
+    # Matrix-Matrix Multiplication Benchmark (A * A)
+    # ========================================================================
+    if rank == 0
+        println("=" ^ 70)
+        println("Matrix-Matrix Multiplication (A * A)")
+        println("=" ^ 70)
+        println()
+    end
+
+    # Benchmark LinearAlgebraMPI.jl matmat
+    if rank == 0
+        println("Benchmarking LinearAlgebraMPI.jl (A * A)...")
+    end
+    lampi_matmat_time = benchmark_matmat_linearalgebrampi(A_local, n_samples)
+    if rank == 0
+        println("  Time: $(format_time(lampi_matmat_time))")
+        println()
+    end
+
+    # Benchmark SafePETSc.jl matmat
+    if rank == 0
+        println("Benchmarking SafePETSc.jl (A * A)...")
+    end
+    petsc_matmat_time = benchmark_matmat_safepetsc(A_local, n_samples)
+    if rank == 0
+        println("  Time: $(format_time(petsc_matmat_time))")
+        println()
+    end
+
+    # Matmat summary
+    if rank == 0
+        matmat_speedup = petsc_matmat_time / lampi_matmat_time
+        println(@sprintf("Matrix-Matrix Speedup (LinearAlgebraMPI vs SafePETSc): %.2fx", matmat_speedup))
+        println()
+    end
+
+    # ========================================================================
+    # Sparse Direct Solve Benchmark (LDLT)
+    # ========================================================================
+    if rank == 0
+        println("=" ^ 70)
+        println("Sparse Direct Solve (LDLT)")
+        println("=" ^ 70)
+        println()
+    end
+
     # Benchmark LinearAlgebraMPI.jl
     if rank == 0
         println("Benchmarking LinearAlgebraMPI.jl (LDLT)...")
@@ -270,6 +373,12 @@ function run_benchmarks()
             println(f, "# Julia threads: $(Threads.nthreads())")
             println(f, "# Problem size: $actual_n x $actual_n, nnz=$(nnz(A_local))")
             println(f, "#")
+            println(f, "# Matrix-Matrix Multiplication (A * A)")
+            println(f, "# library,matmat_time")
+            println(f, "SafePETSc,$petsc_matmat_time")
+            println(f, "LinearAlgebraMPI,$lampi_matmat_time")
+            println(f, "#")
+            println(f, "# Sparse Direct Solve (LDLT)")
             println(f, "# library,factorization_time,solve_time,total_time")
             println(f, "SafePETSc,$petsc_setup_time,$petsc_solve_time,$(petsc_setup_time + petsc_solve_time)")
             println(f, "LinearAlgebraMPI,$lampi_fact_time,$lampi_solve_time,$(lampi_fact_time + lampi_solve_time)")
