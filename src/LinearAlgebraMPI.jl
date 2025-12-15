@@ -6,7 +6,7 @@ using SparseArrays
 using MUMPS
 import SparseArrays: nnz, issparse, dropzeros, spdiagm, blockdiag
 import LinearAlgebra
-import LinearAlgebra: tr, diag, triu, tril, Transpose, Adjoint, norm, opnorm, mul!, ldlt, BLAS
+import LinearAlgebra: tr, diag, triu, tril, Transpose, Adjoint, norm, opnorm, mul!, ldlt, BLAS, issymmetric
 
 export SparseMatrixMPI, MatrixMPI, VectorMPI, clear_plan_cache!, uniform_partition
 export ⊛  # Multithreaded sparse matrix multiplication
@@ -109,35 +109,254 @@ include("indexing.jl")
 include("mumps_factorization.jl")
 
 # ============================================================================
+# Symmetry Check
+# ============================================================================
+
+"""
+    _compare_rows_distributed(A::SparseMatrixMPI{T}, B::SparseMatrixMPI{T}) where T
+
+Compare two sparse matrices with potentially different row partitions.
+Redistributes B's rows to match A's row partition, then compares locally.
+Returns true if all corresponding entries are equal.
+"""
+function _compare_rows_distributed(A::SparseMatrixMPI{T}, B::SparseMatrixMPI{T}) where T
+    comm = MPI.COMM_WORLD
+    rank = MPI.Comm_rank(comm)
+    nranks = MPI.Comm_size(comm)
+
+    # A's local rows
+    my_row_start = A.row_partition[rank + 1]
+    my_row_end = A.row_partition[rank + 2] - 1
+    my_nrows = my_row_end - my_row_start + 1
+
+    # For each of A's local rows, determine which rank owns that row in B
+    # B has row_partition = A.col_partition (since B = transpose(A))
+    rows_needed_from = [Int[] for _ in 1:nranks]  # rows_needed_from[r+1] = rows we need from rank r
+    for row in my_row_start:my_row_end
+        owner = searchsortedlast(B.row_partition, row) - 1
+        if owner >= nranks
+            owner = nranks - 1
+        end
+        push!(rows_needed_from[owner + 1], row)
+    end
+
+    # Exchange: tell each rank which rows we need from them
+    send_counts = Int32[length(rows_needed_from[r + 1]) for r in 0:nranks-1]
+    recv_counts = MPI.Alltoall(MPI.UBuffer(send_counts, 1), comm)
+
+    # Send row requests
+    send_reqs = MPI.Request[]
+    for r in 0:nranks-1
+        if send_counts[r + 1] > 0 && r != rank
+            req = MPI.Isend(rows_needed_from[r + 1], comm; dest=r, tag=80)
+            push!(send_reqs, req)
+        end
+    end
+
+    # Receive row requests
+    rows_to_send = Dict{Int, Vector{Int}}()
+    recv_reqs = MPI.Request[]
+    for r in 0:nranks-1
+        if recv_counts[r + 1] > 0 && r != rank
+            buf = Vector{Int}(undef, recv_counts[r + 1])
+            req = MPI.Irecv!(buf, comm; source=r, tag=80)
+            push!(recv_reqs, req)
+            rows_to_send[r] = buf
+        end
+    end
+
+    MPI.Waitall(vcat(send_reqs, recv_reqs))
+
+    # Now send the actual row data from B
+    # For each row, we send: (num_entries, col_indices..., values...)
+    BT = B.A.parent  # underlying CSC (columns = local rows of B)
+    B_row_start = B.row_partition[rank + 1]
+
+    # Prepare send buffers: pack row data
+    send_data = Dict{Int, Vector{UInt8}}()
+    send_data_reqs = MPI.Request[]
+
+    for r in 0:nranks-1
+        if r == rank
+            continue
+        end
+        rows = get(rows_to_send, r, Int[])
+        if isempty(rows)
+            continue
+        end
+
+        # Pack all requested rows into a buffer
+        io = IOBuffer()
+        for global_row in rows
+            local_row = global_row - B_row_start + 1
+            ptr_start = BT.colptr[local_row]
+            ptr_end = BT.colptr[local_row + 1] - 1
+            nnz_row = ptr_end - ptr_start + 1
+
+            write(io, Int32(nnz_row))
+            for ptr in ptr_start:ptr_end
+                global_col = B.col_indices[BT.rowval[ptr]]
+                write(io, Int32(global_col))
+            end
+            for ptr in ptr_start:ptr_end
+                write(io, BT.nzval[ptr])
+            end
+        end
+        send_data[r] = take!(io)
+        req = MPI.Isend(send_data[r], comm; dest=r, tag=81)
+        push!(send_data_reqs, req)
+    end
+
+    # Receive row data and compare with A's local rows
+    local_match = true
+    AT = A.A.parent
+    A_row_start = A.row_partition[rank + 1]
+
+    # First handle rows we own in both A and B (rank == rank case)
+    for global_row in rows_needed_from[rank + 1]
+        local_row_A = global_row - A_row_start + 1
+        local_row_B = global_row - B_row_start + 1
+
+        # Get A's row entries
+        ptr_start_A = AT.colptr[local_row_A]
+        ptr_end_A = AT.colptr[local_row_A + 1] - 1
+        nnz_A = ptr_end_A - ptr_start_A + 1
+
+        # Get B's row entries
+        ptr_start_B = BT.colptr[local_row_B]
+        ptr_end_B = BT.colptr[local_row_B + 1] - 1
+        nnz_B = ptr_end_B - ptr_start_B + 1
+
+        if nnz_A != nnz_B
+            local_match = false
+            break
+        end
+
+        # Compare entries (need to handle potentially different orderings)
+        A_entries = Dict{Int, T}()
+        for ptr in ptr_start_A:ptr_end_A
+            global_col = A.col_indices[AT.rowval[ptr]]
+            A_entries[global_col] = AT.nzval[ptr]
+        end
+
+        for ptr in ptr_start_B:ptr_end_B
+            global_col = B.col_indices[BT.rowval[ptr]]
+            if !haskey(A_entries, global_col) || A_entries[global_col] != BT.nzval[ptr]
+                local_match = false
+                break
+            end
+        end
+
+        if !local_match
+            break
+        end
+    end
+
+    # Now receive and compare rows from other ranks
+    for r in 0:nranks-1
+        if r == rank || send_counts[r + 1] == 0
+            continue
+        end
+        if !local_match
+            # Still need to receive to avoid deadlock
+            MPI.Recv!(Vector{UInt8}(undef, 0), comm; source=r, tag=81)
+            continue
+        end
+
+        # Probe to get message size
+        status = MPI.Probe(comm; source=r, tag=81)
+        count = MPI.Get_count(status, UInt8)
+        recv_buf = Vector{UInt8}(undef, count)
+        MPI.Recv!(recv_buf, comm; source=r, tag=81)
+
+        io = IOBuffer(recv_buf)
+        for global_row in rows_needed_from[r + 1]
+            local_row_A = global_row - A_row_start + 1
+
+            # Read B's row data
+            nnz_B = read(io, Int32)
+            B_cols = [read(io, Int32) for _ in 1:nnz_B]
+            B_vals = [read(io, T) for _ in 1:nnz_B]
+
+            # Get A's row entries
+            ptr_start_A = AT.colptr[local_row_A]
+            ptr_end_A = AT.colptr[local_row_A + 1] - 1
+            nnz_A = ptr_end_A - ptr_start_A + 1
+
+            if nnz_A != nnz_B
+                local_match = false
+                break
+            end
+
+            A_entries = Dict{Int, T}()
+            for ptr in ptr_start_A:ptr_end_A
+                global_col = A.col_indices[AT.rowval[ptr]]
+                A_entries[global_col] = AT.nzval[ptr]
+            end
+
+            for (col, val) in zip(B_cols, B_vals)
+                if !haskey(A_entries, col) || A_entries[col] != val
+                    local_match = false
+                    break
+                end
+            end
+
+            if !local_match
+                break
+            end
+        end
+    end
+
+    MPI.Waitall(send_data_reqs)
+
+    # Allreduce to check if all ranks matched
+    global_match = MPI.Allreduce(local_match ? 1 : 0, MPI.BAND, comm)
+    return global_match == 1
+end
+
+"""
+    LinearAlgebra.issymmetric(A::SparseMatrixMPI{T}) where T
+
+Check if A is symmetric by materializing the transpose and comparing rows.
+Returns true if A == transpose(A).
+"""
+function LinearAlgebra.issymmetric(A::SparseMatrixMPI{T}) where T
+    m, n = size(A)
+    if m != n
+        return false
+    end
+
+    At = materialize_transpose(A)
+    return _compare_rows_distributed(A, At)
+end
+
+# ============================================================================
 # Direct Solve Interface (A \ b)
 # ============================================================================
 
 """
     Base.:\\(A::SparseMatrixMPI{T}, b::VectorMPI{T}) where T
 
-Solve A*x = b by automatically computing an LU factorization.
-For repeated solves with the same matrix, it's more efficient to compute
-the factorization once with `lu(A)` or `ldlt(A)` and reuse it.
+Solve A*x = b using LDLT if A is symmetric, otherwise LU.
+For repeated solves, compute the factorization once with `lu(A)` or `ldlt(A)`.
 """
 function Base.:\(A::SparseMatrixMPI{T}, b::VectorMPI{T}) where T
-    F = LinearAlgebra.lu(A)
+    F = issymmetric(A) ? LinearAlgebra.ldlt(A) : LinearAlgebra.lu(A)
     x = F \ b
-    MUMPS.finalize!(F.mumps)
+    finalize!(F)
     return x
 end
 
 """
     Base.:\\(At::Transpose{T,SparseMatrixMPI{T}}, b::VectorMPI{T}) where T
 
-Solve transpose(A)*x = b by materializing the transpose and computing
-an LU factorization of it.
+Solve transpose(A)*x = b using LDLT if transpose(A) is symmetric, otherwise LU.
 """
 function Base.:\(At::Transpose{T,SparseMatrixMPI{T}}, b::VectorMPI{T}) where T
-    # Materialize the transpose and factorize directly
     A_t = materialize_transpose(At.parent)
-    F = LinearAlgebra.lu(A_t)
+    F = issymmetric(A_t) ? LinearAlgebra.ldlt(A_t) : LinearAlgebra.lu(A_t)
     x = F \ b
-    MUMPS.finalize!(F.mumps)
+    finalize!(F)
     return x
 end
 
