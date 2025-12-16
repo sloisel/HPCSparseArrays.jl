@@ -48,10 +48,6 @@ const _destroy_list_lock = ReentrantLock()
     MUMPSFactorizationMPI{T}
 
 Distributed MUMPS factorization result. Can be reused for multiple solves.
-
-Factorization objects are automatically cleaned up when garbage collected,
-with synchronized finalization across MPI ranks. Manual `finalize!(F)` is
-still available for explicit control (must be called on all ranks together).
 """
 mutable struct MUMPSFactorizationMPI{T}
     id::Int  # Unique ID for finalization tracking
@@ -282,7 +278,6 @@ end
 
 Compute LU factorization of a distributed sparse matrix using MUMPS.
 Returns a `MUMPSFactorizationMPI` for use with `\\` or `solve`.
-Factorization is automatically cleaned up when garbage collected.
 """
 function LinearAlgebra.lu(A::SparseMatrixMPI{T}) where T
     return _create_mumps_factorization(A, false)
@@ -294,7 +289,6 @@ end
 Compute LDLT factorization of a distributed symmetric sparse matrix using MUMPS.
 The matrix must be symmetric; only the lower triangular part is used.
 Returns a `MUMPSFactorizationMPI` for use with `\\` or `solve`.
-Factorization is automatically cleaned up when garbage collected.
 """
 function LinearAlgebra.ldlt(A::SparseMatrixMPI{T}) where T
     return _create_mumps_factorization(A, true)
@@ -371,11 +365,7 @@ end
 """
     finalize!(F::MUMPSFactorizationMPI)
 
-Manually release MUMPS resources. This is a **collective operation** - all
-ranks must call it together for immediate cleanup.
-
-If the factorization has already been cleaned up (by automatic finalization
-or a previous manual call), this is a no-op but all ranks must still call it.
+Release MUMPS resources. Must be called on all ranks together.
 """
 function finalize!(F::MUMPSFactorizationMPI)
     # Check if already finalized (removed from registry)

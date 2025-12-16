@@ -91,16 +91,10 @@ Factorization uses MUMPS (MUltifrontal Massively Parallel Solver) with distribut
 - Created by `lu(A)` for general matrices or `ldlt(A)` for symmetric matrices
 - Stores COO arrays (irn_loc, jcn_loc, a_loc) to prevent GC while MUMPS holds pointers
 
-**Automatic cleanup:** Factorization objects are automatically cleaned up when garbage collected.
-The cleanup is synchronized across MPI ranks when the next factorization is created. Example:
-
 ```julia
 F = lu(A)
 x = F \ b
-# F is automatically cleaned up when GC'd and next factorization is created
 ```
-
-Manual `finalize!(F)` is still available for explicit control (must be called on all ranks together).
 
 ### Local Constructors
 
