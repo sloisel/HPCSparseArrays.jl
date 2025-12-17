@@ -40,12 +40,23 @@ Many operations in this module are collective and should not be run on a subset 
 
 ### Core Data Structures
 
+**SparseMatrixCSR{T,Ti}** (Type Alias)
+- `SparseMatrixCSR{T,Ti} = Transpose{T, SparseMatrixCSC{T,Ti}}` - type alias for CSR storage
+- In Julia, `Transpose{SparseMatrixCSC}` has a **dual life**:
+  - **Semantic view**: A lazy transpose of a CSC matrix (what `transpose(A)` returns)
+  - **Storage view**: Row-major (CSR) access to sparse data
+- Use `SparseMatrixCSR` when intent is CSR storage, use `transpose(A)` for mathematical transpose
+- `SparseMatrixCSR(A::SparseMatrixCSC)` converts CSC to CSR representing the **same** matrix
+- `SparseMatrixCSC(A::SparseMatrixCSR)` converts CSR to CSC representing the **same** matrix
+- For `B = SparseMatrixCSR(A)`, `B[i,j] == A[i,j]` (same matrix, different storage)
+
 **SparseMatrixMPI{T}**
 - Rows are partitioned across MPI ranks
-- `A::Transpose{T,SparseMatrixCSC{T,Int}}`: Local rows wrapped in a Transpose for type clarity
+- `A::SparseMatrixCSR{T,Int}`: Local rows in CSR format for efficient row-wise iteration
   - `A.parent` is the underlying CSC storage with shape `(length(col_indices), local_nrows)`
-  - Columns in `A.parent` correspond to local rows; this layout enables efficient row-wise iteration
-  - Storage is **compressed**: `A.parent.rowval` uses local column indices (1:length(col_indices)), not global
+  - `A.parent.colptr` acts as row pointers for the CSR format
+  - `A.parent.rowval` contains LOCAL column indices (1:length(col_indices)), not global
+  - Storage is **compressed** to avoid hypersparse issues
 - `row_partition`: Array of size `nranks + 1` defining which rows each rank owns (1-indexed boundaries)
 - `col_partition`: Array of size `nranks + 1` defining column partition (used for transpose operations)
 - `col_indices`: Sorted global column indices that appear in the local part (local→global mapping)
@@ -100,10 +111,18 @@ x = F \ b
 
 For efficient construction when data is already distributed:
 - `VectorMPI_local(v_local)`: Create from local vector portion
-- `SparseMatrixMPI_local(transpose(AT_local))`: Create from local rows
+- `SparseMatrixMPI_local(SparseMatrixCSR(local_csc))`: Create from local rows in CSR format
+- `SparseMatrixMPI_local(transpose(AT_local))`: Alternative using explicit transpose wrapper
 - `MatrixMPI_local(A_local)`: Create from local dense rows
 
 These infer the global partition via MPI.Allgather of local sizes.
+
+When building from triplets (I, J, V), the efficient pattern is to build M^T directly as CSC by swapping indices, then wrap in lazy transpose for CSR:
+```julia
+AT_local = sparse(local_J, local_I, local_V, ncols, local_nrows)  # M^T as CSC
+SparseMatrixMPI_local(transpose(AT_local))  # M in CSR format
+```
+This avoids an unnecessary physical transpose operation.
 
 ### Matrix Multiplication Flow
 

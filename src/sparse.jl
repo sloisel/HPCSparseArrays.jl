@@ -200,7 +200,8 @@ A distributed sparse matrix partitioned by rows across MPI ranks.
 - `row_partition::Vector{Int}`: Row partition boundaries, length = nranks + 1
 - `col_partition::Vector{Int}`: Column partition boundaries, length = nranks + 1 (placeholder for transpose)
 - `col_indices::Vector{Int}`: Global column indices that appear in the local part (local→global mapping)
-- `A::Transpose{T,SparseMatrixCSC{T,Int}}`: Local rows as a lazy transpose wrapper around compressed CSC storage
+- `A::SparseMatrixCSR{T,Int}`: Local rows in CSR format for efficient row-wise iteration
+- `cached_transpose`: Cached materialized transpose (bidirectionally linked)
 
 # Invariants
 - `col_indices`, `row_partition`, and `col_partition` are sorted
@@ -211,23 +212,32 @@ A distributed sparse matrix partitioned by rows across MPI ranks.
 - `A.parent.rowval` contains local indices in `1:length(col_indices)`
 
 # Storage Details
-The local rows are stored in compressed form as `A = transpose(AT)` where `AT::SparseMatrixCSC` has:
-- `AT.m = length(col_indices)` (compressed, not global ncols)
-- `AT.n` = number of local rows
-- `AT.rowval` contains LOCAL column indices (1:length(col_indices))
+The local rows are stored in CSR format (Compressed Sparse Row), which enables efficient
+row-wise iteration - essential for a row-partitioned distributed matrix.
+
+In Julia, `SparseMatrixCSR{T,Ti}` is a type alias for `Transpose{T, SparseMatrixCSC{T,Ti}}`.
+This type has a dual interpretation:
+- **Semantic view**: A lazy transpose of a CSC matrix
+- **Storage view**: Row-major (CSR) access to the data
+
+The underlying `A.parent::SparseMatrixCSC` stores the transposed data with:
+- `A.parent.m = length(col_indices)` (compressed, not global ncols)
+- `A.parent.n` = number of local rows (columns in the parent = rows in CSR)
+- `A.parent.colptr` = row pointers for the CSR format
+- `A.parent.rowval` = LOCAL column indices (1:length(col_indices))
 - `col_indices[local_idx]` maps local→global column indices
 
-This compression avoids "hypersparse" storage where `AT.m >> length(unique(AT.rowval))`,
-which would cause excessive allocations in matrix operations.
+This compression avoids "hypersparse" storage where the column dimension would be
+the global number of columns even if only a few columns have nonzeros locally.
 
-Access the underlying CSC via `A.parent` when needed for low-level operations.
+Access the underlying CSC storage via `A.parent` when needed for low-level operations.
 """
 mutable struct SparseMatrixMPI{T}
     structural_hash::OptionalBlake3Hash
     row_partition::Vector{Int}
     col_partition::Vector{Int}
     col_indices::Vector{Int}
-    A::Transpose{T,SparseMatrixCSC{T,Int}}
+    A::SparseMatrixCSR{T,Int}  # Local rows in CSR format (row-major storage)
     cached_transpose::Union{Nothing,SparseMatrixMPI{T}}
 end
 
@@ -259,19 +269,15 @@ function SparseMatrixMPI{T}(A::SparseMatrixCSC{T,Int};
     row_start = row_partition[rank+1]
     row_end = row_partition[rank+2] - 1
 
-    # Extract local rows and physically transpose to get CSC with shape (ncols, local_nrows)
-    # where columns correspond to local rows - this makes row iteration efficient.
-    # Note: Use transpose(), not ' (adjoint), to avoid conjugating complex values.
+    # Extract local rows and convert to CSR format for efficient row iteration
     local_A = A[row_start:row_end, :]
-    AT_storage = sparse(transpose(local_A))  # CSC (ncols, local_nrows)
 
     # Delegate to SparseMatrixMPI_local which handles compression and col_indices
-    # The lazy transpose wrapper signals the expected internal storage format
-    return SparseMatrixMPI_local(transpose(AT_storage); comm=comm, col_partition=col_partition)
+    return SparseMatrixMPI_local(SparseMatrixCSR(local_A); comm=comm, col_partition=col_partition)
 end
 
 """
-    SparseMatrixMPI_local(A_local::Transpose{T,SparseMatrixCSC{T,Int}}; comm=MPI.COMM_WORLD, col_partition=...) where T
+    SparseMatrixMPI_local(A_local::SparseMatrixCSR{T,Int}; comm=MPI.COMM_WORLD, col_partition=...) where T
     SparseMatrixMPI_local(A_local::Adjoint{T,SparseMatrixCSC{T,Int}}; comm=MPI.COMM_WORLD, col_partition=...) where T
 
 Create a SparseMatrixMPI from a local sparse matrix on each rank.
@@ -280,7 +286,7 @@ Unlike `SparseMatrixMPI{T}(A_global)` which takes a global matrix and partitions
 this constructor takes only the local rows of the matrix that each rank owns.
 The row partition is computed by gathering the local row counts from all ranks.
 
-The input `A_local` must be a `Transpose` (or `Adjoint`) of a `SparseMatrixCSC{T,Int}` where:
+The input `A_local` must be a `SparseMatrixCSR{T,Int}` (or `Adjoint` of `SparseMatrixCSC{T,Int}`) where:
 - `A_local.parent.n` = number of local rows on this rank
 - `A_local.parent.m` = global number of columns (must match on all ranks)
 - `A_local.parent.rowval` = global column indices
@@ -296,13 +302,13 @@ Note: For `Adjoint` inputs, the values are conjugated to match the adjoint seman
 
 # Example
 ```julia
-# Create local rows as transpose of CSC storage
+# Create local rows in CSR format
 # Rank 0 owns rows 1-2 of a 5×3 matrix, Rank 1 owns rows 3-5
-local_AT = sparse([1, 2, 3], [1, 1, 2], [1.0, 2.0, 3.0], 3, 2)  # 3 cols, 2 local rows
-A = SparseMatrixMPI_local(transpose(local_AT))
+local_csc = sparse([1, 1, 2], [1, 2, 3], [1.0, 2.0, 3.0], 2, 3)  # 2 local rows, 3 cols
+A = SparseMatrixMPI_local(SparseMatrixCSR(local_csc))
 ```
 """
-function SparseMatrixMPI_local(A_local::Transpose{T,SparseMatrixCSC{T,Int}};
+function SparseMatrixMPI_local(A_local::SparseMatrixCSR{T,Int};
     comm::MPI.Comm=MPI.COMM_WORLD,
     col_partition::Vector{Int}=uniform_partition(A_local.parent.m, MPI.Comm_size(comm))) where T
     nranks = MPI.Comm_size(comm)
@@ -2698,19 +2704,11 @@ function spdiagm(kv::Pair{<:Integer,<:VectorMPI}...)
         end
     end
 
-    # Step 6: Build local sparse matrix in transposed CSC format
-    # SparseMatrixMPI_local expects transpose(AT) where AT has:
-    #   - m = number of columns (global)
-    #   - n = number of local rows
-    #   - rowval = global column indices
-    if isempty(local_I)
-        # Empty local part
-        AT_local = SparseMatrixCSC(n, local_nrows, ones(Int, local_nrows + 1), Int[], T[])
-    else
-        # Build local sparse matrix then take its transpose parent
-        local_sparse = sparse(local_I, local_J, local_V, local_nrows, n)
-        AT_local = sparse(transpose(local_sparse))
-    end
+    # Step 6: Build M^T directly as CSC (swap I↔J), then wrap in lazy transpose for CSR
+    # This avoids an unnecessary physical transpose operation
+    AT_local = isempty(local_I) ?
+        SparseMatrixCSC(n, local_nrows, ones(Int, local_nrows + 1), Int[], T[]) :
+        sparse(local_J, local_I, local_V, n, local_nrows)
 
     return SparseMatrixMPI_local(transpose(AT_local); comm=comm)
 end
@@ -2829,13 +2827,11 @@ function spdiagm(m::Integer, n::Integer, kv::Pair{<:Integer,<:VectorMPI}...)
         end
     end
 
-    # Step 5: Build local sparse matrix
-    if isempty(local_I)
-        AT_local = SparseMatrixCSC(n, local_nrows, ones(Int, local_nrows + 1), Int[], T[])
-    else
-        local_sparse = sparse(local_I, local_J, local_V, local_nrows, n)
-        AT_local = sparse(transpose(local_sparse))
-    end
+    # Step 5: Build M^T directly as CSC (swap I↔J), then wrap in lazy transpose for CSR
+    # This avoids an unnecessary physical transpose operation
+    AT_local = isempty(local_I) ?
+        SparseMatrixCSC(n, local_nrows, ones(Int, local_nrows + 1), Int[], T[]) :
+        sparse(local_J, local_I, local_V, n, local_nrows)
 
     return SparseMatrixMPI_local(transpose(AT_local); comm=comm)
 end
@@ -3018,13 +3014,11 @@ function Base.:+(A::SparseMatrixMPI{T}, J::UniformScaling) where T
         end
     end
 
-    # Build local sparse matrix
-    if isempty(local_I)
-        AT_local = SparseMatrixCSC(n, local_nrows, ones(Int, local_nrows + 1), Int[], RT[])
-    else
-        local_sparse = sparse(local_I, local_J, local_V, local_nrows, n)
-        AT_local = sparse(transpose(local_sparse))
-    end
+    # Build M^T directly as CSC (swap I↔J), then wrap in lazy transpose for CSR
+    # This avoids an unnecessary physical transpose operation
+    AT_local = isempty(local_I) ?
+        SparseMatrixCSC(n, local_nrows, ones(Int, local_nrows + 1), Int[], RT[]) :
+        sparse(local_J, local_I, local_V, n, local_nrows)
 
     return SparseMatrixMPI_local(transpose(AT_local); comm=comm)
 end

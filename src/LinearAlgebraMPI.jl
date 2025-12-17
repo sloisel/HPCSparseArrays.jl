@@ -9,6 +9,7 @@ import LinearAlgebra
 import LinearAlgebra: tr, diag, triu, tril, Transpose, Adjoint, norm, opnorm, mul!, ldlt, BLAS, issymmetric, UniformScaling, dot
 
 export SparseMatrixMPI, MatrixMPI, VectorMPI, clear_plan_cache!, uniform_partition
+export SparseMatrixCSR  # Type alias for Transpose{SparseMatrixCSC} (CSR storage format)
 export ⊛  # Multithreaded sparse matrix multiplication
 export VectorMPI_local, MatrixMPI_local, SparseMatrixMPI_local  # Local constructors
 export mean  # Our mean function for SparseMatrixMPI and VectorMPI
@@ -20,6 +21,88 @@ export solve, solve!, finalize!
 # Type alias for 256-bit Blake3 hash
 const Blake3Hash = NTuple{32,UInt8}
 const OptionalBlake3Hash = Union{Nothing, Blake3Hash}
+
+# ============================================================================
+# SparseMatrixCSR Type Alias and Constructors
+# ============================================================================
+
+"""
+    SparseMatrixCSR{Tv,Ti} = Transpose{Tv, SparseMatrixCSC{Tv,Ti}}
+
+Type alias for CSR (Compressed Sparse Row) storage format.
+
+## The Dual Life of Transpose{SparseMatrixCSC}
+
+In Julia, the type `Transpose{Tv, SparseMatrixCSC{Tv,Ti}}` has two interpretations:
+
+1. **Semantic interpretation**: A lazy transpose wrapper around a CSC matrix.
+   When you call `transpose(A)` on a SparseMatrixCSC, you get this wrapper that
+   represents A^T without copying data.
+
+2. **Storage interpretation**: CSR (row-major) access to sparse data.
+   The underlying CSC stores columns contiguously, but through the transpose wrapper,
+   we can iterate efficiently over rows instead of columns.
+
+This alias clarifies intent: use `SparseMatrixCSR` when you want row-major storage
+semantics, and `transpose(A)` when you want the mathematical transpose.
+
+## CSR vs CSC Storage
+
+- **CSC (Compressed Sparse Column)**: Julia's native sparse format. Efficient for
+  column-wise operations, matrix-vector products with column access.
+- **CSR (Compressed Sparse Row)**: Efficient for row-wise operations, matrix-vector
+  products with row access, and row-partitioned distributed matrices.
+
+For `SparseMatrixCSR`, the underlying `parent::SparseMatrixCSC` stores the *transposed*
+matrix. If `B = SparseMatrixCSR(A)` represents matrix M, then `B.parent` is a CSC
+storing M^T. This means:
+- `B.parent.colptr` acts as row pointers for M
+- `B.parent.rowval` contains column indices for M
+- `B.parent.nzval` contains values in row-major order
+
+## Usage Note
+
+Julia will still display this type as `Transpose{Float64, SparseMatrixCSC{...}}`,
+not as `SparseMatrixCSR`. The alias improves code clarity but doesn't affect
+type printing.
+"""
+const SparseMatrixCSR{Tv,Ti} = Transpose{Tv, SparseMatrixCSC{Tv,Ti}}
+
+"""
+    SparseMatrixCSR(A::SparseMatrixCSC{Tv,Ti}) where {Tv,Ti}
+
+Convert a CSC matrix to CSR format representing the **same** matrix.
+
+If A represents matrix M in CSC format, the result represents M in CSR format.
+Element access is unchanged: `B[i,j] == A[i,j]`.
+
+Internally, this:
+1. Materializes A^T as CSC (physical transpose)
+2. Wraps in lazy transpose to get M back, but with row-major storage
+
+# Example
+```julia
+A_csc = sparse([1,2,2], [1,1,2], [1.0, 2.0, 3.0], 2, 2)
+A_csr = SparseMatrixCSR(A_csc)  # Same matrix, CSR storage
+A_csr[1,1] == A_csc[1,1]        # true - same elements
+```
+"""
+function SparseMatrixCSR(A::SparseMatrixCSC{Tv,Ti}) where {Tv,Ti}
+    return transpose(SparseMatrixCSC(transpose(A)))
+end
+
+"""
+    SparseMatrixCSC(A::SparseMatrixCSR{Tv,Ti}) where {Tv,Ti}
+
+Convert a CSR matrix to CSC format representing the **same** matrix.
+
+This physically transposes the underlying storage to produce a CSC matrix.
+Element access is unchanged: the result represents the same matrix as the input.
+"""
+function SparseArrays.SparseMatrixCSC(A::SparseMatrixCSR{Tv,Ti}) where {Tv,Ti}
+    # Use sparse() to avoid dispatching back to our method
+    return sparse(transpose(A.parent))
+end
 
 # Cache for memoized MatrixPlans
 # Key: (A_hash, B_hash, T) - use full 256-bit hashes

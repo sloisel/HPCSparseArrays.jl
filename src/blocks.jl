@@ -136,13 +136,11 @@ function Base.cat(As::SparseMatrixMPI{T}...; dims) where T
         end
     end
 
-    # Step 3: Build local sparse matrix
-    if isempty(local_I)
-        AT_local = SparseMatrixCSC(total_cols, local_nrows, ones(Int, local_nrows + 1), Int[], T[])
-    else
-        local_sparse = sparse(local_I, local_J, local_V, local_nrows, total_cols)
-        AT_local = sparse(transpose(local_sparse))
-    end
+    # Step 3: Build M^T directly as CSC (swap I↔J), then wrap in lazy transpose for CSR
+    # This avoids an unnecessary physical transpose operation
+    AT_local = isempty(local_I) ?
+        SparseMatrixCSC(total_cols, local_nrows, ones(Int, local_nrows + 1), Int[], T[]) :
+        sparse(local_J, local_I, local_V, total_cols, local_nrows)
 
     return SparseMatrixMPI_local(transpose(AT_local); comm=comm)
 end
@@ -509,13 +507,11 @@ function blockdiag(As::SparseMatrixMPI{T}...) where T
         end
     end
 
-    # Step 4: Build local sparse matrix
-    if isempty(local_I)
-        AT_local = SparseMatrixCSC(total_cols, local_nrows, ones(Int, local_nrows + 1), Int[], T[])
-    else
-        local_sparse = sparse(local_I, local_J, local_V, local_nrows, total_cols)
-        AT_local = sparse(transpose(local_sparse))
-    end
+    # Step 4: Build M^T directly as CSC (swap I↔J), then wrap in lazy transpose for CSR
+    # This avoids an unnecessary physical transpose operation
+    AT_local = isempty(local_I) ?
+        SparseMatrixCSC(total_cols, local_nrows, ones(Int, local_nrows + 1), Int[], T[]) :
+        sparse(local_J, local_I, local_V, total_cols, local_nrows)
 
     return SparseMatrixMPI_local(transpose(AT_local); comm=comm)
 end

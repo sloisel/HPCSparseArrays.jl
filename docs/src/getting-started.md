@@ -54,6 +54,16 @@ The matrix is partitioned roughly equally by rows. For example, with 4 ranks and
 - Rank 2: rows 51-75
 - Rank 3: rows 76-100
 
+### Internal Storage: CSR Format
+
+Internally, each rank stores its local rows in CSR (Compressed Sparse Row) format using the `SparseMatrixCSR` type. This enables efficient row-wise iteration, which is essential for a row-partitioned distributed matrix.
+
+In Julia, `SparseMatrixCSR{T,Ti}` is a type alias for `Transpose{T, SparseMatrixCSC{T,Ti}}`. This type has a dual interpretation:
+- **Semantic view**: A lazy transpose of a CSC matrix
+- **Storage view**: Row-major (CSR) access to the data
+
+You don't need to worry about this for normal usage - it's handled automatically. But if you're accessing the internal storage (e.g., `A.A.parent`), be aware that it stores the transposed data in CSC format, which gives CSR access through the wrapper.
+
 ### Efficient Local-Only Construction
 
 For large matrices, you can avoid replicating data across all ranks by only populating each rank's local portion:

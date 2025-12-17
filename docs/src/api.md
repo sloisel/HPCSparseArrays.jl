@@ -22,6 +22,52 @@ MatrixMPI
 VectorMPI
 ```
 
+### SparseMatrixCSR
+
+```@docs
+SparseMatrixCSR
+```
+
+## CSR Storage Format
+
+LinearAlgebraMPI uses CSR (Compressed Sparse Row) format internally for `SparseMatrixMPI` because row-partitioned distributed matrices need efficient row-wise access.
+
+### The Dual Life of Transpose{SparseMatrixCSC}
+
+In Julia, the type `Transpose{T, SparseMatrixCSC{T,Int}}` has two interpretations:
+
+1. **Semantic**: A lazy transpose of a CSC matrix (what you get from `transpose(A)`)
+2. **Storage**: Row-major (CSR) access to sparse data
+
+This duality can be confusing. When you call `transpose(A)` on a SparseMatrixCSC, you get a wrapper that represents A^T. But the same wrapper type, when used for storage, provides efficient row iteration.
+
+### The SparseMatrixCSR Type Alias
+
+To clarify intent, LinearAlgebraMPI exports:
+
+```julia
+const SparseMatrixCSR{Tv,Ti} = Transpose{Tv, SparseMatrixCSC{Tv,Ti}}
+```
+
+Use `SparseMatrixCSR` when you want row-major storage, and `transpose(A)` when you want the mathematical transpose.
+
+### Converting Between CSC and CSR
+
+```julia
+# CSC to CSR (same matrix, different storage)
+A_csc = sparse([1,2,2], [1,1,2], [1.0, 2.0, 3.0], 2, 2)
+A_csr = SparseMatrixCSR(A_csc)
+A_csr[1,1] == A_csc[1,1]  # true
+
+# CSR to CSC
+A_back = SparseMatrixCSC(A_csr)
+A_back == A_csc  # true
+```
+
+### Why CSR for Distributed Matrices?
+
+`SparseMatrixMPI` partitions matrices by rows across MPI ranks. Each rank needs to efficiently iterate over its local rows for operations like matrix-vector multiplication. CSR format provides O(1) access to each row's nonzeros, while CSC would require scanning the entire column pointer array.
+
 ## Sparse Matrix Operations
 
 ### Arithmetic
