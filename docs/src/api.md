@@ -448,6 +448,16 @@ For `setindex!` operations, the source type depends on the indexing pattern:
 uniform_partition
 ```
 
+### Repartitioning
+
+Redistribute distributed data to a new partition. Provides plan caching for repeated operations and a fast path when partitions already match (no communication needed).
+
+```@docs
+repartition(::VectorMPI, ::Vector{Int})
+repartition(::MatrixMPI, ::Vector{Int})
+repartition(::SparseMatrixMPI, ::Vector{Int})
+```
+
 ### Rank-Selective Output
 
 ```@docs
