@@ -571,6 +571,7 @@ x = transpose(b) / transpose(A)  # solve x*transpose(A) = transpose(b)
 
 ```@docs
 clear_plan_cache!
+clear_mumps_analysis_cache!
 ```
 
 ## Full API Index
