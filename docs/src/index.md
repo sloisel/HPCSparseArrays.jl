@@ -55,7 +55,7 @@ mpiexec -n 4 julia --project example.jl
 ## Documentation Contents
 
 ```@contents
-Pages = ["installation.md", "guide.md", "api.md"]
+Pages = ["installation.md", "guide.md", "examples.md", "api.md"]
 Depth = 2
 ```
 

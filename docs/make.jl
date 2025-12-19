@@ -19,6 +19,7 @@ makedocs(
         "Home" => "index.md",
         "Installation" => "installation.md",
         "User Guide" => "guide.md",
+        "Examples" => "examples.md",
         "API Reference" => "api.md",
     ],
     warnonly = [:missing_docs],
