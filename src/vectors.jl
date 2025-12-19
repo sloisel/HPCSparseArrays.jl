@@ -10,7 +10,7 @@ A distributed dense vector partitioned across MPI ranks.
 - `partition::Vector{Int}`: Partition boundaries, length = nranks + 1
 - `v::Vector{T}`: Local vector elements owned by this rank
 """
-struct VectorMPI{T}
+struct VectorMPI{T} <: AbstractVector{T}
     structural_hash::Blake3Hash
     partition::Vector{Int}
     v::Vector{T}

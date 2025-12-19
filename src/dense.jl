@@ -51,7 +51,7 @@ A distributed dense matrix partitioned by rows across MPI ranks.
 - `size(A, 1) == row_partition[rank+2] - row_partition[rank+1]`
 - `size(A, 2) == col_partition[end] - 1`
 """
-mutable struct MatrixMPI{T}
+mutable struct MatrixMPI{T} <: AbstractMatrix{T}
     structural_hash::OptionalBlake3Hash
     row_partition::Vector{Int}
     col_partition::Vector{Int}
