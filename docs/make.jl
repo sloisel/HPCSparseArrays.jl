@@ -1,4 +1,11 @@
 using Documenter
+using MPI
+
+# Initialize MPI for documentation build
+if !MPI.Initialized()
+    MPI.Init()
+end
+
 using LinearAlgebraMPI
 
 makedocs(
@@ -6,18 +13,19 @@ makedocs(
     modules = [LinearAlgebraMPI],
     format = Documenter.HTML(
         prettyurls = get(ENV, "CI", nothing) == "true",
+        canonical = "https://sloisel.github.io/LinearAlgebraMPI.jl",
     ),
     pages = [
         "Home" => "index.md",
-        "Getting Started" => "getting-started.md",
-        "Examples" => "examples.md",
+        "Installation" => "installation.md",
+        "User Guide" => "guide.md",
         "API Reference" => "api.md",
     ],
-    checkdocs = :exports,
-    remotes = nothing,  # Disable source links (configure when publishing)
+    warnonly = [:missing_docs],
 )
 
 deploydocs(
     repo = "github.com/sloisel/LinearAlgebraMPI.jl.git",
     devbranch = "main",
+    push_preview = true,
 )

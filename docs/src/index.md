@@ -1,22 +1,28 @@
-# LinearAlgebraMPI.jl
+```@meta
+CurrentModule = LinearAlgebraMPI
+```
 
-**Distributed sparse matrix operations using MPI for parallel computing across multiple ranks.**
+```@eval
+using Markdown
+using Pkg
+using LinearAlgebraMPI
+v = string(pkgversion(LinearAlgebraMPI))
+md"# LinearAlgebraMPI.jl $v"
+```
 
-LinearAlgebraMPI.jl provides a high-performance implementation of distributed sparse matrices in Julia, enabling parallel sparse linear algebra operations across multiple MPI processes. The package is designed for large-scale computations where matrices are too large to fit on a single node or where parallel speedup is desired.
+**Pure Julia distributed linear algebra with MPI.**
 
-## Features
+## Overview
 
-- **Row-partitioned sparse matrices**: Matrices are distributed by rows across MPI ranks
-- **Matrix multiplication**: Efficient sparse matrix-matrix product with memoized communication plans
-- **Addition and subtraction**: Element-wise operations with automatic data redistribution
-- **Transpose operations**: Both eager and lazy transpose support
-- **Conjugate and adjoint**: Full support for complex matrices
-- **Scalar multiplication**: Efficient scalar-matrix products
-- **Norms**: Frobenius norm, 1-norm, infinity norm, and general p-norms
-- **Operator norms**: 1-norm and infinity-norm of operators
-- **Direct solvers**: LU and LDLT factorization via MUMPS with configurable threading
-- **Type stability**: Generic implementation supporting `Float64`, `ComplexF64`, and other numeric types
-- **Plan caching**: Communication plans are memoized for repeated operations with the same sparsity pattern
+LinearAlgebraMPI.jl provides distributed matrix and vector types for parallel computing with MPI. It offers a pure Julia implementation of distributed linear algebra, with MUMPS for sparse direct solves.
+
+## Key Features
+
+- **Distributed Types**: `VectorMPI`, `MatrixMPI`, and `SparseMatrixMPI` for row-partitioned distributed storage
+- **MUMPS Solver**: Direct solves using MUMPS for sparse linear systems
+- **Row-wise Operations**: `map_rows` for efficient distributed row operations
+- **Seamless Integration**: Works with standard Julia linear algebra operations
+- **Plan Caching**: Efficient repeated operations through memoized communication plans
 
 ## Quick Example
 
@@ -27,61 +33,44 @@ MPI.Init()
 using LinearAlgebraMPI
 using SparseArrays
 
-# Create a sparse matrix (must be identical on all ranks)
-A = sprand(1000, 1000, 0.01)
-B = sprand(1000, 1000, 0.01)
+# Create distributed sparse matrix
+A = SparseMatrixMPI{Float64}(sprandn(100, 100, 0.1) + 10I)
+b = VectorMPI(randn(100))
 
-# Distribute matrices across MPI ranks
-Adist = SparseMatrixMPI{Float64}(A)
-Bdist = SparseMatrixMPI{Float64}(B)
+# Solve linear system
+x = A \ b
 
-# Perform distributed operations
-C = Adist * Bdist    # Matrix multiplication
-D = Adist + Bdist    # Addition
-E = Adist - Bdist    # Subtraction
-F = 2.0 * Adist      # Scalar multiplication
+# Row-wise operations
+norms = map_rows(row -> norm(row), MatrixMPI(randn(50, 10)))
 
-# Compute norms
-frobenius_norm = norm(Adist)
-max_col_sum = opnorm(Adist, 1)
-
+println(io0(), "Solution computed!")
 ```
 
-## Package Overview
+**Run with MPI:**
+
+```bash
+mpiexec -n 4 julia --project example.jl
+```
+
+## Documentation Contents
 
 ```@contents
-Pages = ["getting-started.md", "examples.md", "api.md"]
+Pages = ["installation.md", "guide.md", "api.md"]
 Depth = 2
 ```
 
-## Installation
+## Related Packages
 
-Add LinearAlgebraMPI.jl to your project:
-
-```julia
-using Pkg
-Pkg.add("LinearAlgebraMPI")
-```
-
-Or for development:
-
-```julia
-Pkg.develop(path="/path/to/LinearAlgebraMPI.jl")
-```
+- **[MultiGridBarrierMPI.jl](https://github.com/sloisel/MultiGridBarrierMPI.jl)**: Multigrid barrier methods using LinearAlgebraMPI
+- **[MultiGridBarrier.jl](https://github.com/sloisel/MultiGridBarrier.jl)**: Core multigrid barrier method implementation
+- **MPI.jl**: Julia MPI bindings
 
 ## Requirements
 
-- Julia 1.10+
-- MPI.jl with a working MPI implementation
-- SparseArrays.jl
-- LinearAlgebra.jl
-- Blake3Hash.jl
+- Julia 1.10 or later (LTS version)
+- MPI installation (OpenMPI, MPICH, or Intel MPI)
+- MUMPS for sparse direct solves
 
 ## License
 
-MIT License
-
-## Index
-
-```@index
-```
+This package is licensed under the MIT License.
