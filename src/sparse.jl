@@ -2598,8 +2598,12 @@ function _map_nzval(f, A::SparseMatrixMPI{T,Ti,AV}) where {T,Ti,AV}
     # (Julia 1.10 infers Any for f.(empty_array) with lambdas)
     RT = typeof(f(zero(T)))
 
+    # Create output array with correct type (handles empty arrays correctly)
+    new_nzval = similar(A.nzval, RT)
+
     # Apply f to nzval (works on CPU or GPU via broadcasting)
-    new_nzval = RT.(f.(A.nzval))
+    new_nzval .= f.(A.nzval)
+
     AVR = typeof(new_nzval)
     return SparseMatrixMPI{RT,Ti,AVR}(A.structural_hash, A.row_partition, A.col_partition,
         A.col_indices, A.rowptr, A.colval, new_nzval,
