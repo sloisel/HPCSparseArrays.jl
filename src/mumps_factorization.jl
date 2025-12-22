@@ -100,29 +100,42 @@ end
 # MUMPS Factorization Type
 # ============================================================================
 
+# Helper to determine the MUMPS-compatible internal type
+_mumps_internal_type(::Type{T}) where T<:Real = Float64
+_mumps_internal_type(::Type{T}) where T<:Complex = ComplexF64
+
 """
-    MUMPSFactorizationMPI{T}
+    MUMPSFactorizationMPI{Tin, AVin, Tinternal}
 
 Distributed MUMPS factorization result. Can be reused for multiple solves.
+
+Type parameters:
+- `Tin`: Original element type of input matrix (e.g., Float32)
+- `AVin`: Original array type of input matrix values (e.g., MtlVector{Float32})
+- `Tinternal`: MUMPS-compatible type used internally (Float64 or ComplexF64)
+
+This allows factorizing matrices with any element type or backend (e.g., GPU Float32),
+with automatic conversion to/from MUMPS-compatible types during factorization and solve.
 
 Note: The MUMPS object is shared with the analysis cache. The factorization
 does not own the MUMPS object and should not finalize it directly.
 """
-mutable struct MUMPSFactorizationMPI{T}
+mutable struct MUMPSFactorizationMPI{Tin, AVin, Tinternal}
     id::Int  # Unique ID for finalization tracking
-    mumps::Any  # Mumps{T,R} - shared with cache, do not finalize
+    mumps::Any  # Mumps{Tinternal,R} - shared with cache, do not finalize
     irn_loc::Vector{MUMPS_INT}
     jcn_loc::Vector{MUMPS_INT}
-    a_loc::Vector{T}
+    a_loc::Vector{Tinternal}
     n::Int
     symmetric::Bool
     row_partition::Vector{Int}
-    rhs_buffer::Vector{T}
+    col_partition::Vector{Int}
+    rhs_buffer::Vector{Tinternal}
     owns_mumps::Bool  # Whether this factorization owns the MUMPS object
 end
 
 Base.size(F::MUMPSFactorizationMPI) = (F.n, F.n)
-Base.eltype(::MUMPSFactorizationMPI{T}) where T = T
+Base.eltype(::MUMPSFactorizationMPI{Tin}) where Tin = Tin
 
 # ============================================================================
 # Automatic Finalization Functions
@@ -339,12 +352,50 @@ function _update_values!(plan::MUMPSAnalysisPlan{T}, A::SparseMatrixMPI{T}, symm
 end
 
 """
-    _create_mumps_factorization(A::SparseMatrixMPI{T}, symmetric::Bool) where T
+    _convert_to_mumps_compatible(A::SparseMatrixMPI{T,Ti,AV}) where {T,Ti,AV}
+
+Convert a SparseMatrixMPI to CPU with MUMPS-compatible element type.
+Returns the converted matrix with element type Float64 or ComplexF64.
+"""
+function _convert_to_mumps_compatible(A::SparseMatrixMPI{T,Ti,AV}) where {T,Ti,AV}
+    Tinternal = _mumps_internal_type(T)
+
+    # If already compatible, just ensure CPU
+    if T === Tinternal && AV <: Vector
+        return A  # Already CPU and correct type
+    end
+
+    # Convert nzval to CPU and/or convert element type
+    nzval_cpu = _ensure_cpu(A.nzval)
+    nzval_converted = Tinternal.(nzval_cpu)
+
+    # Create new SparseMatrixMPI with converted type (CPU Vector)
+    # Structural arrays (rowptr, colval, col_indices) stay the same
+    return SparseMatrixMPI{Tinternal,Ti,Vector{Tinternal}}(
+        A.structural_hash,
+        copy(A.row_partition),
+        copy(A.col_partition),
+        copy(A.col_indices),
+        copy(A.rowptr),
+        copy(A.colval),
+        nzval_converted,
+        A.nrows_local,
+        A.ncols_compressed,
+        nothing,  # Don't copy cached transpose
+        A.cached_symmetric
+    )
+end
+
+"""
+    _create_mumps_factorization(A::SparseMatrixMPI{T, Ti, AV}, symmetric::Bool) where {T, Ti, AV}
 
 Create and compute a MUMPS factorization of the distributed matrix A.
 Uses cached symbolic analysis when available for the same sparsity structure.
+
+Automatically converts the matrix to CPU Float64/ComplexF64 internally if needed,
+storing the original type parameters for later reconstruction during solve.
 """
-function _create_mumps_factorization(A::SparseMatrixMPI{T}, symmetric::Bool) where T
+function _create_mumps_factorization(A::SparseMatrixMPI{T, Ti, AV}, symmetric::Bool) where {T, Ti, AV}
     comm = MPI.COMM_WORLD
     rank = MPI.Comm_rank(comm)
 
@@ -355,8 +406,12 @@ function _create_mumps_factorization(A::SparseMatrixMPI{T}, symmetric::Bool) whe
     id = _mumps_count[]
     _mumps_count[] += 1
 
+    # Convert to MUMPS-compatible type (CPU Float64 or ComplexF64)
+    Tinternal = _mumps_internal_type(T)
+    A_internal = _convert_to_mumps_compatible(A)
+
     # Get or create analysis plan (may be cached)
-    plan, cache_hit = _get_or_create_analysis_plan(A, symmetric)
+    plan, cache_hit = _get_or_create_analysis_plan(A_internal, symmetric)
 
     # Update value pointer (values may have been updated)
     plan.mumps.a_loc = pointer(plan.a_loc)
@@ -367,14 +422,16 @@ function _create_mumps_factorization(A::SparseMatrixMPI{T}, symmetric::Bool) whe
     _check_mumps_error(plan.mumps, "factorization")
 
     # Pre-allocate RHS buffer on rank 0
-    rhs_buffer = rank == 0 ? zeros(T, plan.n) : T[]
+    rhs_buffer = rank == 0 ? zeros(Tinternal, plan.n) : Tinternal[]
 
     # Create factorization object with ID
+    # Store original types (Tin, AVin) for reconstruction during solve
     # Note: We copy the value array since the plan's array is reused.
     # The MUMPS object is shared with the cache (owns_mumps=false).
-    F = MUMPSFactorizationMPI{T}(
+    F = MUMPSFactorizationMPI{T, AV, Tinternal}(
         id, plan.mumps, plan.irn_loc, plan.jcn_loc, copy(plan.a_loc),
-        plan.n, symmetric, copy(plan.row_partition), rhs_buffer, false
+        plan.n, symmetric, copy(plan.row_partition), copy(A.col_partition),
+        rhs_buffer, false
     )
 
     # Register in global registry (prevents GC until removed)
@@ -426,39 +483,68 @@ end
 # Solve Interface
 # ============================================================================
 
+# Helper to create output vector with original type/backend
+function _create_output_vector(::Type{Tin}, ::Type{AVin}, n::Int, partition) where {Tin, AVin}
+    v_cpu = zeros(Tin, n)
+    v_dist = VectorMPI(v_cpu; partition=partition)
+    # Convert to original backend if needed
+    return _convert_vector_to_backend(v_dist, AVin)
+end
+
+# Convert VectorMPI to a specific backend type
+function _convert_vector_to_backend(v::VectorMPI{T, AV}, ::Type{AVtarget}) where {T, AV, AVtarget}
+    if AV === AVtarget
+        return v
+    end
+    # Need to convert - handled by mtl/cpu functions in extension
+    return _create_output_like(v, AVtarget)
+end
+
 """
-    solve(F::MUMPSFactorizationMPI{T}, b::VectorMPI{T}) where T
+    solve(F::MUMPSFactorizationMPI{Tin, AVin, Tinternal}, b::VectorMPI) where {Tin, AVin, Tinternal}
 
 Solve the linear system A*x = b using the precomputed MUMPS factorization.
+
+The input vector b can have any compatible element type and backend.
+The result is returned with the same element type and backend as the
+original matrix used for factorization.
 """
-function solve(F::MUMPSFactorizationMPI{T}, b::VectorMPI{T}) where T
-    x = VectorMPI(zeros(T, F.n); partition=b.partition)
+function solve(F::MUMPSFactorizationMPI{Tin, AVin, Tinternal}, b::VectorMPI) where {Tin, AVin, Tinternal}
+    # Create output vector with original type/backend
+    x = _create_output_vector(Tin, AVin, F.n, b.partition)
     solve!(x, F, b)
     return x
 end
 
 """
-    solve!(x::VectorMPI{T}, F::MUMPSFactorizationMPI{T}, b::VectorMPI{T}) where T
+    solve!(x::VectorMPI, F::MUMPSFactorizationMPI{Tin, AVin, Tinternal}, b::VectorMPI) where {Tin, AVin, Tinternal}
 
 Solve A*x = b in-place using MUMPS factorization.
+
+Automatically converts inputs to CPU Float64/ComplexF64 for MUMPS,
+then converts results back to the element type and backend of x.
 """
-function solve!(x::VectorMPI{T}, F::MUMPSFactorizationMPI{T}, b::VectorMPI{T}) where T
+function solve!(x::VectorMPI, F::MUMPSFactorizationMPI{Tin, AVin, Tinternal}, b::VectorMPI) where {Tin, AVin, Tinternal}
     comm = MPI.COMM_WORLD
     rank = MPI.Comm_rank(comm)
     nranks = MPI.Comm_size(comm)
+
+    # Convert b to CPU with internal type
+    b_cpu = _ensure_cpu(b.v)
+    b_internal = Tinternal.(b_cpu)
 
     # Gather RHS to rank 0
     counts = Int32[b.partition[r+2] - b.partition[r+1] for r in 0:nranks-1]
 
     if rank == 0
-        MPI.Gatherv!(b.v, MPI.VBuffer(F.rhs_buffer, counts), comm; root=0)
+        MPI.Gatherv!(b_internal, MPI.VBuffer(F.rhs_buffer, counts), comm; root=0)
 
         # Set RHS in MUMPS
         F.mumps.nrhs = MUMPS_INT(1)
         F.mumps.lrhs = MUMPS_INT(F.n)
         F.mumps.rhs = pointer(F.rhs_buffer)
     else
-        MPI.Gatherv!(b.v, nothing, comm; root=0)
+        MPI.Gatherv!(b_internal, nothing, comm; root=0)
     end
 
     # Solve phase (job = 3)
@@ -467,22 +553,57 @@ function solve!(x::VectorMPI{T}, F::MUMPSFactorizationMPI{T}, b::VectorMPI{T}) w
     _check_mumps_error(F.mumps, "solve")
 
     # Scatter solution from rank 0
-    # Result is in F.rhs_buffer on rank 0
+    # Result is in F.rhs_buffer on rank 0, need local buffer for scatter
+    local_size = x.partition[rank+2] - x.partition[rank+1]
+    x_internal = Vector{Tinternal}(undef, local_size)
+
     if rank == 0
-        MPI.Scatterv!(MPI.VBuffer(F.rhs_buffer, counts), x.v, comm; root=0)
+        MPI.Scatterv!(MPI.VBuffer(F.rhs_buffer, counts), x_internal, comm; root=0)
     else
-        MPI.Scatterv!(nothing, x.v, comm; root=0)
+        MPI.Scatterv!(nothing, x_internal, comm; root=0)
     end
+
+    # Convert result back to original type and backend
+    Tx = eltype(x)
+    x_converted = Tx.(x_internal)
+    _copy_to_vector!(x, x_converted)
 
     return x
 end
 
+# Helper to copy values into a VectorMPI (handles GPU arrays)
+function _copy_to_vector!(x::VectorMPI{T, AV}, values::Vector) where {T, AV}
+    if AV <: Vector
+        x.v .= values
+    else
+        # GPU array - need to copy through appropriate method
+        copyto!(x.v, _convert_to_backend(values, AV))
+    end
+    return x
+end
+
+# Convert a CPU vector to a target backend
+function _convert_to_backend(v::Vector{T}, ::Type{AV}) where {T, AV}
+    if AV <: Vector
+        return v
+    else
+        # For GPU arrays, use the mtl() function from extension
+        return _array_to_backend(v, AV)
+    end
+end
+
+# Fallback for CPU arrays
+_array_to_backend(v::Vector{T}, ::Type{<:Vector}) where T = v
+
+# Fallback for CPU VectorMPI (no conversion needed)
+_create_output_like(v::VectorMPI{T,<:Vector}, ::Type{<:Vector}) where T = v
+
 """
-    Base.:\\(F::MUMPSFactorizationMPI{T}, b::VectorMPI{T}) where T
+    Base.:\\(F::MUMPSFactorizationMPI, b::VectorMPI)
 
 Solve A*x = b using the backslash operator.
 """
-function Base.:\(F::MUMPSFactorizationMPI{T}, b::VectorMPI{T}) where T
+function Base.:\(F::MUMPSFactorizationMPI, b::VectorMPI)
     return solve(F, b)
 end
 

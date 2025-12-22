@@ -116,4 +116,28 @@ function LinearAlgebraMPI.cpu(A::LinearAlgebraMPI.MatrixMPI{T,<:MtlMatrix}) wher
     )
 end
 
+# ============================================================================
+# MUMPS Factorization Support
+# ============================================================================
+
+"""
+    _array_to_backend(v::Vector{T}, ::Type{<:MtlVector}) where T
+
+Convert a CPU vector to a Metal GPU vector.
+Used by MUMPS factorization for round-trip GPU conversion during solve.
+"""
+function LinearAlgebraMPI._array_to_backend(v::Vector{T}, ::Type{<:MtlVector}) where T
+    return MtlVector(v)
+end
+
+"""
+    _create_output_like(v::LinearAlgebraMPI.VectorMPI{T,<:Vector}, ::Type{<:MtlVector}) where T
+
+Create a VectorMPI with MtlVector backend from a CPU VectorMPI.
+Used by MUMPS factorization to reconstruct GPU output vectors.
+"""
+function LinearAlgebraMPI._create_output_like(v::LinearAlgebraMPI.VectorMPI{T,<:Vector}, ::Type{<:MtlVector}) where T
+    return LinearAlgebraMPI.mtl(v)
+end
+
 end # module

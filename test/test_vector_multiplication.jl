@@ -1,5 +1,14 @@
 # MPI test for matrix-vector multiplication
 # This file is executed under mpiexec by runtests.jl
+# Parameterized over scalar types and backends (CPU/GPU)
+
+# Check Metal availability BEFORE loading MPI
+const METAL_AVAILABLE = try
+    using Metal
+    Metal.functional()
+catch e
+    false
+end
 
 using MPI
 MPI.Init()
@@ -12,267 +21,293 @@ using Test
 include(joinpath(@__DIR__, "mpi_test_harness.jl"))
 using .MPITestHarness: QuietTestSet
 
+include(joinpath(@__DIR__, "test_utils.jl"))
+using .TestUtils
+
 comm = MPI.COMM_WORLD
 rank = MPI.Comm_rank(comm)
 nranks = MPI.Comm_size(comm)
 
-const TOL = 1e-12
-
 ts = @testset QuietTestSet "Matrix-Vector Multiplication" begin
 
-println(io0(), "[test] Matrix-vector multiplication")
+for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
+    TOL = TestUtils.tolerance(T)
 
-# Create deterministic test matrix (same on all ranks)
-n = 8
-# Matrix A: tridiagonal
-I_A = [1:n; 1:n-1; 2:n]
-J_A = [1:n; 2:n; 1:n-1]
-V_A = [2.0*ones(Float64, n); -0.5*ones(n-1); -0.5*ones(n-1)]
-A = sparse(I_A, J_A, V_A, n, n)
+    println(io0(), "[test] Matrix-vector multiplication ($T, $backend_name)")
 
-# Vector x: simple sequence
-x_global = collect(1.0:n)
+    # Create deterministic test matrix (same on all ranks)
+    n = 8
+    A = TestUtils.tridiagonal_matrix(T, n)
 
-# Create distributed versions
-Adist = SparseMatrixMPI{Float64}(A)
-xdist = VectorMPI(x_global)
+    # Vector x: simple sequence
+    x_global = TestUtils.test_vector(T, n)
 
-# Compute distributed product
-ydist = Adist * xdist
+    # Create distributed versions
+    Adist = to_backend(SparseMatrixMPI{T}(A))
+    xdist = to_backend(VectorMPI(x_global))
 
-# Reference result
-y_ref = A * x_global
+    # Compute distributed product
+    ydist = Adist * xdist
 
-# Check local portion matches
-my_start = Adist.row_partition[rank+1]
-my_end = Adist.row_partition[rank+2] - 1
-local_ref = y_ref[my_start:my_end]
+    # Reference result
+    y_ref = A * x_global
 
-err = maximum(abs.(ydist.v .- local_ref))
-@test err < TOL
+    # Check local portion matches
+    my_start = Adist.row_partition[rank+1]
+    my_end = Adist.row_partition[rank+2] - 1
+    local_ref = y_ref[my_start:my_end]
 
+    local_y = TestUtils.local_values(ydist)
+    err = maximum(abs.(local_y .- local_ref))
+    @test err < TOL
 
-println(io0(), "[test] Matrix-vector multiplication (in-place)")
 
-n = 8
-I_A = [1:n; 1:n-1; 2:n]
-J_A = [1:n; 2:n; 1:n-1]
-V_A = [2.0*ones(Float64, n); -0.5*ones(n-1); -0.5*ones(n-1)]
-A = sparse(I_A, J_A, V_A, n, n)
+    println(io0(), "[test] Matrix-vector multiplication in-place ($T, $backend_name)")
 
-x_global = collect(1.0:n)
+    n = 8
+    A = TestUtils.tridiagonal_matrix(T, n)
+    x_global = TestUtils.test_vector(T, n)
 
-Adist = SparseMatrixMPI{Float64}(A)
-xdist = VectorMPI(x_global)
+    Adist = to_backend(SparseMatrixMPI{T}(A))
+    xdist = to_backend(VectorMPI(x_global))
 
-# Create output vector with matching partition
-ydist = VectorMPI(zeros(n))
+    # Create output vector with matching partition
+    ydist = to_backend(VectorMPI(zeros(T, n)))
 
-# In-place multiplication
-LinearAlgebra.mul!(ydist, Adist, xdist)
+    # In-place multiplication
+    LinearAlgebra.mul!(ydist, Adist, xdist)
 
-# Reference result
-y_ref = A * x_global
+    # Reference result
+    y_ref = A * x_global
 
-my_start = Adist.row_partition[rank+1]
-my_end = Adist.row_partition[rank+2] - 1
-local_ref = y_ref[my_start:my_end]
+    my_start = Adist.row_partition[rank+1]
+    my_end = Adist.row_partition[rank+2] - 1
+    local_ref = y_ref[my_start:my_end]
 
-err = maximum(abs.(ydist.v .- local_ref))
-@test err < TOL
+    local_y = TestUtils.local_values(ydist)
+    err = maximum(abs.(local_y .- local_ref))
+    @test err < TOL
 
 
-println(io0(), "[test] Matrix-vector multiplication with ComplexF64")
+    println(io0(), "[test] Non-square matrix-vector multiplication ($T, $backend_name)")
 
-n = 8
-I_A = [1:n; 1:n-1; 2:n]
-J_A = [1:n; 2:n; 1:n-1]
-V_A = ComplexF64.([2.0*ones(n); -0.5*ones(n-1); -0.5*ones(n-1)]) .+
-      im .* ComplexF64.([0.1*ones(n); 0.2*ones(n-1); -0.2*ones(n-1)])
-A = sparse(I_A, J_A, V_A, n, n)
+    # A is 6x8, x is length 8, y should be length 6
+    m, k = 6, 8
+    I_A = [1, 2, 3, 4, 5, 6, 1, 2, 3, 4]
+    J_A = [1, 2, 3, 4, 5, 6, 7, 8, 1, 2]
+    V_A = T <: Complex ? T.(1:length(I_A)) .+ im .* T.(length(I_A):-1:1) : T.(1:length(I_A))
+    A = sparse(I_A, J_A, V_A, m, k)
 
-x_global = ComplexF64.(1:n) .+ im .* ComplexF64.(n:-1:1)
+    x_global = TestUtils.test_vector(T, k)
 
-Adist = SparseMatrixMPI{ComplexF64}(A)
-xdist = VectorMPI(x_global)
+    Adist = to_backend(SparseMatrixMPI{T}(A))
+    xdist = to_backend(VectorMPI(x_global))
 
-ydist = Adist * xdist
-y_ref = A * x_global
+    ydist = Adist * xdist
+    y_ref = A * x_global
 
-my_start = Adist.row_partition[rank+1]
-my_end = Adist.row_partition[rank+2] - 1
-local_ref = y_ref[my_start:my_end]
+    my_start = Adist.row_partition[rank+1]
+    my_end = Adist.row_partition[rank+2] - 1
+    local_ref = y_ref[my_start:my_end]
 
-err = maximum(abs.(ydist.v .- local_ref))
-@test err < TOL
+    local_y = TestUtils.local_values(ydist)
+    err = maximum(abs.(local_y .- local_ref); init=zero(real(T)))
+    @test err < TOL
 
 
-println(io0(), "[test] Non-square matrix-vector multiplication")
+    # Vector transpose and adjoint (meaningful for complex types, but works for real too)
+    if T <: Complex
+        println(io0(), "[test] Vector transpose and adjoint ($T, $backend_name)")
 
-# A is 6x8, x is length 8, y should be length 6
-m, n = 6, 8
-I_A = [1, 2, 3, 4, 5, 6, 1, 2, 3, 4]
-J_A = [1, 2, 3, 4, 5, 6, 7, 8, 1, 2]
-V_A = Float64.(1:length(I_A))
-A = sparse(I_A, J_A, V_A, m, n)
+        n = 8
+        A = TestUtils.tridiagonal_matrix(T, n)
+        x_global = TestUtils.test_vector(T, n)
 
-x_global = collect(1.0:n)
+        Adist = to_backend(SparseMatrixMPI{T}(A))
+        xdist = to_backend(VectorMPI(x_global))
 
-Adist = SparseMatrixMPI{Float64}(A)
-xdist = VectorMPI(x_global)
+        # Test conj(v)
+        xconj = conj(xdist)
+        xconj_ref = conj.(x_global)
+        my_start = xdist.partition[rank+1]
+        my_end = xdist.partition[rank+2] - 1
+        local_xconj = TestUtils.local_values(xconj)
+        err_conj = maximum(abs.(local_xconj .- xconj_ref[my_start:my_end]))
+        @test err_conj < TOL
 
-ydist = Adist * xdist
-y_ref = A * x_global
-
-my_start = Adist.row_partition[rank+1]
-my_end = Adist.row_partition[rank+2] - 1
-local_ref = y_ref[my_start:my_end]
-
-err = maximum(abs.(ydist.v .- local_ref); init=0.0)
-@test err < TOL
-
-
-println(io0(), "[test] Vector transpose and adjoint")
-
-n = 8
-I_A = [1:n; 1:n-1; 2:n]
-J_A = [1:n; 2:n; 1:n-1]
-V_A = ComplexF64.([2.0*ones(n); -0.5*ones(n-1); -0.5*ones(n-1)]) .+
-      im .* ComplexF64.([0.1*ones(n); 0.2*ones(n-1); -0.2*ones(n-1)])
-A = sparse(I_A, J_A, V_A, n, n)
-
-x_global = ComplexF64.(1:n) .+ im .* ComplexF64.(n:-1:1)
-
-Adist = SparseMatrixMPI{ComplexF64}(A)
-xdist = VectorMPI(x_global)
-
-# Test conj(v)
-xconj = conj(xdist)
-xconj_ref = conj.(x_global)
-my_start = xdist.partition[rank+1]
-my_end = xdist.partition[rank+2] - 1
-err_conj = maximum(abs.(xconj.v .- xconj_ref[my_start:my_end]))
-@test err_conj < TOL
-
-# Test transpose(v) * A = transpose(transpose(A) * v)
-# This returns a transposed vector
-yt = transpose(xdist) * Adist
-y_ref = transpose(transpose(A) * x_global)
-
-# yt is Transpose{T, VectorMPI{T}}, so yt.parent.v contains the local values
-# The result should have A's col_partition
-my_col_start = Adist.col_partition[rank+1]
-my_col_end = Adist.col_partition[rank+2] - 1
-local_ref = collect(y_ref)[my_col_start:my_col_end]
-err_transpose = maximum(abs.(yt.parent.v .- local_ref))
-@test err_transpose < TOL
-
-# Test adjoint: v' * A = transpose(conj(v)) * A = transpose(transpose(A) * conj(v))
-yt_adj = xdist' * Adist
-y_adj_ref = x_global' * A  # This is a row vector
-
-local_adj_ref = collect(y_adj_ref)[my_col_start:my_col_end]
-err_adjoint = maximum(abs.(yt_adj.parent.v .- local_adj_ref))
-@test err_adjoint < TOL
-
-
-println(io0(), "[test] Vector norms")
-
-n = 10
-x_global = collect(1.0:n)
-xdist = VectorMPI(x_global)
-
-# 2-norm
-norm2 = norm(xdist)
-norm2_ref = norm(x_global)
-@test abs(norm2 - norm2_ref) < TOL
-
-# 1-norm
-norm1 = norm(xdist, 1)
-norm1_ref = norm(x_global, 1)
-@test abs(norm1 - norm1_ref) < TOL
-
-# Inf-norm
-norminf = norm(xdist, Inf)
-norminf_ref = norm(x_global, Inf)
-@test abs(norminf - norminf_ref) < TOL
-
-# 3-norm (general p)
-norm3 = norm(xdist, 3)
-norm3_ref = norm(x_global, 3)
-@test abs(norm3 - norm3_ref) < TOL
-
-# Non-integer p-norm (p = 1.5)
-norm15 = norm(xdist, 1.5)
-norm15_ref = norm(x_global, 1.5)
-@test abs(norm15 - norm15_ref) < TOL
-
-# Complex vector norms
-z_global = ComplexF64.(1:n) .+ im .* ComplexF64.(n:-1:1)
-zdist = VectorMPI(z_global)
-
-cnorm2 = norm(zdist)
-cnorm2_ref = norm(z_global)
-@test abs(cnorm2 - cnorm2_ref) < TOL
-
-
-println(io0(), "[test] Vector reductions")
-
-n = 8
-x_global = collect(1.0:n)
-xdist = VectorMPI(x_global)
-
-# sum
-s = sum(xdist)
-s_ref = sum(x_global)
-@test abs(s - s_ref) < TOL
-
-# prod
-p = prod(xdist)
-p_ref = prod(x_global)
-@test abs(p - p_ref) < TOL
-
-# maximum
-mx = maximum(xdist)
-mx_ref = maximum(x_global)
-@test abs(mx - mx_ref) < TOL
-
-# minimum
-mn = minimum(xdist)
-mn_ref = minimum(x_global)
-@test abs(mn - mn_ref) < TOL
-
-
-println(io0(), "[test] Vector addition and subtraction")
-
-n = 8
-u_global = collect(1.0:n)
-v_global = collect(n:-1.0:1)
-
-udist = VectorMPI(u_global)
-vdist = VectorMPI(v_global)
-
-my_start = udist.partition[rank+1]
-my_end = udist.partition[rank+2] - 1
-
-# u + v
-wdist = udist + vdist
-w_ref = u_global + v_global
-err_add = maximum(abs.(wdist.v .- w_ref[my_start:my_end]))
-@test err_add < TOL
-
-# u - v
-wdist = udist - vdist
-w_ref = u_global - v_global
-err_sub = maximum(abs.(wdist.v .- w_ref[my_start:my_end]))
-@test err_sub < TOL
-
-# -v
-wdist = -vdist
-w_ref = -v_global
-err_neg = maximum(abs.(wdist.v .- w_ref[my_start:my_end]))
-@test err_neg < TOL
-
+        # Test transpose(v) * A = transpose(transpose(A) * v)
+        yt = transpose(xdist) * Adist
+        y_ref = transpose(transpose(A) * x_global)
+
+        my_col_start = Adist.col_partition[rank+1]
+        my_col_end = Adist.col_partition[rank+2] - 1
+        local_ref = collect(y_ref)[my_col_start:my_col_end]
+        local_yt = TestUtils.local_values(yt.parent)
+        err_transpose = maximum(abs.(local_yt .- local_ref))
+        @test err_transpose < TOL
+
+        # Test adjoint: v' * A = transpose(conj(v)) * A = transpose(transpose(A) * conj(v))
+        yt_adj = xdist' * Adist
+        y_adj_ref = x_global' * A
+
+        local_adj_ref = collect(y_adj_ref)[my_col_start:my_col_end]
+        local_yt_adj = TestUtils.local_values(yt_adj.parent)
+        err_adjoint = maximum(abs.(local_yt_adj .- local_adj_ref))
+        @test err_adjoint < TOL
+    end
+
+
+    println(io0(), "[test] Vector norms ($T, $backend_name)")
+
+    n = 10
+    x_global = TestUtils.test_vector(T, n)
+    xdist = to_backend(VectorMPI(x_global))
+
+    # For GPU, norm requires CPU conversion
+    xdist_cpu = TestUtils.to_cpu(xdist)
+
+    # 2-norm
+    norm2 = norm(xdist_cpu)
+    norm2_ref = norm(x_global)
+    @test abs(norm2 - norm2_ref) < TOL
+
+    # 1-norm
+    norm1 = norm(xdist_cpu, 1)
+    norm1_ref = norm(x_global, 1)
+    @test abs(norm1 - norm1_ref) < TOL
+
+    # Inf-norm
+    norminf = norm(xdist_cpu, Inf)
+    norminf_ref = norm(x_global, Inf)
+    @test abs(norminf - norminf_ref) < TOL
+
+    # 3-norm (general p)
+    norm3 = norm(xdist_cpu, 3)
+    norm3_ref = norm(x_global, 3)
+    @test abs(norm3 - norm3_ref) < TOL
+
+    # Non-integer p-norm (p = 1.5)
+    norm15 = norm(xdist_cpu, 1.5)
+    norm15_ref = norm(x_global, 1.5)
+    @test abs(norm15 - norm15_ref) < TOL
+
+
+    println(io0(), "[test] Vector reductions ($T, $backend_name)")
+
+    n = 8
+    # Use real values for reductions (prod can overflow with complex)
+    x_global_real = real(T).(collect(1.0:n))
+    xdist = to_backend(VectorMPI(x_global_real))
+    xdist_cpu = TestUtils.to_cpu(xdist)
+
+    # sum
+    s = sum(xdist_cpu)
+    s_ref = sum(x_global_real)
+    @test abs(s - s_ref) < TOL
+
+    # prod
+    p = prod(xdist_cpu)
+    p_ref = prod(x_global_real)
+    @test abs(p - p_ref) < TOL
+
+    # maximum
+    mx = maximum(xdist_cpu)
+    mx_ref = maximum(x_global_real)
+    @test abs(mx - mx_ref) < TOL
+
+    # minimum
+    mn = minimum(xdist_cpu)
+    mn_ref = minimum(x_global_real)
+    @test abs(mn - mn_ref) < TOL
+
+
+    println(io0(), "[test] Vector addition and subtraction ($T, $backend_name)")
+
+    n = 8
+    u_global, v_global = TestUtils.test_vector_pair(T, n)
+
+    udist = to_backend(VectorMPI(u_global))
+    vdist = to_backend(VectorMPI(v_global))
+
+    my_start = udist.partition[rank+1]
+    my_end = udist.partition[rank+2] - 1
+
+    # u + v
+    wdist = udist + vdist
+    w_ref = u_global + v_global
+    local_w = TestUtils.local_values(wdist)
+    err_add = maximum(abs.(local_w .- w_ref[my_start:my_end]))
+    @test err_add < TOL
+
+    # u - v
+    wdist = udist - vdist
+    w_ref = u_global - v_global
+    local_w = TestUtils.local_values(wdist)
+    err_sub = maximum(abs.(local_w .- w_ref[my_start:my_end]))
+    @test err_sub < TOL
+
+    # -v
+    wdist = -vdist
+    w_ref = -v_global
+    local_w = TestUtils.local_values(wdist)
+    err_neg = maximum(abs.(local_w .- w_ref[my_start:my_end]))
+    @test err_neg < TOL
+
+
+    println(io0(), "[test] Scalar multiplication ($T, $backend_name)")
+
+    n = 8
+    v_global = TestUtils.test_vector(T, n)
+    vdist = to_backend(VectorMPI(v_global))
+    a = T <: Complex ? T(3.5 + 0.5im) : T(3.5)
+
+    my_start = vdist.partition[rank+1]
+    my_end = vdist.partition[rank+2] - 1
+
+    # a * v
+    wdist = a * vdist
+    w_ref = a * v_global
+    local_w = TestUtils.local_values(wdist)
+    err_av = maximum(abs.(local_w .- w_ref[my_start:my_end]))
+    @test err_av < TOL
+
+    # v * a
+    wdist = vdist * a
+    local_w = TestUtils.local_values(wdist)
+    err_va = maximum(abs.(local_w .- w_ref[my_start:my_end]))
+    @test err_va < TOL
+
+    # v / a
+    wdist = vdist / a
+    w_ref = v_global / a
+    local_w = TestUtils.local_values(wdist)
+    err_div = maximum(abs.(local_w .- w_ref[my_start:my_end]))
+    @test err_div < TOL
+
+    # a * transpose(v)
+    wt = a * transpose(vdist)
+    w_ref = a * v_global
+    local_wt = TestUtils.local_values(wt.parent)
+    err_avt = maximum(abs.(local_wt .- w_ref[my_start:my_end]))
+    @test err_avt < TOL
+
+    # transpose(v) * a
+    wt = transpose(vdist) * a
+    local_wt = TestUtils.local_values(wt.parent)
+    err_vta = maximum(abs.(local_wt .- w_ref[my_start:my_end]))
+    @test err_vta < TOL
+
+    # transpose(v) / a
+    wt = transpose(vdist) / a
+    w_ref = v_global / a
+    local_wt = TestUtils.local_values(wt.parent)
+    err_vtdiv = maximum(abs.(local_wt .- w_ref[my_start:my_end]))
+    @test err_vtdiv < TOL
+
+end  # for (T, to_backend, backend_name)
+
+
+# Tests that don't need to be parameterized (type-agnostic)
 
 println(io0(), "[test] Vector operations with different partitions")
 
@@ -283,32 +318,32 @@ else
     # Clear cache to avoid interference from previous tests
     LinearAlgebraMPI.clear_plan_cache!()
 
+    # Use Float64 for this test (partition logic is type-independent)
+    T = Float64
+    TOL = TestUtils.tolerance(T)
+
     # Use a size that works well with nranks
-    n = 3 * nranks  # Each rank gets at least 3 elements in default partition
-    u_global = collect(1.0:n)
-    v_global = collect(Float64(n):-1.0:1)
+    n = 3 * nranks
+    u_global, v_global = TestUtils.test_vector_pair(T, n)
 
     # Create u with default partition
     udist = VectorMPI(u_global)
 
     # Create v with a different (custom) partition
-    # Build a partition with different sizes per rank
     custom_partition = Vector{Int}(undef, nranks + 1)
     custom_partition[1] = 1
     for r in 1:nranks
-        # Give ranks different amounts: rank 0 gets 2, others get 3 or 4
         extra = r == 1 ? 2 : (r <= nranks÷2 ? 3 : 4)
         remaining = n - custom_partition[r] + 1
         remaining_ranks = nranks - r + 1
-        # Ensure we don't exceed n
         alloc = min(extra, remaining - (remaining_ranks - 1))
         custom_partition[r+1] = custom_partition[r] + max(1, alloc)
     end
-    custom_partition[end] = n + 1  # Ensure last boundary is correct
+    custom_partition[end] = n + 1
 
     v_hash = LinearAlgebraMPI.compute_partition_hash(custom_partition)
     local_v_range = custom_partition[rank+1]:(custom_partition[rank+2]-1)
-    vdist = VectorMPI{Float64}(v_hash, copy(custom_partition), v_global[local_v_range])
+    vdist = VectorMPI{T}(v_hash, copy(custom_partition), v_global[local_v_range])
 
     # Verify partitions are different
     @test udist.partition != vdist.partition
@@ -339,55 +374,10 @@ else
 
     # transpose(u) + transpose(v) with different partitions
     wt = transpose(udist) + transpose(vdist)
-    w_add_ref = u_global + v_global  # Reset reference for addition
+    w_add_ref = u_global + v_global
     err_tadd = maximum(abs.(wt.parent.v .- w_add_ref[my_start:my_end]))
     @test err_tadd < TOL
 end
-
-
-println(io0(), "[test] Scalar multiplication")
-
-n = 8
-v_global = collect(1.0:n)
-vdist = VectorMPI(v_global)
-a = 3.5
-
-my_start = vdist.partition[rank+1]
-my_end = vdist.partition[rank+2] - 1
-
-# a * v
-wdist = a * vdist
-w_ref = a * v_global
-err_av = maximum(abs.(wdist.v .- w_ref[my_start:my_end]))
-@test err_av < TOL
-
-# v * a
-wdist = vdist * a
-err_va = maximum(abs.(wdist.v .- w_ref[my_start:my_end]))
-@test err_va < TOL
-
-# v / a
-wdist = vdist / a
-w_ref = v_global / a
-err_div = maximum(abs.(wdist.v .- w_ref[my_start:my_end]))
-@test err_div < TOL
-
-# a * transpose(v)
-wt = a * transpose(vdist)
-w_ref = a * v_global
-err_avt = maximum(abs.(wt.parent.v .- w_ref[my_start:my_end]))
-@test err_avt < TOL
-
-# transpose(v) * a
-wt = transpose(vdist) * a
-err_vta = maximum(abs.(wt.parent.v .- w_ref[my_start:my_end]))
-@test err_vta < TOL
-
-# transpose(v) / a
-wt = transpose(vdist) / a
-w_ref = v_global / a
-err_vtdiv = maximum(abs.(wt.parent.v .- w_ref[my_start:my_end]))
-@test err_vtdiv < TOL
 
 
 println(io0(), "[test] Vector size and eltype")

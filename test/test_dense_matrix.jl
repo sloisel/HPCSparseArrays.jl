@@ -1,5 +1,14 @@
 # MPI test for dense matrix (MatrixMPI) operations
 # This file is executed under mpiexec by runtests.jl
+# Parameterized over scalar types (CPU only - dense GPU ops use BLAS which doesn't support Metal)
+
+# Check Metal availability BEFORE loading MPI
+const METAL_AVAILABLE = try
+    using Metal
+    Metal.functional()
+catch e
+    false
+end
 
 using MPI
 MPI.Init()
@@ -11,11 +20,12 @@ using Test
 include(joinpath(@__DIR__, "mpi_test_harness.jl"))
 using .MPITestHarness: QuietTestSet
 
+include(joinpath(@__DIR__, "test_utils.jl"))
+using .TestUtils
+
 comm = MPI.COMM_WORLD
 rank = MPI.Comm_rank(comm)
 nranks = MPI.Comm_size(comm)
-
-const TOL = 1e-12
 
 # Helper function to gather a MatrixMPI back to a global matrix for testing
 function gather_matrix(A::MatrixMPI{T}) where T
@@ -26,7 +36,7 @@ function gather_matrix(A::MatrixMPI{T}) where T
     # Gather each column
     result = Matrix{T}(undef, m, n)
     for j in 1:n
-        col_data = A.A[:, j]
+        col_data = Array(A.A[:, j])  # Array() handles GPU arrays
         full_col = Vector{T}(undef, m)
         MPI.Allgatherv!(col_data, MPI.VBuffer(full_col, counts), comm)
         result[:, j] = full_col
@@ -36,426 +46,392 @@ end
 
 ts = @testset QuietTestSet "Dense Matrix" begin
 
-println(io0(), "[test] MatrixMPI construction")
+for (T, to_backend, backend_name) in TestUtils.CPU_ONLY_CONFIGS
+    TOL = TestUtils.tolerance(T)
 
-m, n = 8, 6
-# Deterministic matrix
-A = Float64.([i + j for i in 1:m, j in 1:n])
+    println(io0(), "[test] MatrixMPI construction ($T, $backend_name)")
 
-Adist = MatrixMPI(A)
+    m, n = 8, 6
+    A = TestUtils.dense_matrix(T, m, n)
 
-@test size(Adist) == (m, n)
-@test size(Adist, 1) == m
-@test size(Adist, 2) == n
-@test eltype(Adist) == Float64
+    Adist = to_backend(MatrixMPI(A))
 
-# Check local rows
-my_start = Adist.row_partition[rank+1]
-my_end = Adist.row_partition[rank+2] - 1
-local_ref = A[my_start:my_end, :]
-err = maximum(abs.(Adist.A .- local_ref))
-@test err < TOL
+    @test size(Adist) == (m, n)
+    @test size(Adist, 1) == m
+    @test size(Adist, 2) == n
+    @test eltype(Adist) == T
 
+    # Check local rows
+    my_start = Adist.row_partition[rank+1]
+    my_end = Adist.row_partition[rank+2] - 1
+    local_ref = A[my_start:my_end, :]
+    local_A = Array(Adist.A)
+    err = maximum(abs.(local_A .- local_ref))
+    @test err < TOL
 
-println(io0(), "[test] MatrixMPI * VectorMPI")
 
-m, n = 8, 6
-A = Float64.([i + j for i in 1:m, j in 1:n])
-x_global = collect(1.0:n)
+    println(io0(), "[test] MatrixMPI * VectorMPI ($T, $backend_name)")
 
-Adist = MatrixMPI(A)
-xdist = VectorMPI(x_global)
+    m, n = 8, 6
+    A = TestUtils.dense_matrix(T, m, n)
+    x_global = TestUtils.test_vector(T, n)
 
-ydist = Adist * xdist
-y_ref = A * x_global
+    Adist = to_backend(MatrixMPI(A))
+    xdist = to_backend(VectorMPI(x_global))
 
-my_start = Adist.row_partition[rank+1]
-my_end = Adist.row_partition[rank+2] - 1
-local_ref = y_ref[my_start:my_end]
+    ydist = Adist * xdist
+    y_ref = A * x_global
 
-err = maximum(abs.(ydist.v .- local_ref))
-@test err < TOL
+    my_start = Adist.row_partition[rank+1]
+    my_end = Adist.row_partition[rank+2] - 1
+    local_ref = y_ref[my_start:my_end]
 
+    local_y = TestUtils.local_values(ydist)
+    err = maximum(abs.(local_y .- local_ref))
+    @test err < TOL
 
-println(io0(), "[test] MatrixMPI mul! (in-place)")
 
-m, n = 8, 6
-A = Float64.([i + j for i in 1:m, j in 1:n])
-x_global = collect(1.0:n)
+    println(io0(), "[test] MatrixMPI mul! in-place ($T, $backend_name)")
 
-Adist = MatrixMPI(A)
-xdist = VectorMPI(x_global)
-ydist = VectorMPI(zeros(m))
+    m, n = 8, 6
+    A = TestUtils.dense_matrix(T, m, n)
+    x_global = TestUtils.test_vector(T, n)
 
-LinearAlgebra.mul!(ydist, Adist, xdist)
-y_ref = A * x_global
+    Adist = to_backend(MatrixMPI(A))
+    xdist = to_backend(VectorMPI(x_global))
+    ydist = to_backend(VectorMPI(zeros(T, m)))
 
-my_start = Adist.row_partition[rank+1]
-my_end = Adist.row_partition[rank+2] - 1
-local_ref = y_ref[my_start:my_end]
+    LinearAlgebra.mul!(ydist, Adist, xdist)
+    y_ref = A * x_global
 
-err = maximum(abs.(ydist.v .- local_ref))
-@test err < TOL
+    my_start = Adist.row_partition[rank+1]
+    my_end = Adist.row_partition[rank+2] - 1
+    local_ref = y_ref[my_start:my_end]
 
+    local_y = TestUtils.local_values(ydist)
+    err = maximum(abs.(local_y .- local_ref))
+    @test err < TOL
 
-println(io0(), "[test] MatrixMPI with ComplexF64")
 
-m, n = 8, 6
-A = ComplexF64.([i + j for i in 1:m, j in 1:n]) .+ im .* ComplexF64.([i - j for i in 1:m, j in 1:n])
-x_global = ComplexF64.(1:n) .+ im .* ComplexF64.(n:-1:1)
+    println(io0(), "[test] transpose(MatrixMPI) * VectorMPI ($T, $backend_name)")
 
-Adist = MatrixMPI(A)
-xdist = VectorMPI(x_global)
+    m, n = 8, 6
+    A = TestUtils.dense_matrix(T, m, n)
+    x_global = TestUtils.test_vector(T, m)
 
-ydist = Adist * xdist
-y_ref = A * x_global
+    Adist = to_backend(MatrixMPI(A))
+    xdist = to_backend(VectorMPI(x_global))
 
-my_start = Adist.row_partition[rank+1]
-my_end = Adist.row_partition[rank+2] - 1
-local_ref = y_ref[my_start:my_end]
+    # transpose(A) * x
+    ydist = transpose(Adist) * xdist
+    y_ref = transpose(A) * x_global
 
-err = maximum(abs.(ydist.v .- local_ref))
-@test err < TOL
+    my_col_start = Adist.col_partition[rank+1]
+    my_col_end = Adist.col_partition[rank+2] - 1
+    local_ref = y_ref[my_col_start:my_col_end]
 
+    local_y = TestUtils.local_values(ydist)
+    err = maximum(abs.(local_y .- local_ref))
+    @test err < TOL
 
-println(io0(), "[test] transpose(MatrixMPI) * VectorMPI")
 
-m, n = 8, 6
-A = Float64.([i + j for i in 1:m, j in 1:n])
-x_global = collect(1.0:m)
+    # Adjoint tests only meaningful for complex
+    if T <: Complex
+        println(io0(), "[test] adjoint(MatrixMPI) * VectorMPI ($T, $backend_name)")
 
-Adist = MatrixMPI(A)
-xdist = VectorMPI(x_global)
+        m, n = 8, 6
+        A = TestUtils.dense_matrix(T, m, n)
+        x_global = TestUtils.test_vector(T, m)
 
-# transpose(A) * x
-ydist = transpose(Adist) * xdist
-y_ref = transpose(A) * x_global
+        Adist = to_backend(MatrixMPI(A))
+        xdist = to_backend(VectorMPI(x_global))
 
-my_col_start = Adist.col_partition[rank+1]
-my_col_end = Adist.col_partition[rank+2] - 1
-local_ref = y_ref[my_col_start:my_col_end]
+        # adjoint(A) * x
+        ydist = adjoint(Adist) * xdist
+        y_ref = adjoint(A) * x_global
 
-err = maximum(abs.(ydist.v .- local_ref))
-@test err < TOL
+        my_col_start = Adist.col_partition[rank+1]
+        my_col_end = Adist.col_partition[rank+2] - 1
+        local_ref = y_ref[my_col_start:my_col_end]
 
+        local_y = TestUtils.local_values(ydist)
+        err = maximum(abs.(local_y .- local_ref))
+        @test err < TOL
+    end
 
-println(io0(), "[test] adjoint(MatrixMPI) * VectorMPI")
 
-m, n = 8, 6
-A = ComplexF64.([i + j for i in 1:m, j in 1:n]) .+ im .* ComplexF64.([i - j for i in 1:m, j in 1:n])
-x_global = ComplexF64.(1:m) .+ im .* ComplexF64.(m:-1:1)
+    println(io0(), "[test] transpose(VectorMPI) * MatrixMPI ($T, $backend_name)")
 
-Adist = MatrixMPI(A)
-xdist = VectorMPI(x_global)
+    m, n = 8, 6
+    A = TestUtils.dense_matrix(T, m, n)
+    x_global = TestUtils.test_vector(T, m)
 
-# adjoint(A) * x
-ydist = adjoint(Adist) * xdist
-y_ref = adjoint(A) * x_global
+    Adist = to_backend(MatrixMPI(A))
+    xdist = to_backend(VectorMPI(x_global))
 
-my_col_start = Adist.col_partition[rank+1]
-my_col_end = Adist.col_partition[rank+2] - 1
-local_ref = y_ref[my_col_start:my_col_end]
+    # transpose(v) * A
+    yt = transpose(xdist) * Adist
+    y_ref = transpose(x_global) * A
 
-err = maximum(abs.(ydist.v .- local_ref))
-@test err < TOL
+    my_col_start = Adist.col_partition[rank+1]
+    my_col_end = Adist.col_partition[rank+2] - 1
+    local_ref = collect(y_ref)[my_col_start:my_col_end]
 
+    local_yt = TestUtils.local_values(yt.parent)
+    err = maximum(abs.(local_yt .- local_ref))
+    @test err < TOL
 
-println(io0(), "[test] transpose(VectorMPI) * MatrixMPI")
 
-m, n = 8, 6
-A = Float64.([i + j for i in 1:m, j in 1:n])
-x_global = collect(1.0:m)
+    println(io0(), "[test] VectorMPI' * MatrixMPI ($T, $backend_name)")
 
-Adist = MatrixMPI(A)
-xdist = VectorMPI(x_global)
+    m, n = 8, 6
+    A = TestUtils.dense_matrix(T, m, n)
+    x_global = TestUtils.test_vector(T, m)
 
-# transpose(v) * A
-yt = transpose(xdist) * Adist
-y_ref = transpose(x_global) * A
+    Adist = to_backend(MatrixMPI(A))
+    xdist = to_backend(VectorMPI(x_global))
 
-my_col_start = Adist.col_partition[rank+1]
-my_col_end = Adist.col_partition[rank+2] - 1
-local_ref = collect(y_ref)[my_col_start:my_col_end]
+    # v' * A
+    yt = xdist' * Adist
+    y_ref = x_global' * A
 
-err = maximum(abs.(yt.parent.v .- local_ref))
-@test err < TOL
+    my_col_start = Adist.col_partition[rank+1]
+    my_col_end = Adist.col_partition[rank+2] - 1
+    local_ref = collect(y_ref)[my_col_start:my_col_end]
 
+    local_yt = TestUtils.local_values(yt.parent)
+    err = maximum(abs.(local_yt .- local_ref))
+    @test err < TOL
 
-println(io0(), "[test] VectorMPI' * MatrixMPI (Float64)")
 
-m, n = 8, 6
-A = Float64.([i + j for i in 1:m, j in 1:n])
-x_global = collect(1.0:m)
+    println(io0(), "[test] MatrixMPI transpose materialization ($T, $backend_name)")
 
-Adist = MatrixMPI(A)
-xdist = VectorMPI(x_global)
+    m, n = 8, 6
+    A = TestUtils.dense_matrix(T, m, n)
 
-# v' * A (Float64)
-yt = xdist' * Adist
-y_ref = x_global' * A
+    Adist = to_backend(MatrixMPI(A))
+    At_dist = copy(transpose(Adist))
 
-my_col_start = Adist.col_partition[rank+1]
-my_col_end = Adist.col_partition[rank+2] - 1
-local_ref = collect(y_ref)[my_col_start:my_col_end]
+    At_ref = transpose(A)
+    @test size(At_dist) == (n, m)
 
-err = maximum(abs.(yt.parent.v .- local_ref))
-@test err < TOL
+    my_start = At_dist.row_partition[rank+1]
+    my_end = At_dist.row_partition[rank+2] - 1
+    local_ref = At_ref[my_start:my_end, :]
 
+    local_At = Array(At_dist.A)
+    err = maximum(abs.(local_At .- local_ref))
+    @test err < TOL
 
-println(io0(), "[test] VectorMPI' * MatrixMPI (ComplexF64)")
 
-m, n = 8, 6
-A = ComplexF64.([i + j for i in 1:m, j in 1:n]) .+ im .* ComplexF64.([i - j for i in 1:m, j in 1:n])
-x_global = ComplexF64.(1:m) .+ im .* ComplexF64.(m:-1:1)
+    if T <: Complex
+        println(io0(), "[test] MatrixMPI adjoint materialization ($T, $backend_name)")
 
-Adist = MatrixMPI(A)
-xdist = VectorMPI(x_global)
+        m, n = 8, 6
+        A = TestUtils.dense_matrix(T, m, n)
 
-# v' * A (ComplexF64)
-yt = xdist' * Adist
-y_ref = x_global' * A
+        Adist = to_backend(MatrixMPI(A))
+        Ah_dist = copy(adjoint(Adist))
 
-my_col_start = Adist.col_partition[rank+1]
-my_col_end = Adist.col_partition[rank+2] - 1
-local_ref = collect(y_ref)[my_col_start:my_col_end]
+        Ah_ref = adjoint(A)
+        @test size(Ah_dist) == (n, m)
 
-err = maximum(abs.(yt.parent.v .- local_ref))
-@test err < TOL
+        my_start = Ah_dist.row_partition[rank+1]
+        my_end = Ah_dist.row_partition[rank+2] - 1
+        local_ref = Ah_ref[my_start:my_end, :]
 
+        local_Ah = Array(Ah_dist.A)
+        err = maximum(abs.(local_Ah .- local_ref))
+        @test err < TOL
+    end
 
-println(io0(), "[test] MatrixMPI transpose materialization")
 
-m, n = 8, 6
-A = Float64.([i + j for i in 1:m, j in 1:n])
+    println(io0(), "[test] MatrixMPI scalar multiplication ($T, $backend_name)")
 
-Adist = MatrixMPI(A)
-At_dist = copy(transpose(Adist))
+    m, n = 8, 6
+    A = TestUtils.dense_matrix(T, m, n)
+    a = T <: Complex ? T(3.5 + 0.5im) : T(3.5)
 
-At_ref = transpose(A)
-@test size(At_dist) == (n, m)
+    Adist = to_backend(MatrixMPI(A))
 
-my_start = At_dist.row_partition[rank+1]
-my_end = At_dist.row_partition[rank+2] - 1
-local_ref = At_ref[my_start:my_end, :]
+    my_start = Adist.row_partition[rank+1]
+    my_end = Adist.row_partition[rank+2] - 1
 
-err = maximum(abs.(At_dist.A .- local_ref))
-@test err < TOL
+    # a * A
+    Bdist = a * Adist
+    B_ref = a * A
+    local_B = Array(Bdist.A)
+    err_aA = maximum(abs.(local_B .- B_ref[my_start:my_end, :]))
+    @test err_aA < TOL
 
+    # A * a
+    Bdist = Adist * a
+    local_B = Array(Bdist.A)
+    err_Aa = maximum(abs.(local_B .- B_ref[my_start:my_end, :]))
+    @test err_Aa < TOL
 
-println(io0(), "[test] MatrixMPI adjoint materialization")
+    # a * transpose(A)
+    Ct = a * transpose(Adist)
+    @test isa(Ct, Transpose)
 
-m, n = 8, 6
-A = ComplexF64.([i + j for i in 1:m, j in 1:n]) .+ im .* ComplexF64.([i - j for i in 1:m, j in 1:n])
+    # transpose(A) * a
+    Ct = transpose(Adist) * a
+    @test isa(Ct, Transpose)
 
-Adist = MatrixMPI(A)
-Ah_dist = copy(adjoint(Adist))
 
-Ah_ref = adjoint(A)
-@test size(Ah_dist) == (n, m)
+    if T <: Complex
+        println(io0(), "[test] MatrixMPI conj ($T, $backend_name)")
 
-my_start = Ah_dist.row_partition[rank+1]
-my_end = Ah_dist.row_partition[rank+2] - 1
-local_ref = Ah_ref[my_start:my_end, :]
+        m, n = 8, 6
+        A = TestUtils.dense_matrix(T, m, n)
 
-err = maximum(abs.(Ah_dist.A .- local_ref))
-@test err < TOL
+        Adist = to_backend(MatrixMPI(A))
+        Aconj_dist = conj(Adist)
 
+        Aconj_ref = conj.(A)
+        my_start = Adist.row_partition[rank+1]
+        my_end = Adist.row_partition[rank+2] - 1
+        local_ref = Aconj_ref[my_start:my_end, :]
 
-println(io0(), "[test] MatrixMPI scalar multiplication")
+        local_Aconj = Array(Aconj_dist.A)
+        err = maximum(abs.(local_Aconj .- local_ref))
+        @test err < TOL
+    end
 
-m, n = 8, 6
-A = Float64.([i + j for i in 1:m, j in 1:n])
-a = 3.5
 
-Adist = MatrixMPI(A)
+    println(io0(), "[test] MatrixMPI norms ($T, $backend_name)")
 
-my_start = Adist.row_partition[rank+1]
-my_end = Adist.row_partition[rank+2] - 1
+    m, n = 8, 6
+    A = TestUtils.dense_matrix(real(T), m, n)  # Use real type for norm tests
 
-# a * A
-Bdist = a * Adist
-B_ref = a * A
-err_aA = maximum(abs.(Bdist.A .- B_ref[my_start:my_end, :]))
-@test err_aA < TOL
+    Adist = to_backend(MatrixMPI(A))
+    Adist_cpu = TestUtils.to_cpu(Adist)
 
-# A * a
-Bdist = Adist * a
-err_Aa = maximum(abs.(Bdist.A .- B_ref[my_start:my_end, :]))
-@test err_Aa < TOL
+    # Frobenius norm (2-norm)
+    norm2 = norm(Adist_cpu)
+    norm2_ref = norm(A)
+    @test abs(norm2 - norm2_ref) < TOL
 
-# a * transpose(A)
-Ct = a * transpose(Adist)
-@test isa(Ct, Transpose)
+    # 1-norm (element-wise)
+    norm1 = norm(Adist_cpu, 1)
+    norm1_ref = norm(A, 1)
+    @test abs(norm1 - norm1_ref) < TOL
 
-# transpose(A) * a
-Ct = transpose(Adist) * a
-@test isa(Ct, Transpose)
+    # Inf-norm (element-wise)
+    norminf = norm(Adist_cpu, Inf)
+    norminf_ref = norm(A, Inf)
+    @test abs(norminf - norminf_ref) < TOL
 
 
-println(io0(), "[test] MatrixMPI conj")
+    println(io0(), "[test] MatrixMPI operator norms ($T, $backend_name)")
 
-m, n = 8, 6
-A = ComplexF64.([i + j for i in 1:m, j in 1:n]) .+ im .* ComplexF64.([i - j for i in 1:m, j in 1:n])
+    m, n = 8, 6
+    A = TestUtils.dense_matrix(real(T), m, n)
 
-Adist = MatrixMPI(A)
-Aconj_dist = conj(Adist)
+    Adist = to_backend(MatrixMPI(A))
+    Adist_cpu = TestUtils.to_cpu(Adist)
 
-Aconj_ref = conj.(A)
-my_start = Adist.row_partition[rank+1]
-my_end = Adist.row_partition[rank+2] - 1
-local_ref = Aconj_ref[my_start:my_end, :]
+    # 1-norm (max column sum)
+    opnorm1 = opnorm(Adist_cpu, 1)
+    opnorm1_ref = opnorm(A, 1)
+    @test abs(opnorm1 - opnorm1_ref) < TOL
 
-err = maximum(abs.(Aconj_dist.A .- local_ref))
-@test err < TOL
+    # Inf-norm (max row sum)
+    opnorminf = opnorm(Adist_cpu, Inf)
+    opnorminf_ref = opnorm(A, Inf)
+    @test abs(opnorminf - opnorminf_ref) < TOL
 
 
-println(io0(), "[test] MatrixMPI norms")
+    println(io0(), "[test] Square MatrixMPI operations ($T, $backend_name)")
 
-m, n = 8, 6
-A = Float64.([i + j for i in 1:m, j in 1:n])
+    n = 8
+    A = TestUtils.dense_matrix(T, n, n)
+    x_global = TestUtils.test_vector(T, n)
 
-Adist = MatrixMPI(A)
+    Adist = to_backend(MatrixMPI(A))
+    xdist = to_backend(VectorMPI(x_global))
 
-# Frobenius norm (2-norm)
-norm2 = norm(Adist)
-norm2_ref = norm(A)
-@test abs(norm2 - norm2_ref) < TOL
+    # A * x
+    ydist = Adist * xdist
+    y_ref = A * x_global
 
-# 1-norm (element-wise)
-norm1 = norm(Adist, 1)
-norm1_ref = norm(A, 1)
-@test abs(norm1 - norm1_ref) < TOL
+    my_start = Adist.row_partition[rank+1]
+    my_end = Adist.row_partition[rank+2] - 1
+    local_ref = y_ref[my_start:my_end]
 
-# Inf-norm (element-wise)
-norminf = norm(Adist, Inf)
-norminf_ref = norm(A, Inf)
-@test abs(norminf - norminf_ref) < TOL
+    local_y = TestUtils.local_values(ydist)
+    err = maximum(abs.(local_y .- local_ref))
+    @test err < TOL
 
-# Non-integer p-norm (p = 1.5)
-norm15 = norm(Adist, 1.5)
-norm15_ref = norm(A, 1.5)
-@test abs(norm15 - norm15_ref) < TOL
+    # transpose(A) * x (same partition since square)
+    ydist_t = transpose(Adist) * xdist
+    y_ref_t = transpose(A) * x_global
 
+    local_yt = TestUtils.local_values(ydist_t)
+    err_t = maximum(abs.(local_yt .- y_ref_t[my_start:my_end]))
+    @test err_t < TOL
 
-println(io0(), "[test] MatrixMPI operator norms")
+end  # for (T, to_backend, backend_name)
 
-m, n = 8, 6
-A = Float64.([i + j for i in 1:m, j in 1:n])
 
-Adist = MatrixMPI(A)
+# mapslices tests - CPU only (complex function calls)
+for (T, to_backend, backend_name) in TestUtils.CPU_ONLY_CONFIGS
+    TOL = TestUtils.tolerance(T)
 
-# 1-norm (max column sum)
-opnorm1 = opnorm(Adist, 1)
-opnorm1_ref = opnorm(A, 1)
-@test abs(opnorm1 - opnorm1_ref) < TOL
+    println(io0(), "[test] mapslices dims=2 row-wise ($T, $backend_name)")
 
-# Inf-norm (max row sum)
-opnorminf = opnorm(Adist, Inf)
-opnorminf_ref = opnorm(A, Inf)
-@test abs(opnorminf - opnorminf_ref) < TOL
+    m, n = 8, 5
+    A = TestUtils.dense_matrix(real(T), m, n)
 
+    Adist = MatrixMPI(A)
 
-println(io0(), "[test] Square MatrixMPI operations")
+    # Function that transforms each row: 5 elements -> 3 elements
+    f_row = x -> [norm(x), maximum(x), sum(x)]
 
-n = 8
-A = Float64.([i + j for i in 1:n, j in 1:n])
-x_global = collect(1.0:n)
+    Bdist = mapslices(f_row, Adist; dims=2)
+    B_ref = mapslices(f_row, A; dims=2)
 
-Adist = MatrixMPI(A)
-xdist = VectorMPI(x_global)
+    @test size(Bdist) == size(B_ref)
 
-# A * x
-ydist = Adist * xdist
-y_ref = A * x_global
+    gathered = gather_matrix(Bdist)
+    err = maximum(abs.(gathered .- B_ref))
+    @test err < TOL
 
-my_start = Adist.row_partition[rank+1]
-my_end = Adist.row_partition[rank+2] - 1
-local_ref = y_ref[my_start:my_end]
 
-err = maximum(abs.(ydist.v .- local_ref))
-@test err < TOL
+    println(io0(), "[test] mapslices dims=1 column-wise ($T, $backend_name)")
 
-# transpose(A) * x (same partition since square)
-ydist_t = transpose(Adist) * xdist
-y_ref_t = transpose(A) * x_global
+    m, n = 8, 5
+    A = TestUtils.dense_matrix(real(T), m, n)
 
-err_t = maximum(abs.(ydist_t.v .- y_ref_t[my_start:my_end]))
-@test err_t < TOL
+    Adist = MatrixMPI(A)
 
+    # Function that transforms each column: 8 elements -> 2 elements
+    f_col = x -> [norm(x), maximum(x)]
 
-println(io0(), "[test] mapslices dims=2 (row-wise)")
+    Bdist = mapslices(f_col, Adist; dims=1)
+    B_ref = mapslices(f_col, A; dims=1)
 
-m, n = 8, 5
-A = Float64.([i + 0.1*j for i in 1:m, j in 1:n])
+    @test size(Bdist) == size(B_ref)
 
-Adist = MatrixMPI(A)
+    gathered = gather_matrix(Bdist)
+    err = maximum(abs.(gathered .- B_ref))
+    @test err < TOL
 
-# Function that transforms each row: 5 elements -> 3 elements
-f_row = x -> [norm(x), maximum(x), sum(x)]
 
-Bdist = mapslices(f_row, Adist; dims=2)
-B_ref = mapslices(f_row, A; dims=2)
+    println(io0(), "[test] mapslices dims=2 preserves row partition ($T, $backend_name)")
 
-@test size(Bdist) == size(B_ref)
+    m, n = 8, 5
+    A = TestUtils.dense_matrix(real(T), m, n)
 
-gathered = gather_matrix(Bdist)
-err = maximum(abs.(gathered .- B_ref))
-@test err < TOL
+    Adist = MatrixMPI(A)
 
+    f_partition = x -> [norm(x), maximum(x)]
+    Bdist = mapslices(f_partition, Adist; dims=2)
 
-println(io0(), "[test] mapslices dims=1 (column-wise)")
+    # dims=2 preserves row partition
+    @test Bdist.row_partition == Adist.row_partition
 
-m, n = 8, 5
-A = Float64.([i + 0.1*j for i in 1:m, j in 1:n])
-
-Adist = MatrixMPI(A)
-
-# Function that transforms each column: 8 elements -> 2 elements
-f_col = x -> [norm(x), maximum(x)]
-
-Bdist = mapslices(f_col, Adist; dims=1)
-B_ref = mapslices(f_col, A; dims=1)
-
-@test size(Bdist) == size(B_ref)
-
-gathered = gather_matrix(Bdist)
-err = maximum(abs.(gathered .- B_ref))
-@test err < TOL
-
-
-println(io0(), "[test] mapslices dims=2 preserves row partition")
-
-m, n = 8, 5
-A = Float64.([i + 0.1*j for i in 1:m, j in 1:n])
-
-Adist = MatrixMPI(A)
-
-f_partition = x -> [norm(x), maximum(x)]
-Bdist = mapslices(f_partition, Adist; dims=2)
-
-# dims=2 preserves row partition
-@test Bdist.row_partition == Adist.row_partition
-
-
-println(io0(), "[test] mapslices with ComplexF64")
-
-m, n = 8, 5
-A = ComplexF64.([i + 0.1*j for i in 1:m, j in 1:n]) .+ im .* ComplexF64.([i - j for i in 1:m, j in 1:n])
-
-Adist = MatrixMPI(A)
-
-# Function that returns real values
-f_complex = x -> [norm(x), abs(maximum(real.(x)))]
-
-Bdist = mapslices(f_complex, Adist; dims=2)
-B_ref = mapslices(f_complex, A; dims=2)
-
-@test size(Bdist) == size(B_ref)
-
-gathered = gather_matrix(Bdist)
-err = maximum(abs.(gathered .- B_ref))
-@test err < TOL
-
+end  # mapslices tests
 
 end  # QuietTestSet
 
@@ -470,7 +446,7 @@ local_counts = [
 global_counts = similar(local_counts)
 MPI.Allreduce!(local_counts, global_counts, +, comm)
 
-println("Test Summary: Dense Matrix | Pass: $(global_counts[1])  Fail: $(global_counts[2])  Error: $(global_counts[3])")
+println(io0(), "Test Summary: Dense Matrix | Pass: $(global_counts[1])  Fail: $(global_counts[2])  Error: $(global_counts[3])")
 
 MPI.Finalize()
 

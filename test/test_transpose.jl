@@ -1,5 +1,14 @@
 # MPI test for transpose
 # This file is executed under mpiexec by runtests.jl
+# Parameterized over scalar types and backends (CPU/GPU)
+
+# Check Metal availability BEFORE loading MPI
+const METAL_AVAILABLE = try
+    using Metal
+    Metal.functional()
+catch e
+    false
+end
 
 using MPI
 MPI.Init()
@@ -12,56 +21,61 @@ using Test
 include(joinpath(@__DIR__, "mpi_test_harness.jl"))
 using .MPITestHarness: QuietTestSet
 
-comm = MPI.COMM_WORLD
+include(joinpath(@__DIR__, "test_utils.jl"))
+using .TestUtils
 
-const TOL = 1e-12
+comm = MPI.COMM_WORLD
 
 ts = @testset QuietTestSet "Transpose" begin
 
-println(io0(), "[test] Transpose")
+for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
+    TOL = TestUtils.tolerance(T)
 
-m, n = 10, 8
-I_idx = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 1, 3, 5, 7, 9]
-J_idx = [1, 2, 3, 4, 5, 6, 7, 8, 1, 2,   3, 5, 7, 1, 4]
-V = Float64.(1:length(I_idx))
-A = sparse(I_idx, J_idx, V, m, n)
+    println(io0(), "[test] Transpose ($T, $backend_name)")
 
-Adist = SparseMatrixMPI{Float64}(A)
-plan = LinearAlgebraMPI.TransposePlan(Adist)
-ATdist = LinearAlgebraMPI.execute_plan!(plan, Adist)
-AT_ref = sparse(A')
-AT_ref_dist = SparseMatrixMPI{Float64}(AT_ref)
-err = norm(ATdist - AT_ref_dist, Inf)
-@test err < TOL
+    m, n = 10, 8
+    I_idx = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 1, 3, 5, 7, 9]
+    J_idx = [1, 2, 3, 4, 5, 6, 7, 8, 1, 2,   3, 5, 7, 1, 4]
+    V = T <: Complex ? T.(1:length(I_idx)) .+ im .* T.(length(I_idx):-1:1) : T.(1:length(I_idx))
+    A = sparse(I_idx, J_idx, V, m, n)
 
-println(io0(), "[test] Transpose with ComplexF64")
+    Adist = to_backend(SparseMatrixMPI{T}(A))
+    plan = LinearAlgebraMPI.TransposePlan(Adist)
+    ATdist = LinearAlgebraMPI.execute_plan!(plan, Adist)
+    AT_ref = sparse(transpose(A))
+    AT_ref_dist = to_backend(SparseMatrixMPI{T}(AT_ref))
 
-V_c = ComplexF64.(1:length(I_idx)) .+ im .* ComplexF64.(length(I_idx):-1:1)
-A_c = sparse(I_idx, J_idx, V_c, m, n)
+    ATdist_cpu = TestUtils.to_cpu(ATdist)
+    AT_ref_dist_cpu = TestUtils.to_cpu(AT_ref_dist)
+    err = norm(ATdist_cpu - AT_ref_dist_cpu, Inf)
+    @test err < TOL
 
-Adist_c = SparseMatrixMPI{ComplexF64}(A_c)
-plan_c = LinearAlgebraMPI.TransposePlan(Adist_c)
-ATdist_c = LinearAlgebraMPI.execute_plan!(plan_c, Adist_c)
-AT_ref_c = sparse(transpose(A_c))
-AT_ref_dist_c = SparseMatrixMPI{ComplexF64}(AT_ref_c)
-err_c = norm(ATdist_c - AT_ref_dist_c, Inf)
-@test err_c < TOL
 
-println(io0(), "[test] Square matrix transpose")
+    println(io0(), "[test] Square matrix transpose ($T, $backend_name)")
 
-n2 = 8
-I_idx2 = [1:n2; 1:n2-1; 2:n2]
-J_idx2 = [1:n2; 2:n2; 1:n2-1]
-V2 = [2.0*ones(Float64, n2); 0.3*ones(n2-1); 0.7*ones(n2-1)]
-A2 = sparse(I_idx2, J_idx2, V2, n2, n2)
+    n2 = 8
+    I_idx2 = [1:n2; 1:n2-1; 2:n2]
+    J_idx2 = [1:n2; 2:n2; 1:n2-1]
+    V2 = if T <: Complex
+        T.([2.0*ones(n2); 0.3*ones(n2-1); 0.7*ones(n2-1)]) .+
+        im .* T.([0.1*ones(n2); -0.1*ones(n2-1); 0.2*ones(n2-1)])
+    else
+        T.([2.0*ones(n2); 0.3*ones(n2-1); 0.7*ones(n2-1)])
+    end
+    A2 = sparse(I_idx2, J_idx2, V2, n2, n2)
 
-Adist2 = SparseMatrixMPI{Float64}(A2)
-plan2 = LinearAlgebraMPI.TransposePlan(Adist2)
-ATdist2 = LinearAlgebraMPI.execute_plan!(plan2, Adist2)
-AT_ref2 = sparse(A2')
-AT_ref_dist2 = SparseMatrixMPI{Float64}(AT_ref2)
-err2 = norm(ATdist2 - AT_ref_dist2, Inf)
-@test err2 < TOL
+    Adist2 = to_backend(SparseMatrixMPI{T}(A2))
+    plan2 = LinearAlgebraMPI.TransposePlan(Adist2)
+    ATdist2 = LinearAlgebraMPI.execute_plan!(plan2, Adist2)
+    AT_ref2 = sparse(transpose(A2))
+    AT_ref_dist2 = to_backend(SparseMatrixMPI{T}(AT_ref2))
+
+    ATdist2_cpu = TestUtils.to_cpu(ATdist2)
+    AT_ref_dist2_cpu = TestUtils.to_cpu(AT_ref_dist2)
+    err2 = norm(ATdist2_cpu - AT_ref_dist2_cpu, Inf)
+    @test err2 < TOL
+
+end  # for (T, to_backend, backend_name)
 
 end  # QuietTestSet
 
