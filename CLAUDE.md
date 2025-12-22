@@ -22,9 +22,47 @@ mpiexec -n 4 julia --project=. test/test_local_constructors.jl
 mpiexec -n 4 julia --project=. test/test_indexing.jl
 mpiexec -n 4 julia --project=. test/test_factorization.jl
 
+# Run GPU tests (requires Metal.jl on macOS)
+mpiexec -n 2 julia --project=. test/test_gpu.jl
+
 # Precompile the package
 julia --project=. -e 'using Pkg; Pkg.precompile()'
 ```
+
+## GPU Support
+
+GPU acceleration is supported via Metal.jl (macOS) as a package extension.
+
+### Type Parameters
+
+- `VectorMPI{T,AV}` where `AV` is `Vector{T}` (CPU) or `MtlVector{T}` (GPU)
+- `MatrixMPI{T,AM}` where `AM` is `Matrix{T}` (CPU) or `MtlMatrix{T}` (GPU)
+- Type aliases: `VectorMPI_CPU{T}`, `MatrixMPI_CPU{T}` for CPU-backed types
+
+### CPU Staging
+
+MPI communication always uses CPU buffers (no Metal-aware MPI exists). GPU data is staged through CPU:
+
+1. GPU vector data copied to CPU staging buffer
+2. MPI communication on CPU buffers
+3. Results copied back to GPU
+
+Plans (`VectorPlan`, `DenseMatrixVectorPlan`, `DenseTransposeVectorPlan`) include:
+- `gathered::AV` - buffer matching input type
+- `gathered_cpu::Vector{T}` - CPU staging buffer
+- `send_bufs`, `recv_bufs` - always CPU for MPI
+
+### Sparse Operations with GPU Vectors
+
+Sparse matrices remain on CPU (Julia's `SparseMatrixCSC` doesn't support GPU arrays). For `A * x` where `x` is GPU:
+1. Gather `x` elements via CPU staging
+2. Compute sparse multiply on CPU
+3. Copy result to GPU via `_create_output_like()`
+
+### Extension Files
+
+- `ext/LinearAlgebraMPIMetalExt.jl` - Metal extension with `mtl()` and `cpu()` functions
+- Loaded automatically when `using Metal` before `using LinearAlgebraMPI`
 
 ## Architecture
 
@@ -63,17 +101,19 @@ Many operations in this module are collective and should not be run on a subset 
 - `structural_hash`: Optional Blake3 hash of the matrix structure (computed lazily via `_ensure_hash`)
 - `cached_transpose`: Cached materialized transpose (invalidated on modification)
 
-**MatrixMPI{T}**
+**MatrixMPI{T,AM}**
 - Distributed dense matrix partitioned by rows across MPI ranks
-- `A::Matrix{T}`: Local rows stored directly (NOT transposed), size = `(local_nrows, ncols)`
-- `row_partition`: Array of size `nranks + 1` defining which rows each rank owns
-- `col_partition`: Array of size `nranks + 1` defining column partition (for transpose)
+- Type parameter `AM<:AbstractMatrix{T}`: `Matrix{T}` (CPU) or `MtlMatrix{T}` (GPU)
+- `A::AM`: Local rows stored directly (NOT transposed), size = `(local_nrows, ncols)`
+- `row_partition`: Array of size `nranks + 1` defining which rows each rank owns (always CPU)
+- `col_partition`: Array of size `nranks + 1` defining column partition (always CPU)
 - `structural_hash`: Optional Blake3 hash (computed lazily)
 
-**VectorMPI{T}**
+**VectorMPI{T,AV}**
 - Distributed dense vector partitioned across MPI ranks
-- `partition`: Array of size `nranks + 1` defining which elements each rank owns (1-indexed boundaries)
-- `v`: Local vector elements owned by this rank
+- Type parameter `AV<:AbstractVector{T}`: `Vector{T}` (CPU) or `MtlVector{T}` (GPU)
+- `partition`: Array of size `nranks + 1` defining which elements each rank owns (always CPU)
+- `v::AV`: Local vector elements owned by this rank
 - `structural_hash`: Blake3 hash of the partition (computed on construction)
 - Can have any partition (not required to match matrix partitions)
 
@@ -87,11 +127,13 @@ Many operations in this module are collective and should not be run on a subset 
 - Redistributes nonzeros based on `col_partition` becoming `row_partition`
 - Pre-allocates buffers for reusable execution
 
-**VectorPlan{T}**
+**VectorPlan{T,AV}**
 - Communication plan for gathering vector elements needed for `A * x`
+- Type parameter `AV`: matches input vector type for GPU support
 - Gathers `x[A.col_indices]` from appropriate ranks based on `x.partition`
-- Memoized based on structural hashes of A and x (see `_vector_plan_cache`)
-- Pre-allocates all send/receive buffers for allocation-free `execute_plan!` calls
+- Memoized based on structural hashes of A and x plus array type (see `_vector_plan_cache`)
+- `gathered::AV`: buffer matching input type, `gathered_cpu::Vector{T}`: CPU staging
+- `send_bufs`, `recv_bufs`: always CPU for MPI communication
 
 ### Factorization
 
