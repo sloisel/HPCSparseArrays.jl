@@ -65,7 +65,9 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
     println(io0(), "[test] f returns SVector -> MatrixMPI ($T, $backend_name)")
 
     A4 = to_backend(MatrixMPI(T.([1.0 2.0; 3.0 4.0; 5.0 6.0])))
-    result4 = map_rows(r -> SVector(T(1), T(2), T(3)), A4)
+    # Pre-compute constant SVector for GPU (capturing Type{T} is not isbits)
+    const_sv = SVector{3,T}(T(1), T(2), T(3))
+    result4 = map_rows(r -> const_sv, A4)
     expected4 = T.([1 2 3; 1 2 3; 1 2 3])
     @test norm(Matrix(result4) - expected4) < TOL
     @test size(result4) == (3, 3)
