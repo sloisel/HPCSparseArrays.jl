@@ -57,9 +57,8 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
 
     Adist = to_backend(MatrixMPI(A))
 
-    @test size(Adist) == (m, n)
-    @test size(Adist, 1) == m
-    @test size(Adist, 2) == n
+    @test assert_uniform(size(Adist, 1), name="size1") == m
+    @test assert_uniform(size(Adist, 2), name="size2") == n
     @test eltype(Adist) == T
 
     # Check local rows
@@ -309,17 +308,17 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
     Adist_cpu = TestUtils.to_cpu(Adist)
 
     # Frobenius norm (2-norm)
-    norm2 = norm(Adist_cpu)
+    norm2 = assert_uniform(norm(Adist_cpu), name="norm2")
     norm2_ref = norm(A)
     @test abs(norm2 - norm2_ref) < TOL
 
     # 1-norm (element-wise)
-    norm1 = norm(Adist_cpu, 1)
+    norm1 = assert_uniform(norm(Adist_cpu, 1), name="norm1")
     norm1_ref = norm(A, 1)
     @test abs(norm1 - norm1_ref) < TOL
 
     # Inf-norm (element-wise)
-    norminf = norm(Adist_cpu, Inf)
+    norminf = assert_uniform(norm(Adist_cpu, Inf), name="norminf")
     norminf_ref = norm(A, Inf)
     @test abs(norminf - norminf_ref) < TOL
 
@@ -333,12 +332,12 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
     Adist_cpu = TestUtils.to_cpu(Adist)
 
     # 1-norm (max column sum)
-    opnorm1 = opnorm(Adist_cpu, 1)
+    opnorm1 = assert_uniform(opnorm(Adist_cpu, 1), name="opnorm1")
     opnorm1_ref = opnorm(A, 1)
     @test abs(opnorm1 - opnorm1_ref) < TOL
 
     # Inf-norm (max row sum)
-    opnorminf = opnorm(Adist_cpu, Inf)
+    opnorminf = assert_uniform(opnorm(Adist_cpu, Inf), name="opnorminf")
     opnorminf_ref = opnorm(A, Inf)
     @test abs(opnorminf - opnorminf_ref) < TOL
 

@@ -1381,10 +1381,10 @@ using PrecompileTools
         # === Mixed operations ===
         _ = A * D  # Sparse * Dense
 
-        # === Indexing ===
-        _ = v[1]
-        _ = A[1, 1]
-        _ = D[1, 1]
+        # === Indexing (scalar indexing removed to prevent MPI desync) ===
+        # Slice indexing still works:
+        _ = v[1:2]
+        _ = D[:, 1]
 
         # === Factorization (MUMPS) ===
         # Make symmetric positive definite: A + A^T + 10I

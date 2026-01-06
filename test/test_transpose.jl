@@ -48,7 +48,7 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
 
     ATdist_cpu = TestUtils.to_cpu(ATdist)
     AT_ref_dist_cpu = TestUtils.to_cpu(AT_ref_dist)
-    err = norm(ATdist_cpu - AT_ref_dist_cpu, Inf)
+    err = assert_uniform(norm(ATdist_cpu - AT_ref_dist_cpu, Inf), name="transpose_err")
     @test err < TOL
 
 
@@ -73,7 +73,7 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
 
     ATdist2_cpu = TestUtils.to_cpu(ATdist2)
     AT_ref_dist2_cpu = TestUtils.to_cpu(AT_ref_dist2)
-    err2 = norm(ATdist2_cpu - AT_ref_dist2_cpu, Inf)
+    err2 = assert_uniform(norm(ATdist2_cpu - AT_ref_dist2_cpu, Inf), name="square_transpose_err")
     @test err2 < TOL
 
 end  # for (T, to_backend, backend_name)

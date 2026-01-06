@@ -56,7 +56,7 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
 
     Cdist_cpu = TestUtils.to_cpu(Cdist)
     C_ref_dist_cpu = TestUtils.to_cpu(C_ref_dist)
-    err = norm(Cdist_cpu - C_ref_dist_cpu, Inf)
+    err = assert_uniform(norm(Cdist_cpu - C_ref_dist_cpu, Inf), name="add_err")
     @test err < TOL
 
 
@@ -88,7 +88,7 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
 
     Cdist2_cpu = TestUtils.to_cpu(Cdist2)
     C_ref_dist2_cpu = TestUtils.to_cpu(C_ref_dist2)
-    err2 = norm(Cdist2_cpu - C_ref_dist2_cpu, Inf)
+    err2 = assert_uniform(norm(Cdist2_cpu - C_ref_dist2_cpu, Inf), name="sub_err")
     @test err2 < TOL
 
 
@@ -112,7 +112,7 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
 
     Cdist3_cpu = TestUtils.to_cpu(Cdist3)
     C_ref_dist3_cpu = TestUtils.to_cpu(C_ref_dist3)
-    err3 = norm(Cdist3_cpu - C_ref_dist3_cpu, Inf)
+    err3 = assert_uniform(norm(Cdist3_cpu - C_ref_dist3_cpu, Inf), name="diff_sparsity_err")
     @test err3 < TOL
 
 
@@ -121,7 +121,7 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
     # Test that repeating the same addition uses the cached plan
     Cdist3_repeat = assert_type(Adist3 + Bdist3, ST)
     Cdist3_repeat_cpu = TestUtils.to_cpu(Cdist3_repeat)
-    err3_repeat = norm(Cdist3_repeat_cpu - C_ref_dist3_cpu, Inf)
+    err3_repeat = assert_uniform(norm(Cdist3_repeat_cpu - C_ref_dist3_cpu, Inf), name="cached_add_err")
     @test err3_repeat < TOL
 
 
@@ -133,12 +133,12 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
     D_ref_dist = to_backend(SparseMatrixMPI{T}(D_ref))
     D_ref_dist_cpu = TestUtils.to_cpu(D_ref_dist)
     Ddist_cpu = TestUtils.to_cpu(Ddist)
-    err_sub1 = norm(Ddist_cpu - D_ref_dist_cpu, Inf)
+    err_sub1 = assert_uniform(norm(Ddist_cpu - D_ref_dist_cpu, Inf), name="cached_sub_err1")
     @test err_sub1 < TOL
 
     Ddist_repeat = assert_type(Adist3 - Bdist3, ST)
     Ddist_repeat_cpu = TestUtils.to_cpu(Ddist_repeat)
-    err_sub2 = norm(Ddist_repeat_cpu - D_ref_dist_cpu, Inf)
+    err_sub2 = assert_uniform(norm(Ddist_repeat_cpu - D_ref_dist_cpu, Inf), name="cached_sub_err2")
     @test err_sub2 < TOL
 
 end  # for (T, to_backend, backend_name)

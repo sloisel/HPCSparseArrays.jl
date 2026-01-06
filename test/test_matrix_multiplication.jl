@@ -57,7 +57,7 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
     # Convert to CPU for norm comparison
     Cdist_cpu = TestUtils.to_cpu(Cdist)
     C_ref_dist_cpu = TestUtils.to_cpu(C_ref_dist)
-    err = norm(Cdist_cpu - C_ref_dist_cpu, Inf)
+    err = assert_uniform(norm(Cdist_cpu - C_ref_dist_cpu, Inf), name="matmul_err")
     @test err < TOL
 
 
@@ -82,7 +82,7 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
 
     Cdist2_cpu = TestUtils.to_cpu(Cdist2)
     C_ref_dist2_cpu = TestUtils.to_cpu(C_ref_dist2)
-    err2 = norm(Cdist2_cpu - C_ref_dist2_cpu, Inf)
+    err2 = assert_uniform(norm(Cdist2_cpu - C_ref_dist2_cpu, Inf), name="nonsquare_matmul_err")
     @test err2 < TOL
 
 end  # for (T, to_backend, backend_name)

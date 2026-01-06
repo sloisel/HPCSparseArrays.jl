@@ -158,7 +158,7 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
     x_cpu = TestUtils.to_cpu(x)
     x_full = Vector(x_cpu)
     residual = A_full * x_full - b_full
-    err = norm(residual, Inf)
+    err = assert_uniform(norm(residual, Inf), name="lu_residual")
 
     println(io0(), "  LU solve residual: $err")
     @test err < TOL

@@ -168,27 +168,27 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
     xdist_cpu = TestUtils.to_cpu(xdist)
 
     # 2-norm
-    norm2 = norm(xdist_cpu)
+    norm2 = assert_uniform(norm(xdist_cpu), name="norm2")
     norm2_ref = norm(x_global)
     @test abs(norm2 - norm2_ref) < TOL
 
     # 1-norm
-    norm1 = norm(xdist_cpu, 1)
+    norm1 = assert_uniform(norm(xdist_cpu, 1), name="norm1")
     norm1_ref = norm(x_global, 1)
     @test abs(norm1 - norm1_ref) < TOL
 
     # Inf-norm
-    norminf = norm(xdist_cpu, Inf)
+    norminf = assert_uniform(norm(xdist_cpu, Inf), name="norminf")
     norminf_ref = norm(x_global, Inf)
     @test abs(norminf - norminf_ref) < TOL
 
     # 3-norm (general p)
-    norm3 = norm(xdist_cpu, 3)
+    norm3 = assert_uniform(norm(xdist_cpu, 3), name="norm3")
     norm3_ref = norm(x_global, 3)
     @test abs(norm3 - norm3_ref) < TOL
 
     # Non-integer p-norm (p = 1.5)
-    norm15 = norm(xdist_cpu, 1.5)
+    norm15 = assert_uniform(norm(xdist_cpu, 1.5), name="norm15")
     norm15_ref = norm(x_global, 1.5)
     @test abs(norm15 - norm15_ref) < TOL
 
@@ -202,22 +202,22 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
     xdist_cpu = TestUtils.to_cpu(xdist)
 
     # sum
-    s = sum(xdist_cpu)
+    s = assert_uniform(sum(xdist_cpu), name="sum")
     s_ref = sum(x_global_real)
     @test abs(s - s_ref) < TOL
 
     # prod
-    p = prod(xdist_cpu)
+    p = assert_uniform(prod(xdist_cpu), name="prod")
     p_ref = prod(x_global_real)
     @test abs(p - p_ref) < TOL
 
     # maximum
-    mx = maximum(xdist_cpu)
+    mx = assert_uniform(maximum(xdist_cpu), name="maximum")
     mx_ref = maximum(x_global_real)
     @test abs(mx - mx_ref) < TOL
 
     # minimum
-    mn = minimum(xdist_cpu)
+    mn = assert_uniform(minimum(xdist_cpu), name="minimum")
     mn_ref = minimum(x_global_real)
     @test abs(mn - mn_ref) < TOL
 
@@ -387,9 +387,8 @@ n = 8
 v_global = collect(1.0:n)
 vdist = VectorMPI(v_global)
 
-@test length(vdist) == n
-@test size(vdist) == (n,)
-@test size(vdist, 1) == n
+@test assert_uniform(length(vdist), name="length") == n
+@test assert_uniform(size(vdist, 1), name="size1") == n
 @test eltype(vdist) == Float64
 @test eltype(VectorMPI{ComplexF64}) == ComplexF64
 

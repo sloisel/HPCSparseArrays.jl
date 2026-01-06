@@ -4,6 +4,7 @@
 module TestUtils
 
 using SparseArrays
+using MPI
 
 # Detect Metal availability BEFORE loading LinearAlgebraMPI
 # (Metal must be loaded first for GPU detection to work)
@@ -116,6 +117,41 @@ tolerance(::Type{Float32}) = 1e-4
 tolerance(::Type{ComplexF32}) = 1e-4
 
 """
+    assert_uniform(x; atol=0, rtol=0, name="value")
+
+Assert that scalar/small value `x` is identical across all MPI ranks.
+Uses Allgather to collect values from all ranks and compares them.
+Throws an error if values differ, without desynchronizing the cluster.
+
+For exact values (Int, Bool, Type): `assert_uniform(x)`
+For Float comparisons: `assert_uniform(x, atol=tol)` or `assert_uniform(x, rtol=tol)`
+"""
+function assert_uniform(x; atol=0, rtol=0, name="value")
+    comm = MPI.COMM_WORLD
+    nranks = MPI.Comm_size(comm)
+
+    # Gather all values to all ranks
+    all_values = MPI.Allgather(x, comm)
+
+    # Check uniformity
+    ref = all_values[1]
+    for i in 2:nranks
+        if atol == 0 && rtol == 0
+            # Exact equality
+            if all_values[i] != ref
+                error("assert_uniform failed for '$name': rank 0 has $ref, rank $(i-1) has $(all_values[i])")
+            end
+        else
+            # Approximate equality for floats
+            if !isapprox(all_values[i], ref; atol=atol, rtol=rtol)
+                error("assert_uniform failed for '$name': rank 0 has $ref, rank $(i-1) has $(all_values[i])")
+            end
+        end
+    end
+    return x
+end
+
+"""
     to_cpu(x)
 
 Convert to CPU if on GPU, otherwise return as-is.
@@ -211,6 +247,6 @@ end
 
 export METAL_AVAILABLE, CPU_CONFIGS, GPU_CONFIGS, ALL_CONFIGS, CPU_ONLY_CONFIGS
 export tridiagonal_matrix, dense_matrix, test_vector, test_vector_pair
-export tolerance, to_cpu, local_values, expected_types, assert_type
+export tolerance, to_cpu, local_values, expected_types, assert_type, assert_uniform
 
 end # module

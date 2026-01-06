@@ -64,7 +64,7 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
 
     result_dist_cpu = TestUtils.to_cpu(result_dist)
     ref_dist_cpu = TestUtils.to_cpu(ref_dist)
-    err = norm(result_dist_cpu - ref_dist_cpu, Inf)
+    err = assert_uniform(norm(result_dist_cpu - ref_dist_cpu, Inf), name="lazy_trans_trans_err")
     @test err < TOL
 
 
@@ -92,7 +92,7 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
 
     result_dist_cpu = TestUtils.to_cpu(result_dist)
     ref_dist_cpu = TestUtils.to_cpu(ref_dist)
-    err = norm(result_dist_cpu - ref_dist_cpu, Inf)
+    err = assert_uniform(norm(result_dist_cpu - ref_dist_cpu, Inf), name="trans_left_err")
     @test err < TOL
 
 
@@ -120,7 +120,7 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
 
     result_dist_cpu = TestUtils.to_cpu(result_dist)
     ref_dist_cpu = TestUtils.to_cpu(ref_dist)
-    err = norm(result_dist_cpu - ref_dist_cpu, Inf)
+    err = assert_uniform(norm(result_dist_cpu - ref_dist_cpu, Inf), name="trans_right_err")
     @test err < TOL
 
 
@@ -147,7 +147,7 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
 
         result_dist_cpu = TestUtils.to_cpu(result_dist)
         ref_dist_cpu = TestUtils.to_cpu(ref_dist)
-        err = norm(result_dist_cpu - ref_dist_cpu, Inf)
+        err = assert_uniform(norm(result_dist_cpu - ref_dist_cpu, Inf), name="adjoint_err")
         @test err < TOL
 
 
@@ -166,7 +166,7 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
 
         result_dist_cpu = TestUtils.to_cpu(result_dist)
         ref_dist_cpu = TestUtils.to_cpu(ref_dist)
-        err = norm(result_dist_cpu - ref_dist_cpu, Inf)
+        err = assert_uniform(norm(result_dist_cpu - ref_dist_cpu, Inf), name="conj_err")
         @test err < TOL
     end
 
@@ -187,13 +187,13 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
     ref_dist = assert_type(to_backend(SparseMatrixMPI{T}(a * A)), ST)
     result_dist_cpu = TestUtils.to_cpu(result_dist)
     ref_dist_cpu = TestUtils.to_cpu(ref_dist)
-    err1 = norm(result_dist_cpu - ref_dist_cpu, Inf)
+    err1 = assert_uniform(norm(result_dist_cpu - ref_dist_cpu, Inf), name="scalar_mul_aA_err")
     @test err1 < TOL
 
     # Test A * a
     result_dist = assert_type(Adist * a, ST)
     result_dist_cpu = TestUtils.to_cpu(result_dist)
-    err2 = norm(result_dist_cpu - ref_dist_cpu, Inf)
+    err2 = assert_uniform(norm(result_dist_cpu - ref_dist_cpu, Inf), name="scalar_mul_Aa_err")
     @test err2 < TOL
 
     # Test a * transpose(A) (internal API)
@@ -205,14 +205,14 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
     ref_dist = assert_type(to_backend(SparseMatrixMPI{T}(ref)), ST)
     result_dist_cpu = TestUtils.to_cpu(result_dist)
     ref_dist_cpu = TestUtils.to_cpu(ref_dist)
-    err3 = norm(result_dist_cpu - ref_dist_cpu, Inf)
+    err3 = assert_uniform(norm(result_dist_cpu - ref_dist_cpu, Inf), name="scalar_mul_aAt_err")
     @test err3 < TOL
 
     # Test transpose(A) * a
     result_lazy = At * a
     result_dist = assert_type(LinearAlgebraMPI.execute_plan!(plan, result_lazy.parent), ST)
     result_dist_cpu = TestUtils.to_cpu(result_dist)
-    err4 = norm(result_dist_cpu - ref_dist_cpu, Inf)
+    err4 = assert_uniform(norm(result_dist_cpu - ref_dist_cpu, Inf), name="scalar_mul_Ata_err")
     @test err4 < TOL
 
 
@@ -227,10 +227,10 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
     Adist = assert_type(to_backend(SparseMatrixMPI{T}(A)), ST)
     Adist_cpu = TestUtils.to_cpu(Adist)
 
-    err1 = abs(norm(Adist_cpu) - norm(A))
-    err2 = abs(norm(Adist_cpu, 1) - norm(A, 1))
-    err3 = abs(norm(Adist_cpu, Inf) - norm(A, Inf))
-    err4 = abs(norm(Adist_cpu, 3) - norm(A, 3))
+    err1 = assert_uniform(abs(norm(Adist_cpu) - norm(A)), name="norm_2_err")
+    err2 = assert_uniform(abs(norm(Adist_cpu, 1) - norm(A, 1)), name="norm_1_err")
+    err3 = assert_uniform(abs(norm(Adist_cpu, Inf) - norm(A, Inf)), name="norm_inf_err")
+    err4 = assert_uniform(abs(norm(Adist_cpu, 3) - norm(A, 3)), name="norm_3_err")
 
     @test err1 < TOL
     @test err2 < TOL
@@ -249,8 +249,8 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
     Adist = assert_type(to_backend(SparseMatrixMPI{T}(A)), ST)
     Adist_cpu = TestUtils.to_cpu(Adist)
 
-    err1 = abs(opnorm(Adist_cpu, 1) - opnorm(A, 1))
-    err2 = abs(opnorm(Adist_cpu, Inf) - opnorm(A, Inf))
+    err1 = assert_uniform(abs(opnorm(Adist_cpu, 1) - opnorm(A, 1)), name="opnorm_1_err")
+    err2 = assert_uniform(abs(opnorm(Adist_cpu, Inf) - opnorm(A, Inf)), name="opnorm_inf_err")
 
     @test err1 < TOL
     @test err2 < TOL

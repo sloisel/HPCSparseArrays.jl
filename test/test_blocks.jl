@@ -117,7 +117,7 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
     result_dist = assert_type(cat(Adist, Bdist, Cdist; dims=1), ST)
     result = SparseMatrixCSC(result_dist)
 
-    @test norm(result - ref, Inf) < TOL
+    @test assert_uniform(norm(result - ref, Inf), name="vcat_err") < TOL
 
 
     println(io0(), "[test] cat dims=2 (hcat) ($T, $backend_name)")
@@ -138,7 +138,7 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
     result_dist = assert_type(cat(Adist, Bdist, Cdist; dims=2), ST)
     result = SparseMatrixCSC(result_dist)
 
-    @test norm(result - ref, Inf) < TOL
+    @test assert_uniform(norm(result - ref, Inf), name="hcat_err") < TOL
 
 
     println(io0(), "[test] cat dims=(2,2) block matrix ($T, $backend_name)")

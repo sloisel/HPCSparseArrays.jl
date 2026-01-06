@@ -72,13 +72,13 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
     println(io0(), "[test] transpose(SparseMatrixMPI) * VectorMPI ($T, $backend_name)")
     result1 = transpose(A_sparse) * x
     expected1 = transpose(A_sparse_local) * x_local
-    @test norm(Vector(result1) - expected1) < TOL
+    @test assert_uniform(norm(Vector(result1) - expected1), name="trans_sparse_vec_err") < TOL
 
 
     println(io0(), "[test] SparseMatrixMPI * MatrixMPI ($T, $backend_name)")
     result2 = A_sparse * B_dense
     expected2 = A_sparse_local * B_dense_local
-    @test norm(Matrix(result2) - expected2) < TOL
+    @test assert_uniform(norm(Matrix(result2) - expected2), name="sparse_dense_err") < TOL
 
 
     println(io0(), "[test] transpose(SparseMatrixMPI) * MatrixMPI ($T, $backend_name)")
@@ -136,12 +136,12 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
 
 
     println(io0(), "[test] dot(VectorMPI, VectorMPI) ($T, $backend_name)")
-    result9 = dot(x, y)
+    result9 = assert_uniform(dot(x, y), name="dot_xy")
     expected9 = dot(x_local, y_local)
     @test abs(result9 - expected9) < TOL
 
     # Self dot product
-    result9b = dot(x, x)
+    result9b = assert_uniform(dot(x, x), name="dot_xx")
     expected9b = dot(x_local, x_local)
     @test abs(result9b - expected9b) < TOL
 

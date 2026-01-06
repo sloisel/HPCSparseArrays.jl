@@ -45,8 +45,8 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
     ref_nnz = nnz(A_global)
     Adist = to_backend(SparseMatrixMPI{T}(A_global))
 
-    dist_nnz = nnz(Adist)
-    dist_issparse = issparse(Adist)
+    dist_nnz = assert_uniform(nnz(Adist), name="nnz")
+    dist_issparse = assert_uniform(issparse(Adist), name="issparse")
     @test dist_nnz == ref_nnz
     @test dist_issparse == true
 
@@ -103,17 +103,17 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
     println(io0(), "[test] Reductions ($T, $backend_name)")
 
     ref_sum = sum(A_global)
-    dist_sum = sum(Adist)
-    dist_mean = mean(Adist)
-    dist_tr = tr(Adist)
+    dist_sum = assert_uniform(sum(Adist), name="sum")
+    dist_mean = assert_uniform(mean(Adist), name="mean")
+    dist_tr = assert_uniform(tr(Adist), name="tr")
     @test dist_sum ≈ ref_sum atol=TOL
     @test dist_mean ≈ ref_sum / (n * n) atol=TOL
     @test dist_tr ≈ tr(A_global) atol=TOL
 
     # max/min only meaningful for real types
     if !(T <: Complex)
-        dist_max = maximum(Adist)
-        dist_min = minimum(Adist)
+        dist_max = assert_uniform(maximum(Adist), name="maximum")
+        dist_min = assert_uniform(minimum(Adist), name="minimum")
         @test dist_max ≈ maximum(A_global.nzval) atol=TOL
         @test dist_min ≈ minimum(A_global.nzval) atol=TOL
     end
