@@ -1361,6 +1361,36 @@ Base.eltype(::MatrixMPI{T}) where T = T
 Base.eltype(::Type{MatrixMPI{T}}) where T = T
 
 """
+    Base.sum(A::MatrixMPI{T}; dims=nothing) where T
+
+Compute the sum of all elements in the distributed matrix.
+If dims is specified, sum along that dimension.
+"""
+function Base.sum(A::MatrixMPI{T}; dims=nothing) where T
+    comm = MPI.COMM_WORLD
+
+    if dims === nothing
+        # Sum all elements
+        local_sum = sum(A.A; init=zero(T))
+        return MPI.Allreduce(local_sum, MPI.SUM, comm)
+    elseif dims == 1
+        # Sum along rows (each rank has some rows, result is a row vector)
+        # Each rank computes column sums of its local rows
+        local_colsums = sum(A.A, dims=1)
+        # Reduce across all ranks
+        global_colsums = MPI.Allreduce(local_colsums, MPI.SUM, comm)
+        return global_colsums
+    elseif dims == 2
+        # Sum along columns (result is distributed column vector)
+        local_rowsums = sum(A.A, dims=2)
+        # Result inherits row partition from A
+        return MatrixMPI{T,typeof(A.A)}(A.structural_hash, A.row_partition, A.col_partition, local_rowsums)
+    else
+        error("dims must be nothing, 1, or 2")
+    end
+end
+
+"""
     LinearAlgebra.norm(A::MatrixMPI{T}, p::Real=2) where T
 
 Compute the p-norm of A treated as a vector of elements.
