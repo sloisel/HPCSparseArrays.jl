@@ -30,15 +30,16 @@ nranks = MPI.Comm_size(comm)
 
 ts = @testset QuietTestSet "Repartition" begin
 
-for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
+for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     TOL = TestUtils.tolerance(T)
+    backend = get_backend()
 
     println(io0(), "[test] VectorMPI repartition ($T, $backend_name)")
 
     # Test 1: VectorMPI uniform to non-uniform partition
     n = 12
     v_global = T.(collect(1.0:n))
-    v = to_backend(VectorMPI(v_global))
+    v = VectorMPI(v_global, backend)
     # Create non-uniform partition
     new_p = LinearAlgebraMPI.uniform_partition(n, nranks)
     # Shift elements: first rank gets fewer, last gets more
@@ -64,14 +65,14 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
 
     println(io0(), "[test] VectorMPI same partition fast path ($T, $backend_name)")
 
-    v_same = to_backend(VectorMPI(v_global))
+    v_same = VectorMPI(v_global, backend)
     v2 = repartition(v_same, v_same.partition)
     @test v2 === v_same  # Should be same object
 
 
     println(io0(), "[test] VectorMPI plan caching ($T, $backend_name)")
 
-    v_cache = to_backend(VectorMPI(v_global))
+    v_cache = VectorMPI(v_global, backend)
     LinearAlgebraMPI.clear_plan_cache!()
     v3_repart = repartition(v_cache, new_p)
     v4_repart = repartition(v_cache, new_p)
@@ -83,7 +84,7 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
     # Test dense matrix repartition
     m, ncols = 8, 4
     M_global = T.(reshape(Float64.(1:m*ncols), m, ncols))
-    M = to_backend(MatrixMPI(M_global))
+    M = MatrixMPI(M_global, backend)
 
     # Create new partition for rows
     new_row_p = LinearAlgebraMPI.uniform_partition(m, nranks)
@@ -111,7 +112,7 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
 
     println(io0(), "[test] MatrixMPI same partition fast path ($T, $backend_name)")
 
-    M_same = to_backend(MatrixMPI(M_global))
+    M_same = MatrixMPI(M_global, backend)
     M2 = repartition(M_same, M_same.row_partition)
     @test M2 === M_same
 
@@ -125,7 +126,7 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
     V_sparse = T.(1:length(I_idx))
     A_global = sparse(I_idx, J_idx, V_sparse, m_sparse, n_sparse)
 
-    A = to_backend(SparseMatrixMPI{T}(A_global))
+    A = SparseMatrixMPI(A_global, backend)
 
     # Create new partition (must differ from uniform to test actual repartition)
     # Uniform for 8 rows, 4 ranks is [1, 3, 5, 7, 9] (2 rows each)
@@ -169,7 +170,7 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
 
     println(io0(), "[test] SparseMatrixMPI same partition fast path ($T, $backend_name)")
 
-    A_same = to_backend(SparseMatrixMPI{T}(A_global))
+    A_same = SparseMatrixMPI(A_global, backend)
     A2 = repartition(A_same, A_same.row_partition)
     @test A2 === A_same
 
@@ -177,9 +178,9 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
     println(io0(), "[test] Operations after repartition ($T, $backend_name)")
 
     # Test that repartitioned matrix can be used in operations
-    A_for_ops = to_backend(SparseMatrixMPI{T}(A_global))
+    A_for_ops = SparseMatrixMPI(A_global, backend)
     A_repart_ops = repartition(A_for_ops, new_sparse_p)
-    x = to_backend(VectorMPI(ones(T, n_sparse)))
+    x = VectorMPI(ones(T, n_sparse), backend)
     y_orig = A_for_ops * x
     y_repart = A_repart_ops * x
     y_diff = norm(Vector(y_orig) - Vector(y_repart))
@@ -188,13 +189,13 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
 
     println(io0(), "[test] Repartition plan caching ($T, $backend_name)")
 
-    A_cache = to_backend(SparseMatrixMPI{T}(A_global))
+    A_cache = SparseMatrixMPI(A_global, backend)
     LinearAlgebraMPI.clear_plan_cache!()
     A3_repart = repartition(A_cache, new_sparse_p)
     A4_repart = repartition(A_cache, new_sparse_p)
     @test A3_repart.structural_hash == A4_repart.structural_hash
 
-end  # for (T, to_backend, backend_name)
+end  # for (T, get_backend, backend_name)
 
 end  # QuietTestSet
 

@@ -3,16 +3,17 @@
 
 Extension module for CUDA GPU support in LinearAlgebraMPI.
 Provides:
-- cu()/cpu() conversions for CuArray-backed distributed arrays
+- DeviceCUDA backend support for CuArray-backed distributed arrays
 - cuDSS sparse direct solver with NCCL backend for multi-GPU factorization
 
-Requires: `using CUDA, NCCL, CUDSS_jll` before loading LinearAlgebraMPI.
+Requires: `using CUDA, NCCL_jll, CUDSS_jll` before loading LinearAlgebraMPI.
+(Uses NCCL_jll directly instead of NCCL.jl to avoid finalizer-induced MPI desync.)
 """
 module LinearAlgebraMPICUDAExt
 
 using LinearAlgebraMPI
 using CUDA
-using NCCL
+using NCCL_jll
 using CUDSS_jll
 using Adapt
 using MPI
@@ -23,223 +24,86 @@ using LinearAlgebra
 # Part 1: Core CUDA Support (cu/cpu conversions, backend helpers)
 # ============================================================================
 
+# Import backend types
+using LinearAlgebraMPI: HPCBackend, DeviceCPU, DeviceCUDA, DeviceMetal,
+                        CommSerial, CommMPI, AbstractComm, AbstractDevice,
+                        SolverMUMPS, AbstractSolverCuDSS,
+                        comm_rank, comm_size, comm_barrier
+
 # Type aliases for convenience
-const CuVectorMPI{T} = LinearAlgebraMPI.VectorMPI{T,CuVector{T}}
-const CuSparseMatrixMPI{T,Ti} = LinearAlgebraMPI.SparseMatrixMPI{T,Ti,CuVector{T}}
-const CuMatrixMPI{T} = LinearAlgebraMPI.MatrixMPI{T,CuMatrix{T}}
-
-# ----------------------------------------------------------------------------
-# VectorMPI conversions
-# ----------------------------------------------------------------------------
+const CuBackend{C,S} = LinearAlgebraMPI.HPCBackend{LinearAlgebraMPI.DeviceCUDA, C, S}
+const CPUBackend{C,S} = LinearAlgebraMPI.HPCBackend{LinearAlgebraMPI.DeviceCPU, C, S}
 
 """
-    cu(v::LinearAlgebraMPI.VectorMPI)
+    backend_cuda_mpi(comm::MPI.Comm) -> HPCBackend
 
-Convert a CPU VectorMPI to a CUDA GPU VectorMPI.
+Create a CUDA GPU backend with MPI communication and MUMPS solver.
+For cuDSS solver support, use backend_cuda_cudss_mpi instead.
 """
-function LinearAlgebraMPI.cu(v::LinearAlgebraMPI.VectorMPI{T,Vector{T}}) where T
-    return adapt(CuArray, v)
+function LinearAlgebraMPI.backend_cuda_mpi(comm)
+    return LinearAlgebraMPI.HPCBackend(DeviceCUDA(), CommMPI(comm), SolverMUMPS())
 end
 
-# No-op for already-GPU vectors
-function LinearAlgebraMPI.cu(v::LinearAlgebraMPI.VectorMPI{T,<:CuVector}) where T
-    return v
-end
+# ============================================================================
+# _convert_array methods for CUDA
+# ============================================================================
 
-"""
-    cpu(v::LinearAlgebraMPI.VectorMPI{T,<:CuVector})
+# CPU → CUDA: copy to GPU
+LinearAlgebraMPI._convert_array(v::Vector, ::LinearAlgebraMPI.DeviceCUDA) = CuVector(v)
+LinearAlgebraMPI._convert_array(A::Matrix, ::LinearAlgebraMPI.DeviceCUDA) = CuMatrix(A)
 
-Convert a CUDA GPU VectorMPI to a CPU VectorMPI.
-"""
-function LinearAlgebraMPI.cpu(v::LinearAlgebraMPI.VectorMPI{T,<:CuVector}) where T
-    return adapt(Array, v)
-end
+# CUDA → CUDA: identity (no copy)
+LinearAlgebraMPI._convert_array(v::CuVector, ::LinearAlgebraMPI.DeviceCUDA) = v
+LinearAlgebraMPI._convert_array(A::CuMatrix, ::LinearAlgebraMPI.DeviceCUDA) = A
 
-# ----------------------------------------------------------------------------
-# SparseMatrixMPI conversions
-# ----------------------------------------------------------------------------
-
-"""
-    cu(A::LinearAlgebraMPI.SparseMatrixMPI)
-
-Convert a CPU SparseMatrixMPI to a CUDA GPU SparseMatrixMPI.
-The `nzval` and target structure arrays are moved to GPU.
-The CPU structure arrays (`rowptr`, `colval`, partitions) remain on CPU for MPI.
-"""
-function LinearAlgebraMPI.cu(A::LinearAlgebraMPI.SparseMatrixMPI{T,Ti,Vector{T}}) where {T,Ti}
-    nzval_gpu = CuVector(A.nzval)
-    # Convert structure arrays to GPU (used by unified SpMV kernel)
-    rowptr_target = CuVector(A.rowptr)
-    colval_target = CuVector(A.colval)
-    # Use typeof() to get the concrete GPU type
-    AV = typeof(nzval_gpu)
-    return LinearAlgebraMPI.SparseMatrixMPI{T,Ti,AV}(
-        A.structural_hash,
-        A.row_partition,
-        A.col_partition,
-        A.col_indices,
-        A.rowptr,
-        A.colval,
-        nzval_gpu,
-        A.nrows_local,
-        A.ncols_compressed,
-        nothing,  # Invalidate cached_transpose
-        A.cached_symmetric,
-        rowptr_target,
-        colval_target
-    )
-end
-
-# No-op for already-GPU sparse matrices
-function LinearAlgebraMPI.cu(A::LinearAlgebraMPI.SparseMatrixMPI{T,Ti,<:CuVector}) where {T,Ti}
-    return A
-end
-
-"""
-    cpu(A::LinearAlgebraMPI.SparseMatrixMPI{T,Ti,<:CuVector})
-
-Convert a CUDA GPU SparseMatrixMPI to a CPU SparseMatrixMPI.
-"""
-function LinearAlgebraMPI.cpu(A::LinearAlgebraMPI.SparseMatrixMPI{T,Ti,<:CuVector}) where {T,Ti}
-    nzval_cpu = Array(A.nzval)
-    return LinearAlgebraMPI.SparseMatrixMPI{T,Ti,Vector{T}}(
-        A.structural_hash,
-        A.row_partition,
-        A.col_partition,
-        A.col_indices,
-        A.rowptr,
-        A.colval,
-        nzval_cpu,
-        A.nrows_local,
-        A.ncols_compressed,
-        nothing,  # Invalidate cached_transpose
-        A.cached_symmetric,
-        A.rowptr,  # rowptr_target (same as rowptr for CPU)
-        A.colval   # colval_target (same as colval for CPU)
-    )
-end
-
-# ----------------------------------------------------------------------------
-# MatrixMPI conversions
-# ----------------------------------------------------------------------------
-
-"""
-    cu(A::LinearAlgebraMPI.MatrixMPI)
-
-Convert a CPU MatrixMPI to a CUDA GPU MatrixMPI.
-"""
-function LinearAlgebraMPI.cu(A::LinearAlgebraMPI.MatrixMPI{T,Matrix{T}}) where T
-    A_gpu = CuMatrix(A.A)
-    AM = typeof(A_gpu)
-    return LinearAlgebraMPI.MatrixMPI{T,AM}(
-        A.structural_hash,
-        A.row_partition,
-        A.col_partition,
-        A_gpu
-    )
-end
-
-# No-op for already-GPU matrices
-function LinearAlgebraMPI.cu(A::LinearAlgebraMPI.MatrixMPI{T,<:CuMatrix}) where T
-    return A
-end
-
-"""
-    cpu(A::LinearAlgebraMPI.MatrixMPI{T,<:CuMatrix})
-
-Convert a CUDA GPU MatrixMPI to a CPU MatrixMPI.
-"""
-function LinearAlgebraMPI.cpu(A::LinearAlgebraMPI.MatrixMPI{T,<:CuMatrix}) where T
-    A_cpu = Array(A.A)
-    return LinearAlgebraMPI.MatrixMPI{T,Matrix{T}}(
-        A.structural_hash,
-        A.row_partition,
-        A.col_partition,
-        A_cpu
-    )
-end
-
-# ----------------------------------------------------------------------------
+# ============================================================================
 # Backend helper functions
-# ----------------------------------------------------------------------------
+# ============================================================================
 
 """
-    _zeros_like(::Type{<:CuVector{T}}, dims...) where T
+    _zeros_device(::DeviceCUDA, ::Type{T}, dims...) where T
 
-Create a zero CuVector of the specified dimensions.
+Create a zero CuVector/CuMatrix of the specified dimensions on CUDA device.
+Used by Base.zeros(VectorMPI, backend, n) etc.
 """
-LinearAlgebraMPI._zeros_like(::Type{<:CuVector{T}}, dims...) where T = CUDA.zeros(T, dims...)
-
-"""
-    _zeros_like(::Type{<:CuMatrix{T}}, dims...) where T
-
-Create a zero CuMatrix of the specified dimensions.
-"""
-LinearAlgebraMPI._zeros_like(::Type{<:CuMatrix{T}}, dims...) where T = CUDA.zeros(T, dims...)
+LinearAlgebraMPI._zeros_device(::LinearAlgebraMPI.DeviceCUDA, ::Type{T}, dims...) where T = CUDA.zeros(T, dims...)
 
 """
-    _index_array_type(::Type{<:CuVector{T}}, ::Type{Ti}) where {T,Ti}
+    _index_array_type(::DeviceCUDA, ::Type{Ti}) where Ti
 
-Map CuVector{T} value array type to CuVector{Ti} index array type.
+Map DeviceCUDA to CuVector{Ti} index array type.
+Used by MatrixPlan to store symbolic index arrays on GPU.
 """
-LinearAlgebraMPI._index_array_type(::Type{<:CuVector{T}}, ::Type{Ti}) where {T,Ti} = CuVector{Ti}
+LinearAlgebraMPI._index_array_type(::LinearAlgebraMPI.DeviceCUDA, ::Type{Ti}) where Ti = CuVector{Ti}
 
 """
-    _to_target_backend(v::Vector{Ti}, ::Type{<:CuVector}) where Ti
+    _to_target_device(v::Vector{Ti}, ::DeviceCUDA) where Ti
 
 Convert a CPU index vector to CUDA GPU.
+Used by SparseMatrixMPI constructors to create GPU structure arrays.
 """
-LinearAlgebraMPI._to_target_backend(v::Vector{Ti}, ::Type{<:CuVector}) where Ti = CuVector(v)
+LinearAlgebraMPI._to_target_device(v::Vector{Ti}, ::LinearAlgebraMPI.DeviceCUDA) where Ti = CuVector(v)
 
 """
-    _array_to_backend(v::Vector{T}, ::Type{<:CuVector}) where T
+    _array_to_device(v::Vector{T}, ::DeviceCUDA) where T
 
 Convert a CPU vector to a CUDA GPU vector.
-Used by factorization for round-trip GPU conversion during solve.
+Used by MUMPS factorization for round-trip GPU conversion during solve.
 """
-function LinearAlgebraMPI._array_to_backend(v::Vector{T}, ::Type{<:CuVector}) where T
+function LinearAlgebraMPI._array_to_device(v::Vector{T}, ::LinearAlgebraMPI.DeviceCUDA) where T
     return CuVector(v)
 end
 
 """
-    _convert_vector_to_backend(v::LinearAlgebraMPI.VectorMPI{T,<:Vector}, ::Type{<:CuVector}) where T
+    _convert_vector_to_device(v::LinearAlgebraMPI.VectorMPI, ::DeviceCUDA)
 
-Convert a CPU VectorMPI to GPU (CUDA) backend.
+Convert a VectorMPI to CUDA GPU device.
+Used by MUMPS factorization for GPU reconstruction after solve.
 """
-function LinearAlgebraMPI._convert_vector_to_backend(v::LinearAlgebraMPI.VectorMPI{T,<:Vector}, ::Type{<:CuVector}) where T
-    return LinearAlgebraMPI.cu(v)
-end
-
-# ============================================================================
-# Backend Conversion for Distributed Types
-# ============================================================================
-
-"""
-    _to_same_backend(cpu::VectorMPI{T,Vector{T}}, ::VectorMPI{S,<:CuVector}) where {T,S}
-
-Convert a CPU VectorMPI to CUDA GPU backend to match the template.
-"""
-function LinearAlgebraMPI._to_same_backend(cpu::LinearAlgebraMPI.VectorMPI{T,Vector{T}}, ::LinearAlgebraMPI.VectorMPI{S,<:CuVector}) where {T,S}
-    return LinearAlgebraMPI.cu(cpu)
-end
-
-"""
-    _to_same_backend(cpu::MatrixMPI{T,Matrix{T}}, ::MatrixMPI{S,<:CuMatrix}) where {T,S}
-
-Convert a CPU MatrixMPI to CUDA GPU backend to match the template.
-"""
-function LinearAlgebraMPI._to_same_backend(cpu::LinearAlgebraMPI.MatrixMPI{T,Matrix{T}}, ::LinearAlgebraMPI.MatrixMPI{S,<:CuMatrix}) where {T,S}
-    return LinearAlgebraMPI.cu(cpu)
-end
-
-"""
-    _to_same_backend(cpu::VectorMPI{T,Vector{T}}, ::MatrixMPI{S,<:CuMatrix}) where {T,S}
-
-Convert a CPU VectorMPI to CUDA GPU backend using a MatrixMPI template.
-Used by vertex_indices when the input is a MatrixMPI.
-"""
-function LinearAlgebraMPI._to_same_backend(cpu::LinearAlgebraMPI.VectorMPI{T,Vector{T}}, ::LinearAlgebraMPI.MatrixMPI{S,<:CuMatrix}) where {T,S}
-    return LinearAlgebraMPI.cu(cpu)
+function LinearAlgebraMPI._convert_vector_to_device(v::LinearAlgebraMPI.VectorMPI, device::LinearAlgebraMPI.DeviceCUDA)
+    # Create CUDA backend preserving comm and solver
+    cuda_backend = LinearAlgebraMPI.HPCBackend(device, v.backend.comm, v.backend.solver)
+    return LinearAlgebraMPI.to_backend(v, cuda_backend)
 end
 
 # ============================================================================
@@ -254,8 +118,22 @@ const cudssMatrix_t = Ptr{Cvoid}
 # Status codes
 const CUDSS_STATUS_SUCCESS = UInt32(0)
 
-# Data parameters
+# Data parameters (cudssDataParam_t enum values)
+const CUDSS_DATA_INFO = UInt32(0)
+const CUDSS_DATA_LU_NNZ = UInt32(1)
+const CUDSS_DATA_NPIVOTS = UInt32(2)
+const CUDSS_DATA_INERTIA = UInt32(3)
+const CUDSS_DATA_PERM_REORDER_ROW = UInt32(4)
+const CUDSS_DATA_PERM_REORDER_COL = UInt32(5)
+const CUDSS_DATA_PERM_ROW = UInt32(6)
+const CUDSS_DATA_PERM_COL = UInt32(7)
+const CUDSS_DATA_DIAG = UInt32(8)
+const CUDSS_DATA_USER_PERM = UInt32(9)
+const CUDSS_DATA_HYBRID_DEVICE_MEMORY_MIN = UInt32(10)
 const CUDSS_DATA_COMM = UInt32(11)
+const CUDSS_DATA_MEMORY_ESTIMATES = UInt32(12)
+const CUDSS_DATA_USER_ELIMINATION_TREE = UInt32(20)
+const CUDSS_DATA_ELIMINATION_TREE = UInt32(21)
 
 # Phases (can be OR'd together)
 const CUDSS_PHASE_ANALYSIS = Cint(3)  # REORDERING | SYMBOLIC
@@ -342,6 +220,19 @@ function _cudss_data_set(handle::cudssHandle_t, data::cudssData_t,
     return nothing
 end
 
+function _cudss_data_get(handle::cudssHandle_t, data::cudssData_t,
+                         param::UInt32, value::Ptr{Cvoid}, size::Csize_t)
+    size_written = Ref{Csize_t}(0)
+    status = @ccall libcudss.cudssDataGet(handle::cudssHandle_t,
+                                           data::cudssData_t,
+                                           param::UInt32,
+                                           value::Ptr{Cvoid},
+                                           size::Csize_t,
+                                           size_written::Ptr{Csize_t})::UInt32
+    status == CUDSS_STATUS_SUCCESS || error("cudssDataGet (param=$param) failed with status $status")
+    return size_written[]
+end
+
 function _cudss_matrix_create_csr(matrix_ref::Ref{cudssMatrix_t},
                                    nrows::Int64, ncols::Int64, nnz::Int64,
                                    row_offsets::CuPtr{Cvoid}, row_end::CuPtr{Cvoid},
@@ -396,68 +287,189 @@ function _cudss_execute(handle::cudssHandle_t, phase::Cint,
 end
 
 # ============================================================================
-# Part 3: NCCL Bootstrap and CuDSSFactorizationMPI Type
+# Part 3: NCCL Low-Level Bindings and Bootstrap
 # ============================================================================
 
-"""
-    _init_nccl_from_mpi(mpi_comm::MPI.Comm) -> NCCL.Communicator
+# NCCL low-level bindings (no finalizers - communicator lives until process exit)
+const NCCL_UNIQUE_ID_BYTES = 128
 
-Initialize NCCL communicator using MPI for the initial UniqueID broadcast.
-This is the minimal MPI usage - just 128 bytes to bootstrap NCCL.
+struct ncclUniqueId
+    internal::NTuple{NCCL_UNIQUE_ID_BYTES, UInt8}
+end
+ncclUniqueId() = ncclUniqueId(ntuple(_ -> UInt8(0), NCCL_UNIQUE_ID_BYTES))
+
+const ncclComm_t = Ptr{Cvoid}
+const ncclSuccess = 0
+
+# Global cache: one NCCL communicator per MPI communicator, never destroyed
+# Process exit handles cleanup automatically (like unclosed files)
+const _nccl_comm_cache = Dict{UInt64, ncclComm_t}()
+
+function _nccl_get_unique_id()
+    id = Ref(ncclUniqueId())
+    status = @ccall libnccl.ncclGetUniqueId(id::Ptr{ncclUniqueId})::Cint
+    status == ncclSuccess || error("ncclGetUniqueId failed: $status")
+    return id[]
+end
+
+function _nccl_comm_init_rank(nranks::Int, rank::Int, unique_id::ncclUniqueId)
+    comm = Ref{ncclComm_t}(C_NULL)
+    status = @ccall libnccl.ncclCommInitRank(
+        comm::Ptr{ncclComm_t}, nranks::Cint, unique_id::ncclUniqueId, rank::Cint
+    )::Cint
+    status == ncclSuccess || error("ncclCommInitRank failed: $status")
+    return comm[]
+end
+
 """
-function _init_nccl_from_mpi(mpi_comm::MPI.Comm)
+    _get_nccl_comm(mpi_comm::MPI.Comm) -> ncclComm_t
+
+Get or create an NCCL communicator for the given MPI communicator.
+Communicators are cached globally and never destroyed - process exit handles cleanup.
+This avoids all finalizer-related MPI desync issues.
+"""
+function _get_nccl_comm(mpi_comm::MPI.Comm)
+    # Use MPI comm handle as cache key
+    key = UInt64(mpi_comm.val)
+
+    if haskey(_nccl_comm_cache, key)
+        return _nccl_comm_cache[key]
+    end
+
+    # Create new NCCL comm from MPI (collective operation)
     rank = MPI.Comm_rank(mpi_comm)
     nranks = MPI.Comm_size(mpi_comm)
 
     # Rank 0 generates the unique ID
     if rank == 0
-        unique_id = NCCL.UniqueID()
+        unique_id = _nccl_get_unique_id()
         unique_id_bytes = collect(reinterpret(UInt8, [unique_id.internal]))
     else
-        unique_id_bytes = zeros(UInt8, 128)
+        unique_id_bytes = zeros(UInt8, NCCL_UNIQUE_ID_BYTES)
     end
 
     # Broadcast the unique ID from rank 0 to all ranks
     MPI.Bcast!(unique_id_bytes, 0, mpi_comm)
 
-    # Reconstruct UniqueID on non-root ranks
-    if rank != 0
-        internal_tuple = NTuple{128, Int8}(reinterpret(Int8, unique_id_bytes))
-        unique_id = NCCL.UniqueID(internal_tuple)
-    end
+    # Reconstruct ncclUniqueId from bytes
+    internal_tuple = NTuple{NCCL_UNIQUE_ID_BYTES, UInt8}(unique_id_bytes)
+    unique_id = ncclUniqueId(internal_tuple)
 
-    # Create NCCL communicator on each rank
-    nccl_comm = NCCL.Communicator(nranks, rank; unique_id=unique_id)
+    # Create NCCL communicator (no finalizer - lives until process exit)
+    nccl_comm = _nccl_comm_init_rank(nranks, rank, unique_id)
 
+    _nccl_comm_cache[key] = nccl_comm
     return nccl_comm
 end
 
-"""
-    CuDSSFactorizationMPI{T}
+# ============================================================================
+# Part 4: cuDSS Factorization and Analysis Caching
+# ============================================================================
+#
+# Analysis caching strategy:
+# - After first analysis, extract permutation + elimination tree via cudssDataGet
+# - Cache these by structural hash
+# - For subsequent lu(A) with same structure:
+#   - Create NEW data object (gets its own L/U storage)
+#   - Set cached perm/tree via cudssDataSet (skips expensive reordering)
+#   - Run factorization
+# - Each factorization has independent L/U factors
+# - F \ b is solve-only (no refactorization)
+#
+# Nothing is ever destroyed - process exit handles cleanup (like NCCL comms).
 
-Distributed cuDSS factorization result with NCCL backend.
-Matches MUMPS factorization API: use with `F \\ b` or `solve(F, b)`.
-
-IMPORTANT: Uses MPI-safe finalization pattern. Resources are queued for
-destruction and processed at the next collective operation.
 """
-mutable struct CuDSSFactorizationMPI{T}
-    id::Int
+    CuDSSAnalysisCache
+
+Cached analysis results (permutation + elimination tree) for a sparsity structure.
+Can be reused across multiple factorizations with the same structure.
+Each factorization gets its own cuDSS data object with independent L/U storage.
+"""
+struct CuDSSAnalysisCache
+    # Permutation vectors (device pointers, size n each)
+    perm_row::CuVector{Int64}
+    perm_col::CuVector{Int64}
+    # Elimination tree (device pointer)
+    elimination_tree::CuVector{Int64}
+    # NCCL comm (stored to avoid dict lookup)
+    nccl_comm::ncclComm_t
+    # Global matrix dimension
+    n::Int64
+end
+
+# Cache: (structural_hash, symmetric, element_type) -> CuDSSAnalysisCache
+const _cudss_analysis_cache = Dict{Tuple{NTuple{32,UInt8}, Bool, DataType}, CuDSSAnalysisCache}()
+
+# Backslash cache: reuse cuDSS data objects across A\b calls with same structure.
+# Key: (structural_hash, symmetric, element_type)
+# Value: CuDSSFactorizationMPI (never destroyed - process exit handles cleanup)
+#
+# This is the key optimization: for matrices with the same sparsity pattern,
+# we skip analysis and only refactorize with new values.
+const _cudss_backslash_cache = Dict{Tuple{NTuple{32,UInt8}, Bool, DataType}, Any}()
+
+# Global cuDSS handle + config cache - one per process, shared across all factorizations
+# Creating many handles leads to memory corruption in cuDSS
+const _cudss_handle_ref = Ref{cudssHandle_t}(C_NULL)
+const _cudss_config_ref = Ref{cudssConfig_t}(C_NULL)
+
+"""
+    _get_cudss_handle_and_config() -> (cudssHandle_t, cudssConfig_t)
+
+Get or create cuDSS handle and config for this process. Both are cached globally.
+"""
+function _get_cudss_handle_and_config()
+    if _cudss_handle_ref[] == C_NULL
+        # Create handle
+        handle_ref = Ref{cudssHandle_t}(C_NULL)
+        _cudss_create(handle_ref)
+        _cudss_handle_ref[] = handle_ref[]
+
+        # Set NCCL communication layer
+        comm_lib = joinpath(CUDSS_jll.artifact_dir, "lib", "libcudss_commlayer_nccl.so")
+        if !isfile(comm_lib)
+            error("NCCL communication layer not found at $comm_lib")
+        end
+        _cudss_set_comm_layer(_cudss_handle_ref[], comm_lib)
+
+        # Create config (reused across all factorizations)
+        config_ref = Ref{cudssConfig_t}(C_NULL)
+        _cudss_config_create(config_ref)
+        _cudss_config_ref[] = config_ref[]
+    end
+    return _cudss_handle_ref[], _cudss_config_ref[]
+end
+
+"""
+    CuDSSFactorizationMPI{T, B}
+
+Distributed cuDSS factorization with NCCL backend.
+Created by `lu(A)` - owns its cuDSS data object with completed analysis + factorization.
+Use `F \\ b` for solve-only (no refactorization needed).
+
+Resources:
+- handle, config: Global (cached per-process, not destroyed)
+- data, matrix, solution, rhs: Per-factorization (destroyed in finalize!)
+"""
+mutable struct CuDSSFactorizationMPI{T, B<:LinearAlgebraMPI.HPCBackend}
+    # cuDSS handles (global, NOT owned - do not destroy)
     handle::cudssHandle_t
     config::cudssConfig_t
+    # Per-factorization resources (owned - destroy in finalize!)
     data::cudssData_t
     matrix::cudssMatrix_t
     solution::cudssMatrix_t
     rhs::cudssMatrix_t
-    # GPU arrays (must keep references to prevent GC)
+    # GPU arrays
     row_offsets::CuVector{Int32}
     col_indices::CuVector{Int32}
     values::CuVector{T}
     x_gpu::CuVector{T}
     b_gpu::CuVector{T}
-    # NCCL communicator
+    # Storage for NCCL comm pointer (prevents GC)
     nccl_comm_storage::Vector{Ptr{Nothing}}
-    nccl_comm::NCCL.Communicator
+    # NCCL comm (stored directly to avoid dict lookup on solve)
+    nccl_comm::ncclComm_t
     # Metadata
     n::Int  # Global matrix dimension
     local_nrows::Int
@@ -465,138 +477,60 @@ mutable struct CuDSSFactorizationMPI{T}
     last_row::Int   # 0-based, inclusive
     symmetric::Bool
     row_partition::Vector{Int}
-    destroyed::Bool
-end
-
-# Registry for MPI-safe finalization (same pattern as MUMPS)
-const _cudss_count = Ref{Int}(0)
-const _cudss_registry = Dict{Int, CuDSSFactorizationMPI}()
-const _cudss_destroy_list = Int[]
-const _cudss_destroy_list_lock = ReentrantLock()
-
-"""
-    _queue_cudss_for_destruction(F::CuDSSFactorizationMPI)
-
-Queue a factorization for synchronized destruction.
-Called by Julia finalizer - does NOT call MPI directly.
-"""
-function _queue_cudss_for_destruction(F::CuDSSFactorizationMPI)
-    lock(_cudss_destroy_list_lock) do
-        push!(_cudss_destroy_list, F.id)
-    end
-end
-
-"""
-    _process_cudss_finalizers()
-
-Process queued cuDSS destructions. MUST be called collectively on all ranks.
-"""
-function _process_cudss_finalizers()
-    comm = MPI.COMM_WORLD
-
-    # Get local destroy list
-    local_list = lock(_cudss_destroy_list_lock) do
-        list = copy(_cudss_destroy_list)
-        empty!(_cudss_destroy_list)
-        list
-    end
-
-    # Gather all destruction requests
-    all_counts = MPI.Allgather(Int32(length(local_list)), comm)
-    total_count = sum(all_counts)
-
-    if total_count == 0
-        return
-    end
-
-    # Gather all IDs
-    all_ids = MPI.Allgatherv(Int32.(local_list), all_counts, comm)
-
-    # Compute dead list (same on all ranks)
-    dead_list = sort!(unique(all_ids))
-
-    # Destroy in order
-    for id in dead_list
-        if haskey(_cudss_registry, id)
-            F = _cudss_registry[id]
-            delete!(_cudss_registry, id)
-            _destroy_cudss!(F)
-        end
-    end
-end
-
-"""
-    _destroy_cudss!(F::CuDSSFactorizationMPI)
-
-Actually destroy cuDSS resources. Internal function.
-"""
-function _destroy_cudss!(F::CuDSSFactorizationMPI)
-    F.destroyed && return
-
-    # Destroy in reverse order of creation
-    _cudss_matrix_destroy(F.rhs)
-    _cudss_matrix_destroy(F.solution)
-    _cudss_matrix_destroy(F.matrix)
-    _cudss_data_destroy(F.handle, F.data)
-    _cudss_config_destroy(F.config)
-    _cudss_destroy(F.handle)
-
-    F.destroyed = true
-    return nothing
-end
-
-"""
-    finalize!(F::CuDSSFactorizationMPI)
-
-Explicitly finalize a cuDSS factorization.
-This is a collective operation - must be called on all ranks.
-"""
-function LinearAlgebraMPI.finalize!(F::CuDSSFactorizationMPI)
-    haskey(_cudss_registry, F.id) || return F
-    delete!(_cudss_registry, F.id)
-    _destroy_cudss!(F)
-    return F
+    # HPCBackend for comm access
+    backend::B
 end
 
 # ============================================================================
-# Part 4: lu/ldlt and solve interface
+# Part 5: lu/ldlt and solve interface
 # ============================================================================
 
 """
-    lu(A::SparseMatrixMPI{T,Ti,<:CuVector})
+    lu(A::SparseMatrixMPI{T,Ti,<:CuBackend})
 
 Compute LU factorization of a GPU sparse matrix using cuDSS.
 Returns a CuDSSFactorizationMPI that can be used with `F \\ b`.
+
+If a previous factorization with the same sparsity structure exists,
+the cached analysis (permutation + elimination tree) is reused,
+skipping the expensive reordering phase.
 """
-function LinearAlgebra.lu(A::LinearAlgebraMPI.SparseMatrixMPI{T,Ti,<:CuVector}) where {T,Ti}
+function LinearAlgebra.lu(A::LinearAlgebraMPI.SparseMatrixMPI{T,Ti,<:CuBackend}) where {T,Ti}
     return _create_cudss_factorization(A, false)
 end
 
 """
-    ldlt(A::SparseMatrixMPI{T,Ti,<:CuVector})
+    ldlt(A::SparseMatrixMPI{T,Ti,<:CuBackend})
 
-Compute LDLT (Cholesky) factorization of a symmetric positive definite GPU sparse matrix.
+Compute LDLT factorization of a symmetric positive definite GPU sparse matrix.
 Returns a CuDSSFactorizationMPI that can be used with `F \\ b`.
+
+If a previous factorization with the same sparsity structure exists,
+the cached analysis (permutation + elimination tree) is reused.
 """
-function LinearAlgebra.ldlt(A::LinearAlgebraMPI.SparseMatrixMPI{T,Ti,<:CuVector}) where {T,Ti}
+function LinearAlgebra.ldlt(A::LinearAlgebraMPI.SparseMatrixMPI{T,Ti,<:CuBackend}) where {T,Ti}
     return _create_cudss_factorization(A, true)
 end
 
 """
-Internal function to create cuDSS factorization.
+Internal: Create cuDSS factorization with analysis caching.
 """
-function _create_cudss_factorization(A::LinearAlgebraMPI.SparseMatrixMPI{T,Ti,AV}, symmetric::Bool) where {T,Ti,AV}
-    # Process any pending finalizers (MPI collective)
-    _process_cudss_finalizers()
+function _create_cudss_factorization(A::LinearAlgebraMPI.SparseMatrixMPI{T,Ti,B}, symmetric::Bool) where {T,Ti,B}
+    comm = A.backend.comm
+    rank = comm_rank(comm)
+    nranks = comm_size(comm)
 
-    comm = MPI.COMM_WORLD
-    rank = MPI.Comm_rank(comm)
-    nranks = MPI.Comm_size(comm)
+    # Get MPI.Comm for NCCL bootstrapping (requires actual MPI communicator)
+    mpi_comm = _get_mpi_comm_for_nccl(comm)
 
     # Assign GPU to rank
     num_gpus = length(CUDA.devices())
     gpu_id = mod(rank, num_gpus)
     CUDA.device!(gpu_id)
+
+    # Ensure structural hash exists
+    structural_hash = LinearAlgebraMPI._ensure_hash(A)
+    cache_key = (structural_hash, symmetric, T)
 
     # Get matrix dimensions
     n = A.row_partition[end] - 1  # Global dimension (1-indexed partition)
@@ -605,7 +539,6 @@ function _create_cudss_factorization(A::LinearAlgebraMPI.SparseMatrixMPI{T,Ti,AV
     last_row = A.row_partition[rank + 2] - 2   # 0-based, inclusive
 
     # Convert to CSR format with 0-based indices for cuDSS
-    # A.rowptr is 1-based, need 0-based
     row_offsets_cpu = Int32.(A.rowptr .- 1)
     row_offsets = CuVector{Int32}(row_offsets_cpu)
 
@@ -614,7 +547,7 @@ function _create_cudss_factorization(A::LinearAlgebraMPI.SparseMatrixMPI{T,Ti,AV
     col_indices_global_cpu = Int32.(A.col_indices[A.colval] .- 1)  # 0-based global
     col_indices_gpu = CuVector{Int32}(col_indices_global_cpu)
 
-    # Values (already on GPU)
+    # Values
     values_cpu = LinearAlgebraMPI._ensure_cpu(A.nzval)
     values_gpu = CuVector{T}(values_cpu)
     nnz_local = length(values_gpu)
@@ -623,33 +556,20 @@ function _create_cudss_factorization(A::LinearAlgebraMPI.SparseMatrixMPI{T,Ti,AV
     x_gpu = CUDA.zeros(T, local_nrows)
     b_gpu = CUDA.zeros(T, local_nrows)
 
-    # Find NCCL communication layer library
-    comm_lib = joinpath(CUDSS_jll.artifact_dir, "lib", "libcudss_commlayer_nccl.so")
-    if !isfile(comm_lib)
-        error("NCCL communication layer not found at $comm_lib")
-    end
+    # Get or create cached NCCL communicator (requires MPI.Comm)
+    nccl_comm = _get_nccl_comm(mpi_comm)
 
-    # Initialize NCCL communicator
-    nccl_comm = _init_nccl_from_mpi(comm)
+    # Get cached cuDSS handle + config (shared across all factorizations)
+    handle, config = _get_cudss_handle_and_config()
 
-    # Initialize cuDSS
-    handle_ref = Ref{cudssHandle_t}(C_NULL)
-    _cudss_create(handle_ref)
-    handle = handle_ref[]
-
-    _cudss_set_comm_layer(handle, comm_lib)
-
-    config_ref = Ref{cudssConfig_t}(C_NULL)
-    _cudss_config_create(config_ref)
-    config = config_ref[]
-
+    # Create per-factorization data object (holds L/U factors)
     data_ref = Ref{cudssData_t}(C_NULL)
     _cudss_data_create(handle, data_ref)
     data = data_ref[]
 
     # Set NCCL communicator
     nccl_comm_storage = Vector{Ptr{Nothing}}(undef, 1)
-    nccl_comm_storage[1] = Ptr{Nothing}(nccl_comm.handle)
+    nccl_comm_storage[1] = Ptr{Nothing}(nccl_comm)
     _cudss_data_set(handle, data, CUDSS_DATA_COMM,
                     Ptr{Cvoid}(pointer(nccl_comm_storage)), Csize_t(sizeof(Ptr{Nothing})))
 
@@ -684,66 +604,218 @@ function _create_cudss_factorization(A::LinearAlgebraMPI.SparseMatrixMPI{T,Ti,AV
     rhs = rhs_ref[]
     _cudss_matrix_set_distribution_row1d(rhs, Int64(first_row), Int64(last_row))
 
-    MPI.Barrier(comm)
+    comm_barrier(comm)
 
-    # Execute analysis and factorization phases
+    # Run analysis phase
+    # Note: Analysis caching is disabled in MGMN mode because cudssDataGet for
+    # PERM_REORDER_ROW/COL returns INVALID_VALUE. Each factorization does full analysis.
     _cudss_execute(handle, CUDSS_PHASE_ANALYSIS, config, data, matrix, solution, rhs)
     CUDA.synchronize()
-    MPI.Barrier(comm)
+    comm_barrier(comm)
 
+    # Run numeric factorization
     _cudss_execute(handle, CUDSS_PHASE_FACTORIZATION, config, data, matrix, solution, rhs)
     CUDA.synchronize()
-    MPI.Barrier(comm)
+    comm_barrier(comm)
 
     # Create factorization object
-    _cudss_count[] += 1
-    id = _cudss_count[]
-
-    F = CuDSSFactorizationMPI{T}(
-        id, handle, config, data, matrix, solution, rhs,
+    F = CuDSSFactorizationMPI{T,B}(
+        handle, config, data, matrix, solution, rhs,
         row_offsets, col_indices_gpu, values_gpu, x_gpu, b_gpu,
         nccl_comm_storage, nccl_comm,
         n, local_nrows, first_row, last_row,
-        symmetric, copy(A.row_partition), false
+        symmetric, copy(A.row_partition),
+        A.backend
     )
-
-    # Register for MPI-safe finalization
-    _cudss_registry[id] = F
-    finalizer(_queue_cudss_for_destruction, F)
 
     return F
 end
 
+# Helper to extract MPI.Comm from AbstractComm for NCCL bootstrapping
+_get_mpi_comm_for_nccl(c::LinearAlgebraMPI.CommMPI) = c.comm
+_get_mpi_comm_for_nccl(::LinearAlgebraMPI.CommSerial) = error("cuDSS MGMN mode requires MPI communication (CommMPI), not CommSerial")
+
 """
-    solve(F::CuDSSFactorizationMPI{T}, b::VectorMPI{T,<:CuArray}) where T
+    solve(F::CuDSSFactorizationMPI{T,B}, b::VectorMPI{T,<:CuBackend}) where {T,B}
 
 Solve the linear system using the cuDSS factorization.
-Input must be a GPU-backed VectorMPI.
+This is solve-only - no refactorization is performed.
 """
-function LinearAlgebraMPI.solve(F::CuDSSFactorizationMPI{T}, b::LinearAlgebraMPI.VectorMPI{T,<:CuArray}) where T
-    F.destroyed && error("CuDSSFactorizationMPI has been destroyed")
-
-    comm = MPI.COMM_WORLD
+function LinearAlgebraMPI.solve(F::CuDSSFactorizationMPI{T,B}, b::LinearAlgebraMPI.VectorMPI{T,<:CuBackend}) where {T,B}
+    comm = F.backend.comm
 
     # Copy b directly to RHS buffer (GPU to GPU)
     copyto!(F.b_gpu, b.v)
 
-    # Execute solve phase
+    # Execute solve phase only
     _cudss_execute(F.handle, CUDSS_PHASE_SOLVE, F.config, F.data, F.matrix, F.solution, F.rhs)
     CUDA.synchronize()
-    MPI.Barrier(comm)
+    comm_barrier(comm)
 
-    # Return GPU vector (copy from internal buffer)
-    return LinearAlgebraMPI.VectorMPI(b.structural_hash, b.partition, copy(F.x_gpu))
+    # Return GPU vector (copy from internal buffer) with backend
+    return LinearAlgebraMPI.VectorMPI{T,B}(b.structural_hash, b.partition, copy(F.x_gpu), F.backend)
 end
 
 """
-    \\(F::CuDSSFactorizationMPI{T}, b::VectorMPI{T,<:CuArray}) where T
+    \\(F::CuDSSFactorizationMPI{T,B}, b::VectorMPI{T,<:CuBackend}) where {T,B}
 
-Solve the linear system using backslash notation.
+Solve the linear system using backslash notation (solve-only, no refactorization).
 """
-function Base.:\(F::CuDSSFactorizationMPI{T}, b::LinearAlgebraMPI.VectorMPI{T,<:CuArray}) where T
+function Base.:\(F::CuDSSFactorizationMPI{T,B}, b::LinearAlgebraMPI.VectorMPI{T,<:CuBackend}) where {T,B}
     return LinearAlgebraMPI.solve(F, b)
+end
+
+"""
+    finalize!(F::CuDSSFactorizationMPI)
+
+Destroy per-factorization cuDSS resources. Must be called collectively on all ranks.
+Only destroys: data (L/U factors), matrix wrappers.
+Does NOT destroy: handle, config (global, cached per-process).
+"""
+function LinearAlgebraMPI.finalize!(F::CuDSSFactorizationMPI)
+    comm = F.backend.comm
+    CUDA.synchronize()
+    comm_barrier(comm)
+
+    # Destroy data object (holds L/U factors - collective operation in MGMN mode)
+    if F.data != C_NULL
+        _cudss_data_destroy(F.handle, F.data)
+        F.data = C_NULL
+    end
+
+    # Destroy matrix wrappers (thin wrappers, cheap to destroy)
+    if F.matrix != C_NULL
+        _cudss_matrix_destroy(F.matrix)
+        F.matrix = C_NULL
+    end
+    if F.solution != C_NULL
+        _cudss_matrix_destroy(F.solution)
+        F.solution = C_NULL
+    end
+    if F.rhs != C_NULL
+        _cudss_matrix_destroy(F.rhs)
+        F.rhs = C_NULL
+    end
+
+    CUDA.synchronize()
+    comm_barrier(comm)
+
+    return nothing
+end
+
+# ============================================================================
+# Part 6: Cached Backslash for GPU Sparse Matrices
+# ============================================================================
+#
+# Strategy: Reuse cuDSS data objects across A\b calls with the same sparsity pattern.
+# - First call (cache miss): full analysis + factorization
+# - Subsequent calls (cache hit): update values + refactorize only (skip analysis!)
+#
+# This works because:
+# 1. After analysis, the cuDSS data object has the symbolic factorization
+# 2. We can call CUDSS_PHASE_FACTORIZATION again with updated values
+# 3. The cudss matrix wrapper points to our values buffer - we update it in place
+
+"""
+    _refactorize_and_solve!(F::CuDSSFactorizationMPI{T,B}, A::SparseMatrixMPI{T,Ti,B}, b::VectorMPI{T,B}) where {T,Ti,B}
+
+Update the values in a cached factorization, refactorize (skip analysis), and solve.
+Returns the solution vector.
+"""
+function _refactorize_and_solve!(F::CuDSSFactorizationMPI{T,B},
+                                  A::LinearAlgebraMPI.SparseMatrixMPI{T,Ti,B},
+                                  b::LinearAlgebraMPI.VectorMPI{T,B}) where {T,Ti,B<:CuBackend}
+    comm = F.backend.comm
+
+    # Update values in the GPU buffer (the cudss matrix wrapper points to this)
+    # A.colval contains local indices, A.nzval contains values
+    values_cpu = LinearAlgebraMPI._ensure_cpu(A.nzval)
+    copyto!(F.values, values_cpu)
+
+    # Copy RHS to buffer
+    copyto!(F.b_gpu, b.v)
+
+    CUDA.synchronize()
+    comm_barrier(comm)
+
+    # Refactorize (skip analysis - the symbolic factorization is already done)
+    _cudss_execute(F.handle, CUDSS_PHASE_FACTORIZATION, F.config, F.data, F.matrix, F.solution, F.rhs)
+    CUDA.synchronize()
+    comm_barrier(comm)
+
+    # Solve
+    _cudss_execute(F.handle, CUDSS_PHASE_SOLVE, F.config, F.data, F.matrix, F.solution, F.rhs)
+    CUDA.synchronize()
+    comm_barrier(comm)
+
+    # Return GPU vector (copy from internal buffer) with backend
+    return LinearAlgebraMPI.VectorMPI{T, B}(b.structural_hash, b.partition, copy(F.x_gpu), b.backend)
+end
+
+"""
+    \\(A::SparseMatrixMPI{T,Ti,B}, b::VectorMPI{T,B}) where {T,Ti,B<:CuBackend}
+
+Solve A*x = b using cuDSS with analysis caching.
+
+First call for a given sparsity pattern: full analysis + factorization.
+Subsequent calls with same pattern: refactorize only (skip expensive analysis).
+
+The cuDSS data object is cached globally and reused - never destroyed.
+"""
+function Base.:\(A::LinearAlgebraMPI.SparseMatrixMPI{T,Ti,B},
+                 b::LinearAlgebraMPI.VectorMPI{T,B}) where {T,Ti,B<:CuBackend}
+    structural_hash = LinearAlgebraMPI._ensure_hash(A)
+    cache_key = (structural_hash, false, T)  # false = not symmetric (LU)
+
+    if haskey(_cudss_backslash_cache, cache_key)
+        # Cache hit: refactorize and solve (skip analysis!)
+        F = _cudss_backslash_cache[cache_key]::CuDSSFactorizationMPI{T,B}
+        return _refactorize_and_solve!(F, A, b)
+    else
+        # Cache miss: create full factorization
+        F = _create_cudss_factorization(A, false)
+        _cudss_backslash_cache[cache_key] = F
+
+        # Solve
+        comm = A.backend.comm
+        copyto!(F.b_gpu, b.v)
+        _cudss_execute(F.handle, CUDSS_PHASE_SOLVE, F.config, F.data, F.matrix, F.solution, F.rhs)
+        CUDA.synchronize()
+        comm_barrier(comm)
+
+        return LinearAlgebraMPI.VectorMPI{T, B}(b.structural_hash, b.partition, copy(F.x_gpu), b.backend)
+    end
+end
+
+"""
+    \\(A::Symmetric{T,<:SparseMatrixMPI{T,Ti,B}}, b::VectorMPI{T,B}) where {T,Ti,B<:CuBackend}
+
+Solve A*x = b for a symmetric matrix using LDLT with analysis caching.
+"""
+function Base.:\(A::Symmetric{T,<:LinearAlgebraMPI.SparseMatrixMPI{T,Ti,B}},
+                 b::LinearAlgebraMPI.VectorMPI{T,B}) where {T,Ti,B<:CuBackend}
+    A_inner = parent(A)
+    structural_hash = LinearAlgebraMPI._ensure_hash(A_inner)
+    cache_key = (structural_hash, true, T)  # true = symmetric (LDLT)
+
+    if haskey(_cudss_backslash_cache, cache_key)
+        # Cache hit: refactorize and solve (skip analysis!)
+        F = _cudss_backslash_cache[cache_key]::CuDSSFactorizationMPI{T,B}
+        return _refactorize_and_solve!(F, A_inner, b)
+    else
+        # Cache miss: create full factorization
+        F = _create_cudss_factorization(A_inner, true)
+        _cudss_backslash_cache[cache_key] = F
+
+        # Solve
+        comm = A_inner.backend.comm
+        copyto!(F.b_gpu, b.v)
+        _cudss_execute(F.handle, CUDSS_PHASE_SOLVE, F.config, F.data, F.matrix, F.solution, F.rhs)
+        CUDA.synchronize()
+        comm_barrier(comm)
+
+        return LinearAlgebraMPI.VectorMPI{T, B}(b.structural_hash, b.partition, copy(F.x_gpu), b.backend)
+    end
 end
 
 # ============================================================================

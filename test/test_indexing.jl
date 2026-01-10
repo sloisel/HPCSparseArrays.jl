@@ -15,23 +15,26 @@ comm = MPI.COMM_WORLD
 rank = MPI.Comm_rank(comm)
 nranks = MPI.Comm_size(comm)
 
+# Create default CPU backend
+backend = backend_cpu_mpi(comm)
+
 # Create deterministic test data (same on all ranks)
 n = 12
 
 # VectorMPI test data
 v_global = collect(1.0:Float64(n))
-v = VectorMPI(v_global)
+v = VectorMPI(v_global, backend)
 
 # SparseMatrixMPI test data
 I_vals = [1, 2, 3, 4, 5, 6, 7, 8, 1, 3, 5, 7]
 J_vals = [1, 2, 3, 4, 5, 6, 7, 8, 2, 4, 6, 8]
 V_vals = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 0.1, 0.3, 0.5, 0.7]
 A_global = sparse(I_vals, J_vals, V_vals, n, n)
-A = SparseMatrixMPI{Float64}(A_global)
+A = SparseMatrixMPI(A_global, backend)
 
 # MatrixMPI test data
 M_global = Float64[i + j * 0.1 for i in 1:n, j in 1:n]
-M = MatrixMPI(M_global)
+M = MatrixMPI(M_global, backend)
 
 ts = @testset QuietTestSet "Indexing" begin
 
@@ -49,22 +52,22 @@ w_full = v[1:n]
 
 println(io0(), "[test] VectorMPI range setindex! (scalar)")
 
-v_modify = VectorMPI(copy(v_global))
+v_modify = VectorMPI(copy(v_global), backend)
 v_modify[3:6] = 99.0
 @test length(v_modify) == n
 
 
 println(io0(), "[test] VectorMPI range setindex! (vector)")
 
-v_modify2 = VectorMPI(copy(v_global))
+v_modify2 = VectorMPI(copy(v_global), backend)
 v_modify2[3:6] = [100.0, 200.0, 300.0, 400.0]
 @test length(v_modify2) == n
 
 
 println(io0(), "[test] VectorMPI range setindex! (VectorMPI source)")
 
-v_modify3 = VectorMPI(copy(v_global))
-src_vec = VectorMPI([100.0, 200.0, 300.0, 400.0])
+v_modify3 = VectorMPI(copy(v_global), backend)
+src_vec = VectorMPI([100.0, 200.0, 300.0, 400.0], backend)
 v_modify3[3:6] = src_vec
 @test length(v_modify3) == n
 
@@ -87,14 +90,14 @@ M_full = M[:, :]
 
 println(io0(), "[test] MatrixMPI range setindex! (scalar)")
 
-M_modify = MatrixMPI(copy(M_global))
+M_modify = MatrixMPI(copy(M_global), backend)
 M_modify[2:4, 3:5] = 0.0
 @test size(M_modify) == (n, n)
 
 
 println(io0(), "[test] MatrixMPI range setindex! (matrix)")
 
-M_modify2 = MatrixMPI(copy(M_global))
+M_modify2 = MatrixMPI(copy(M_global), backend)
 new_vals = Float64[10*i + j for i in 1:3, j in 1:4]
 M_modify2[2:4, 3:6] = new_vals
 @test size(M_modify2) == (n, n)
@@ -102,8 +105,8 @@ M_modify2[2:4, 3:6] = new_vals
 
 println(io0(), "[test] MatrixMPI range setindex! (MatrixMPI source)")
 
-M_modify3 = MatrixMPI(zeros(n, n))
-src_matrix = MatrixMPI(Float64[10*i + j for i in 1:4, j in 1:5])
+M_modify3 = MatrixMPI(zeros(n, n), backend)
+src_matrix = MatrixMPI(Float64[10*i + j for i in 1:4, j in 1:5], backend)
 M_modify3[2:5, 3:7] = src_matrix
 @test size(M_modify3) == (n, n)
 
@@ -124,16 +127,16 @@ A_cols = A[:, 3:8]
 
 println(io0(), "[test] SparseMatrixMPI range setindex! (scalar)")
 
-A_modify = SparseMatrixMPI{Float64}(copy(A_global))
+A_modify = SparseMatrixMPI(copy(A_global), backend)
 A_modify[2:4, 2:5] = 0.0
 @test size(A_modify) == (n, n)
 
 
 println(io0(), "[test] SparseMatrixMPI range setindex! (SparseMatrixMPI source)")
 
-A_modify2 = SparseMatrixMPI{Float64}(copy(A_global))
+A_modify2 = SparseMatrixMPI(copy(A_global), backend)
 new_block = Float64[100*i + j for i in 1:3, j in 1:4]
-A_modify2[2:4, 3:6] = SparseMatrixMPI{Float64}(sparse(new_block))
+A_modify2[2:4, 3:6] = SparseMatrixMPI(sparse(new_block), backend)
 @test size(A_modify2) == (n, n)
 
 
@@ -151,7 +154,7 @@ w2 = v[3:8]
 
 println(io0(), "[test] VectorMPI getindex with VectorMPI indices")
 
-idx = VectorMPI([3, 1, 5, 2, 6, 4])
+idx = VectorMPI([3, 1, 5, 2, 6, 4], backend)
 result = v[idx]
 @test result.partition == idx.partition
 @test length(result) == length(idx)
@@ -159,35 +162,35 @@ result = v[idx]
 
 println(io0(), "[test] VectorMPI setindex! with VectorMPI indices")
 
-v_modify = VectorMPI(copy(v_global))
-idx_set = VectorMPI([2, 4, 6])
-src_values = VectorMPI([20.0, 40.0, 60.0])
+v_modify = VectorMPI(copy(v_global), backend)
+idx_set = VectorMPI([2, 4, 6], backend)
+src_values = VectorMPI([20.0, 40.0, 60.0], backend)
 v_modify[idx_set] = src_values
 @test length(v_modify) == n
 
 
 println(io0(), "[test] MatrixMPI getindex with VectorMPI indices")
 
-row_idx = VectorMPI([2, 5, 1, 4])
-col_idx = VectorMPI([3, 1])
+row_idx = VectorMPI([2, 5, 1, 4], backend)
+col_idx = VectorMPI([3, 1], backend)
 result_dense = M[row_idx, col_idx]
 @test size(result_dense) == (4, 2)
 
 
 println(io0(), "[test] MatrixMPI setindex! with VectorMPI indices")
 
-M_modify = MatrixMPI(zeros(6, 4))
-row_idx_set = VectorMPI([1, 3, 5])
-col_idx_set = VectorMPI([2, 4])
-src_dense = MatrixMPI(ones(3, 2) * 7.0)
+M_modify = MatrixMPI(zeros(6, 4), backend)
+row_idx_set = VectorMPI([1, 3, 5], backend)
+col_idx_set = VectorMPI([2, 4], backend)
+src_dense = MatrixMPI(ones(3, 2) * 7.0, backend)
 M_modify[row_idx_set, col_idx_set] = src_dense
 @test size(M_modify) == (6, 4)
 
 
 println(io0(), "[test] SparseMatrixMPI getindex with VectorMPI indices")
 
-row_idx_sparse = VectorMPI([2, 4, 1])
-col_idx_sparse = VectorMPI([1, 3, 5])
+row_idx_sparse = VectorMPI([2, 4, 1], backend)
+col_idx_sparse = VectorMPI([1, 3, 5], backend)
 result_sparse = A[row_idx_sparse, col_idx_sparse]
 @test result_sparse isa MatrixMPI
 @test size(result_sparse) == (3, 3)
@@ -195,10 +198,10 @@ result_sparse = A[row_idx_sparse, col_idx_sparse]
 
 println(io0(), "[test] SparseMatrixMPI setindex! with VectorMPI indices")
 
-A_modify = SparseMatrixMPI{Float64}(spzeros(6, 6))
-row_idx_set = VectorMPI([1, 3, 5])
-col_idx_set = VectorMPI([2, 4])
-src = MatrixMPI(ones(3, 2) * 9.0)
+A_modify = SparseMatrixMPI(spzeros(6, 6), backend)
+row_idx_set = VectorMPI([1, 3, 5], backend)
+col_idx_set = VectorMPI([2, 4], backend)
+src = MatrixMPI(ones(3, 2) * 9.0, backend)
 A_modify[row_idx_set, col_idx_set] = src
 @test size(A_modify) == (6, 6)
 
@@ -209,35 +212,35 @@ A_modify[row_idx_set, col_idx_set] = src
 
 println(io0(), "[test] MatrixMPI getindex with VectorMPI rows and range columns")
 
-row_idx = VectorMPI([2, 5, 8])
+row_idx = VectorMPI([2, 5, 8], backend)
 M_mix = M[row_idx, 3:7]
 @test size(M_mix) == (3, 5)
 
 
 println(io0(), "[test] MatrixMPI getindex with range rows and VectorMPI columns")
 
-col_idx = VectorMPI([1, 4, 7, 10])
+col_idx = VectorMPI([1, 4, 7, 10], backend)
 M_mix2 = M[2:5, col_idx]
 @test size(M_mix2) == (4, 4)
 
 
 println(io0(), "[test] MatrixMPI getindex with VectorMPI rows and Colon")
 
-row_idx = VectorMPI([1, 6, n])
+row_idx = VectorMPI([1, 6, n], backend)
 M_colon = M[row_idx, :]
 @test size(M_colon) == (3, n)
 
 
 println(io0(), "[test] MatrixMPI getindex with Colon and VectorMPI columns")
 
-col_idx = VectorMPI([2, 5, 8, 11])
+col_idx = VectorMPI([2, 5, 8, 11], backend)
 M_colon2 = M[:, col_idx]
 @test size(M_colon2) == (n, 4)
 
 
 println(io0(), "[test] MatrixMPI getindex with VectorMPI rows and Int column")
 
-row_idx = VectorMPI([1, 4, 7, 10])
+row_idx = VectorMPI([1, 4, 7, 10], backend)
 M_int_col = M[row_idx, 5]
 @test M_int_col isa VectorMPI
 @test length(M_int_col) == 4
@@ -245,7 +248,7 @@ M_int_col = M[row_idx, 5]
 
 println(io0(), "[test] MatrixMPI getindex with Int row and VectorMPI columns")
 
-col_idx = VectorMPI([2, 4, 6, 8])
+col_idx = VectorMPI([2, 4, 6, 8], backend)
 M_int_row = M[3, col_idx]
 @test M_int_row isa VectorMPI
 @test length(M_int_row) == 4
@@ -253,21 +256,21 @@ M_int_row = M[3, col_idx]
 
 println(io0(), "[test] SparseMatrixMPI getindex with VectorMPI rows and range columns")
 
-row_idx = VectorMPI([1, 3, 5, 7])
+row_idx = VectorMPI([1, 3, 5, 7], backend)
 A_mix = A[row_idx, 2:6]
 @test size(A_mix) == (4, 5)
 
 
 println(io0(), "[test] SparseMatrixMPI getindex with range rows and VectorMPI columns")
 
-col_idx = VectorMPI([1, 3, 5, 7])
+col_idx = VectorMPI([1, 3, 5, 7], backend)
 A_mix2 = A[2:5, col_idx]
 @test size(A_mix2) == (4, 4)
 
 
 println(io0(), "[test] SparseMatrixMPI getindex with VectorMPI rows and Int column")
 
-row_idx = VectorMPI([1, 3, 5, 7])
+row_idx = VectorMPI([1, 3, 5, 7], backend)
 A_int_col = A[row_idx, 3]
 @test A_int_col isa VectorMPI
 @test length(A_int_col) == 4
@@ -275,7 +278,7 @@ A_int_col = A[row_idx, 3]
 
 println(io0(), "[test] SparseMatrixMPI getindex with Int row and VectorMPI columns")
 
-col_idx = VectorMPI([1, 2, 3, 4])
+col_idx = VectorMPI([1, 2, 3, 4], backend)
 A_int_row = A[2, col_idx]
 @test A_int_row isa VectorMPI
 @test length(A_int_row) == 4
@@ -319,68 +322,68 @@ println(io0(), "[test] Empty ranges")
 
 println(io0(), "[test] MatrixMPI setindex! with VectorMPI rows and range columns")
 
-M_setmix = MatrixMPI(zeros(n, n))
-row_idx = VectorMPI([1, 4, 7])
-M_setmix[row_idx, 2:5] = MatrixMPI(ones(3, 4) * 55.0)
+M_setmix = MatrixMPI(zeros(n, n), backend)
+row_idx = VectorMPI([1, 4, 7], backend)
+M_setmix[row_idx, 2:5] = MatrixMPI(ones(3, 4) * 55.0, backend)
 @test size(M_setmix) == (n, n)
 
 
 println(io0(), "[test] MatrixMPI setindex! with range rows and VectorMPI columns")
 
-M_setmix2 = MatrixMPI(zeros(n, n))
-col_idx = VectorMPI([1, 5, 9])
-M_setmix2[2:4, col_idx] = MatrixMPI(ones(3, 3) * 66.0)
+M_setmix2 = MatrixMPI(zeros(n, n), backend)
+col_idx = VectorMPI([1, 5, 9], backend)
+M_setmix2[2:4, col_idx] = MatrixMPI(ones(3, 3) * 66.0, backend)
 @test size(M_setmix2) == (n, n)
 
 
 println(io0(), "[test] SparseMatrixMPI setindex! with VectorMPI rows and range columns")
 
-A_setmix = SparseMatrixMPI{Float64}(spzeros(n, n))
-row_idx = VectorMPI([1, 4, 7])
-A_setmix[row_idx, 2:4] = MatrixMPI(ones(3, 3) * 77.0)
+A_setmix = SparseMatrixMPI(spzeros(n, n), backend)
+row_idx = VectorMPI([1, 4, 7], backend)
+A_setmix[row_idx, 2:4] = MatrixMPI(ones(3, 3) * 77.0, backend)
 @test size(A_setmix) == (n, n)
 
 
 println(io0(), "[test] SparseMatrixMPI setindex! with range rows and VectorMPI columns")
 
-A_setmix2 = SparseMatrixMPI{Float64}(spzeros(n, n))
-col_idx = VectorMPI([1, 5, 9])
-A_setmix2[2:4, col_idx] = MatrixMPI(ones(3, 3) * 88.0)
+A_setmix2 = SparseMatrixMPI(spzeros(n, n), backend)
+col_idx = VectorMPI([1, 5, 9], backend)
+A_setmix2[2:4, col_idx] = MatrixMPI(ones(3, 3) * 88.0, backend)
 @test size(A_setmix2) == (n, n)
 
 
 println(io0(), "[test] MatrixMPI setindex! with VectorMPI rows and Int column")
 
-M_setint = MatrixMPI(zeros(n, n))
-row_idx = VectorMPI([1, 3, 5, 7])
-src_col = VectorMPI([10.0, 20.0, 30.0, 40.0])
+M_setint = MatrixMPI(zeros(n, n), backend)
+row_idx = VectorMPI([1, 3, 5, 7], backend)
+src_col = VectorMPI([10.0, 20.0, 30.0, 40.0], backend)
 M_setint[row_idx, 5] = src_col
 @test size(M_setint) == (n, n)
 
 
 println(io0(), "[test] MatrixMPI setindex! with Int row and VectorMPI columns")
 
-M_setint2 = MatrixMPI(zeros(n, n))
-col_idx = VectorMPI([2, 4, 6, 8])
-src_row = VectorMPI([100.0, 200.0, 300.0, 400.0])
+M_setint2 = MatrixMPI(zeros(n, n), backend)
+col_idx = VectorMPI([2, 4, 6, 8], backend)
+src_row = VectorMPI([100.0, 200.0, 300.0, 400.0], backend)
 M_setint2[3, col_idx] = src_row
 @test size(M_setint2) == (n, n)
 
 
 println(io0(), "[test] SparseMatrixMPI setindex! with VectorMPI rows and Int column")
 
-A_setint = SparseMatrixMPI{Float64}(spzeros(n, n))
-row_idx = VectorMPI([1, 3, 5, 7])
-src_col = VectorMPI([10.0, 20.0, 30.0, 40.0])
+A_setint = SparseMatrixMPI(spzeros(n, n), backend)
+row_idx = VectorMPI([1, 3, 5, 7], backend)
+src_col = VectorMPI([10.0, 20.0, 30.0, 40.0], backend)
 A_setint[row_idx, 5] = src_col
 @test size(A_setint) == (n, n)
 
 
 println(io0(), "[test] SparseMatrixMPI setindex! with Int row and VectorMPI columns")
 
-A_setint2 = SparseMatrixMPI{Float64}(spzeros(n, n))
-col_idx = VectorMPI([2, 4, 6, 8])
-src_row = VectorMPI([100.0, 200.0, 300.0, 400.0])
+A_setint2 = SparseMatrixMPI(spzeros(n, n), backend)
+col_idx = VectorMPI([2, 4, 6, 8], backend)
+src_row = VectorMPI([100.0, 200.0, 300.0, 400.0], backend)
 A_setint2[3, col_idx] = src_row
 @test size(A_setint2) == (n, n)
 

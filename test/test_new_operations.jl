@@ -30,8 +30,9 @@ nranks = MPI.Comm_size(comm)
 
 ts = @testset QuietTestSet "New Operations" begin
 
-for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
+for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     TOL = TestUtils.tolerance(T)
+    backend = get_backend()
     is_complex = T <: Complex
     Treal = real(T)
 
@@ -51,22 +52,22 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
         A_sparse_local_vals, n, n
     )
     A_sparse_local = A_sparse_local + transpose(A_sparse_local) + T(2) * I
-    A_sparse = to_backend(SparseMatrixMPI{T}(A_sparse_local))
+    A_sparse = SparseMatrixMPI(A_sparse_local, backend)
 
     # Create a test dense matrix (n x m) with deterministic values
     B_dense_local = T.([Float64(i + j*0.1) for i in 1:n, j in 1:m])
-    B_dense = to_backend(MatrixMPI(B_dense_local))
+    B_dense = MatrixMPI(B_dense_local, backend)
 
     # Create a test dense matrix (m x n)
     C_dense_local = T.([Float64(i*0.1 + j) for i in 1:m, j in 1:n])
-    C_dense = to_backend(MatrixMPI(C_dense_local))
+    C_dense = MatrixMPI(C_dense_local, backend)
 
     # Create test vectors
     x_local = T.(Float64.(1:n) .+ 0.1)
-    x = to_backend(VectorMPI(x_local))
+    x = VectorMPI(x_local, backend)
 
     y_local = T.(Float64.(n:-1:1) .+ 0.1)
-    y = to_backend(VectorMPI(y_local))
+    y = VectorMPI(y_local, backend)
 
 
     println(io0(), "[test] transpose(SparseMatrixMPI) * VectorMPI ($T, $backend_name)")
@@ -95,10 +96,10 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
         [1, 2, 3, 4, 5, 6],
         D_sparse_local_vals, n, m
     )
-    D_sparse = to_backend(SparseMatrixMPI{T}(D_sparse_local))
+    D_sparse = SparseMatrixMPI(D_sparse_local, backend)
 
     E_dense_local = T.([Float64(i*0.2 + j*0.3) for i in 1:m, j in 1:n])
-    E_dense = to_backend(MatrixMPI(E_dense_local))
+    E_dense = MatrixMPI(E_dense_local, backend)
 
     result4 = E_dense * D_sparse
     expected4 = E_dense_local * D_sparse_local
@@ -170,7 +171,7 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
     expected13 = λ*I - A_sparse_local
     @test norm(SparseMatrixCSC(result13) - expected13, Inf) < TOL
 
-end  # for (T, to_backend, backend_name)
+end  # for (T, get_backend, backend_name)
 
 end  # QuietTestSet
 

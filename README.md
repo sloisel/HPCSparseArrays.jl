@@ -79,19 +79,20 @@ using MPI
 MPI.Init()
 using LinearAlgebraMPI
 
-# Create CPU vectors/matrices as usual
-x_cpu = VectorMPI(Float32.(rand(1000)))
-A = SparseMatrixMPI{Float32}(sprand(Float32, 1000, 1000, 0.01))
+# Define backends
+cpu_backend = HPCBackend(DeviceCPU(), CommMPI(), SolverMUMPS())
+metal_backend = HPCBackend(DeviceMetal(), CommMPI(), SolverMUMPS())
 
-# Convert to GPU
-x_gpu = mtl(x_cpu)  # Returns VectorMPI with MtlVector storage
+# Create vectors/matrices directly with GPU backend
+x_gpu = VectorMPI(Float32.(rand(1000)), metal_backend)
+A = SparseMatrixMPI(sprand(Float32, 1000, 1000, 0.01), metal_backend)
 
 # GPU operations work transparently
 y_gpu = A * x_gpu   # Sparse A*x with GPU vector (CPU staging for computation)
 z_gpu = x_gpu + x_gpu  # Vector addition on GPU
 
-# Convert back to CPU
-y_cpu = cpu(y_gpu)
+# Convert to CPU if needed
+y_cpu = to_backend(y_gpu, cpu_backend)
 ```
 
 ### CUDA (Linux/Windows)
@@ -102,16 +103,19 @@ using MPI
 MPI.Init()
 using LinearAlgebraMPI
 
-# Convert to GPU
-x_cpu = VectorMPI(rand(1000))
-x_gpu = cu(x_cpu)  # Returns VectorMPI with CuVector storage
+# Define backends
+cpu_backend = HPCBackend(DeviceCPU(), CommMPI(), SolverMUMPS())
+cuda_backend = HPCBackend(DeviceCUDA(), CommMPI(), SolverMUMPS())
+
+# Create directly with GPU backend
+x_gpu = VectorMPI(rand(1000), cuda_backend)
 
 # GPU operations work transparently
 y_gpu = A * x_gpu
 z_gpu = x_gpu + x_gpu
 
-# Convert back to CPU
-y_cpu = cpu(y_gpu)
+# Convert to CPU if needed
+y_cpu = to_backend(y_gpu, cpu_backend)
 ```
 
 ### cuDSS Multi-GPU Solver (CUDA only)

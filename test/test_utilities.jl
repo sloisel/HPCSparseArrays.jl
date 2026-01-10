@@ -64,15 +64,19 @@ end
 
 
 # Parameterized tests for type conversions
-for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
+cpu_backend = TestUtils.get_cpu_backend()
+
+for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
+    backend = get_backend()
     TOL = TestUtils.tolerance(T)
-    VT, ST, MT = TestUtils.expected_types(T, to_backend)
+    VT, ST, MT = TestUtils.expected_types(T, backend)
 
     println(io0(), "[test] Vector conversion roundtrip ($T, $backend_name)")
 
     # Test Vector conversion: native -> MPI -> native (bit-for-bit)
     v_original = T.([1.5, -2.3, 3.7, 4.1, -5.9, 6.2, 7.8, -8.4, 9.0, 10.1])
-    v_mpi = assert_type(to_backend(VectorMPI(v_original)), VT)
+    v_cpu = VectorMPI(v_original, cpu_backend)
+    v_mpi = assert_type(LinearAlgebraMPI.to_backend(v_cpu, backend), VT)
     v_back = Vector(v_mpi)
     @test norm(v_back - v_original) < TOL
     @test eltype(v_back) == T
@@ -88,7 +92,8 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
                      13.3 14.4 15.5 16.6;
                      17.7 18.8 19.9 20.0;
                      21.1 22.2 23.3 24.4])
-    M_mpi = assert_type(to_backend(MatrixMPI(M_original)), MT)
+    M_cpu = MatrixMPI(M_original, cpu_backend)
+    M_mpi = assert_type(LinearAlgebraMPI.to_backend(M_cpu, backend), MT)
     M_back = Matrix(M_mpi)
     @test norm(M_back - M_original) < TOL
     @test eltype(M_back) == T
@@ -105,7 +110,8 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
                11.1, -12.2, 13.3, -14.4, 15.5, -16.6, 17.7, -18.8, 19.9, -20.0])
     S_original = sparse(I_sp, J_sp, V_sp, 15, 20)
 
-    S_mpi = assert_type(to_backend(SparseMatrixMPI{T}(S_original)), ST)
+    S_cpu = SparseMatrixMPI{T}(S_original, cpu_backend)
+    S_mpi = assert_type(LinearAlgebraMPI.to_backend(S_cpu, backend), ST)
     S_back = SparseMatrixCSC(S_mpi)
 
     @test norm(S_back - S_original, Inf) < TOL
@@ -113,14 +119,14 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
     @test size(S_back) == size(S_original)
     @test eltype(S_back) == T
 
-end  # for (T, to_backend, backend_name)
+end  # for (T, get_backend, backend_name)
 
 
 # Show method tests (CPU only, display behavior)
 println(io0(), "[test] VectorMPI show methods")
 
 # Test show methods for VectorMPI
-v_test = VectorMPI(Float64[1.0, 2.0, 3.0, 4.0])
+v_test = VectorMPI(Float64[1.0, 2.0, 3.0, 4.0], cpu_backend)
 io = IOBuffer()
 show(io, v_test)
 s = String(take!(io))
@@ -141,7 +147,7 @@ s_interp = "$v_test"
 println(io0(), "[test] MatrixMPI show methods")
 
 # Test show methods for MatrixMPI
-M_test = MatrixMPI(Float64[1.0 2.0; 3.0 4.0; 5.0 6.0])
+M_test = MatrixMPI(Float64[1.0 2.0; 3.0 4.0; 5.0 6.0], cpu_backend)
 io = IOBuffer()
 show(io, M_test)
 s = String(take!(io))
@@ -161,7 +167,7 @@ s_interp = "$M_test"
 println(io0(), "[test] SparseMatrixMPI show methods")
 
 # Test show methods for SparseMatrixMPI
-S_test = SparseMatrixMPI{Float64}(sparse([1, 2, 3], [1, 2, 3], [1.0, 2.0, 3.0], 5, 5))
+S_test = SparseMatrixMPI{Float64}(sparse([1, 2, 3], [1, 2, 3], [1.0, 2.0, 3.0], 5, 5), cpu_backend)
 io = IOBuffer()
 show(io, S_test)
 s = String(take!(io))

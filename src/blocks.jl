@@ -27,7 +27,7 @@ cat(A, B, C, D; dims=(2,2)) # 2×2 block matrix [A B; C D]
 This is a distributed implementation that only gathers the rows each rank needs
 for its local output, rather than gathering all data to all ranks.
 """
-function Base.cat(As::SparseMatrixMPI{T,Ti,AV}...; dims) where {T,Ti,AV}
+function Base.cat(As::SparseMatrixMPI{T,Ti,Bk}...; dims) where {T,Ti,Bk<:HPCBackend}
     isempty(As) && error("cat requires at least one matrix")
     length(As) == 1 && return copy(As[1])
 
@@ -76,9 +76,10 @@ function Base.cat(As::SparseMatrixMPI{T,Ti,AV}...; dims) where {T,Ti,AV}
     row_offsets = [0; cumsum(block_row_heights[1:end-1])]
     col_offsets = [0; cumsum(block_col_widths[1:end-1])]
 
-    comm = MPI.COMM_WORLD
-    rank = MPI.Comm_rank(comm)
-    nranks = MPI.Comm_size(comm)
+    backend = As[1].backend
+    comm = backend.comm
+    rank = comm_rank(comm)
+    nranks = comm_size(comm)
 
     # Step 1: Compute output row partition
     rows_per_rank = div(total_rows, nranks)
@@ -142,17 +143,18 @@ function Base.cat(As::SparseMatrixMPI{T,Ti,AV}...; dims) where {T,Ti,AV}
         SparseMatrixCSC(total_cols, local_nrows, ones(Int, local_nrows + 1), Int[], T[]) :
         sparse(local_J, local_I, local_V, total_cols, local_nrows)
 
-    result = SparseMatrixMPI_local(transpose(AT_local); comm=comm)
+    result = SparseMatrixMPI_local(transpose(AT_local), backend)
 
     # Convert to GPU if inputs were GPU (GPU→CPU for MPI, then CPU→GPU for result)
-    if AV !== Vector{T}
+    device = backend.device
+    if !(device isa DeviceCPU)
         nzval_target = copyto!(similar(As[1].nzval, length(result.nzval)), result.nzval)
-        rowptr_target = _to_target_backend(result.rowptr, AV)
-        colval_target = _to_target_backend(result.colval, AV)
-        return SparseMatrixMPI{T,Ti,AV}(
+        rowptr_target = _to_target_device(result.rowptr, device)
+        colval_target = _to_target_device(result.colval, device)
+        return SparseMatrixMPI{T,Ti,Bk}(
             result.structural_hash, result.row_partition, result.col_partition, result.col_indices,
             result.rowptr, result.colval, nzval_target, result.nrows_local, result.ncols_compressed,
-            nothing, result.cached_symmetric, rowptr_target, colval_target)
+            nothing, result.cached_symmetric, rowptr_target, colval_target, backend)
     end
     return result
 end
@@ -187,9 +189,11 @@ Concatenate MatrixMPI matrices. Same interface as SparseMatrixMPI version.
 This is a distributed implementation that only gathers the rows each rank needs
 for its local output, rather than gathering all data to all ranks.
 """
-function Base.cat(As::MatrixMPI{T,AM}...; dims) where {T,AM}
+function Base.cat(As::MatrixMPI{T,B}...; dims) where {T, B<:HPCBackend}
     isempty(As) && error("cat requires at least one matrix")
     length(As) == 1 && return copy(As[1])
+
+    backend = As[1].backend
 
     # Normalize dims
     if dims isa Integer
@@ -227,9 +231,9 @@ function Base.cat(As::MatrixMPI{T,AM}...; dims) where {T,AM}
     row_offsets = [0; cumsum(block_row_heights[1:end-1])]
     col_offsets = [0; cumsum(block_col_widths[1:end-1])]
 
-    comm = MPI.COMM_WORLD
-    rank = MPI.Comm_rank(comm)
-    nranks = MPI.Comm_size(comm)
+    comm = backend.comm
+    rank = comm_rank(comm)
+    nranks = comm_size(comm)
 
     # Step 1: Compute output row partition
     rows_per_rank = div(total_rows, nranks)
@@ -286,12 +290,12 @@ function Base.cat(As::MatrixMPI{T,AM}...; dims) where {T,AM}
     end
 
     # Step 4: Create MatrixMPI from local data
-    result = MatrixMPI_local(local_matrix; comm=comm)
+    result = MatrixMPI_local(local_matrix, backend)
 
-    # Convert to GPU if inputs were GPU
-    if AM !== Matrix{T}
+    # Convert to GPU if inputs were GPU (check if backend device is not CPU)
+    if !(backend.device isa DeviceCPU)
         local_matrix_gpu = copyto!(similar(As[1].A, local_nrows, total_cols), local_matrix)
-        return MatrixMPI{T,AM}(result.structural_hash, result.row_partition, result.col_partition, local_matrix_gpu)
+        return MatrixMPI{T,B}(result.structural_hash, result.row_partition, result.col_partition, local_matrix_gpu, backend)
     end
     return result
 end
@@ -370,12 +374,13 @@ Uses `repartition` to redistribute each input vector's elements to the ranks tha
 need them for the output. This provides plan caching and a fast path when partitions
 already align (no communication needed).
 """
-function _vcat_vectors(vs::VectorMPI{T,AV}...) where {T,AV}
+function _vcat_vectors(vs::VectorMPI{T,B}...) where {T, B<:HPCBackend}
     length(vs) == 1 && return copy(vs[1])
 
-    comm = MPI.COMM_WORLD
-    rank = MPI.Comm_rank(comm)
-    nranks = MPI.Comm_size(comm)
+    backend = vs[1].backend
+    comm = backend.comm
+    rank = comm_rank(comm)
+    nranks = comm_size(comm)
 
     # Step 1: Compute total length and offsets
     lengths = [length(v) for v in vs]
@@ -420,12 +425,13 @@ function _vcat_vectors(vs::VectorMPI{T,AV}...) where {T,AV}
         end
     end
 
-    return VectorMPI_local(local_v, comm)
+    return VectorMPI_local(local_v, backend)
 end
 
-function _hcat_vectors(vs::VectorMPI{T,AV}...) where {T,AV}
-    comm = MPI.COMM_WORLD
-    nranks = MPI.Comm_size(comm)
+function _hcat_vectors(vs::VectorMPI{T,B}...) where {T, B<:HPCBackend}
+    backend = vs[1].backend
+    comm = backend.comm
+    nranks = comm_size(comm)
 
     # Verify all vectors have same length and partition
     n = length(vs[1])
@@ -438,7 +444,6 @@ function _hcat_vectors(vs::VectorMPI{T,AV}...) where {T,AV}
     # Stack local vectors as columns (preserves GPU type)
     local_matrix = hcat([v.v for v in vs]...)
     ncols = length(vs)
-    AM = typeof(local_matrix)
 
     # Compute col partition
     col_partition = uniform_partition(ncols, nranks)
@@ -446,7 +451,7 @@ function _hcat_vectors(vs::VectorMPI{T,AV}...) where {T,AV}
     # Compute structural hash
     structural_hash = compute_dense_structural_hash(row_partition, col_partition, size(local_matrix), comm)
 
-    return MatrixMPI{T,AM}(structural_hash, row_partition, col_partition, local_matrix)
+    return MatrixMPI{T,B}(structural_hash, row_partition, col_partition, local_matrix, backend)
 end
 
 Base.hcat(vs::VectorMPI...) = cat(vs...; dims=2)
@@ -472,13 +477,15 @@ Returns a SparseMatrixMPI.
 This is a distributed implementation that only gathers the rows each rank needs
 for its local output, rather than gathering all data to all ranks.
 """
-function blockdiag(As::SparseMatrixMPI{T,Ti,AV}...) where {T,Ti,AV}
+function blockdiag(As::SparseMatrixMPI{T,Ti,Bk}...) where {T,Ti,Bk<:HPCBackend}
     isempty(As) && error("blockdiag requires at least one matrix")
     length(As) == 1 && return copy(As[1])
 
-    comm = MPI.COMM_WORLD
-    rank = MPI.Comm_rank(comm)
-    nranks = MPI.Comm_size(comm)
+    backend = As[1].backend
+    comm = backend.comm
+    device = backend.device
+    rank = comm_rank(comm)
+    nranks = comm_size(comm)
 
     # Step 1: Compute dimensions and offsets (all ranks compute same values)
     row_sizes = [size(A, 1) for A in As]
@@ -546,17 +553,17 @@ function blockdiag(As::SparseMatrixMPI{T,Ti,AV}...) where {T,Ti,AV}
         SparseMatrixCSC(total_cols, local_nrows, ones(Int, local_nrows + 1), Int[], T[]) :
         sparse(local_J, local_I, local_V, total_cols, local_nrows)
 
-    result = SparseMatrixMPI_local(transpose(AT_local); comm=comm)
+    result = SparseMatrixMPI_local(transpose(AT_local), backend)
 
     # Convert to GPU if inputs were GPU (GPU→CPU for MPI, then CPU→GPU for result)
-    if AV !== Vector{T}
+    if !(device isa DeviceCPU)
         nzval_target = copyto!(similar(As[1].nzval, length(result.nzval)), result.nzval)
-        rowptr_target = _to_target_backend(result.rowptr, AV)
-        colval_target = _to_target_backend(result.colval, AV)
-        return SparseMatrixMPI{T,Ti,AV}(
+        rowptr_target = _to_target_device(result.rowptr, device)
+        colval_target = _to_target_device(result.colval, device)
+        return SparseMatrixMPI{T,Ti,Bk}(
             result.structural_hash, result.row_partition, result.col_partition, result.col_indices,
             result.rowptr, result.colval, nzval_target, result.nrows_local, result.ncols_compressed,
-            nothing, result.cached_symmetric, rowptr_target, colval_target)
+            nothing, result.cached_symmetric, rowptr_target, colval_target, backend)
     end
     return result
 end

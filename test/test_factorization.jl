@@ -133,11 +133,13 @@ end
 
 ts = @testset QuietTestSet "Distributed Factorization Tests" begin
 
-for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
+for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     TOL = TestUtils.tolerance(T)
     RT = real(T)  # Real type for creating real-valued test data
-    VT, ST, MT = TestUtils.expected_types(T, to_backend)
-    VT_real, ST_real, MT_real = TestUtils.expected_types(RT, to_backend)
+    backend = get_backend()
+    cpu_backend = TestUtils.cpu_version(backend)
+    VT, ST, MT = TestUtils.expected_types(T, backend)
+    VT_real, ST_real, MT_real = TestUtils.expected_types(RT, backend)
 
     # Skip tridiagonal tests for CUDA - cuDSS MGMN has a bug with narrow-band matrices
     # See bug/ folder for minimal reproducer
@@ -149,19 +151,19 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
 
     n = 8
     A_full = create_general_tridiagonal(T, n)
-    A_cpu = SparseMatrixMPI{T}(A_full)
-    A = assert_type(to_backend(A_cpu), ST)
+    A_cpu = SparseMatrixMPI(A_full, backend)
+    A = assert_type(A_cpu, ST)
 
     F = lu(A)
     @test size(F) == (n, n)
     @test eltype(F) == T  # Factorization preserves original type
 
     b_full = ones(T, n)
-    b = assert_type(to_backend(VectorMPI(b_full)), VT)
+    b = assert_type(VectorMPI(b_full, backend), VT)
     x = assert_type(F \ b, VT)
 
     # Convert GPU result back to CPU for comparison
-    x_cpu = TestUtils.to_cpu(x)
+    x_cpu = to_backend(x, cpu_backend)
     x_full = Vector(x_cpu)
     residual = A_full * x_full - b_full
     err = assert_uniform(norm(residual, Inf), name="lu_residual")
@@ -174,17 +176,17 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
 
     n = 10
     A_full = create_spd_tridiagonal(RT, n)  # SPD matrices are real
-    A_cpu = SparseMatrixMPI{RT}(A_full)
-    A = assert_type(to_backend(A_cpu), ST_real)
+    A_cpu = SparseMatrixMPI(A_full, backend)
+    A = assert_type(A_cpu, ST_real)
 
     F = ldlt(A)
     @test size(F) == (n, n)
 
     b_full = ones(RT, n)
-    b = assert_type(to_backend(VectorMPI(b_full)), VT_real)
+    b = assert_type(VectorMPI(b_full, backend), VT_real)
     x = assert_type(F \ b, VT_real)
 
-    x_cpu = TestUtils.to_cpu(x)
+    x_cpu = to_backend(x, cpu_backend)
     x_full = Vector(x_cpu)
     residual = A_full * x_full - b_full
     err = norm(residual, Inf)
@@ -197,16 +199,16 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
 
     n = 8
     A_full = create_symmetric_indefinite(RT, n)  # Symmetric indefinite is real
-    A_cpu = SparseMatrixMPI{RT}(A_full)
-    A = assert_type(to_backend(A_cpu), ST_real)
+    A_cpu = SparseMatrixMPI(A_full, backend)
+    A = assert_type(A_cpu, ST_real)
 
     F = ldlt(A)
 
     b_full = RT.(1:n)
-    b = assert_type(to_backend(VectorMPI(b_full)), VT_real)
+    b = assert_type(VectorMPI(b_full, backend), VT_real)
     x = assert_type(solve(F, b), VT_real)
 
-    x_cpu = TestUtils.to_cpu(x)
+    x_cpu = to_backend(x, cpu_backend)
     x_full = Vector(x_cpu)
     residual = A_full * x_full - b_full
     err = norm(residual, Inf)
@@ -219,20 +221,20 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
 
     n = 8
     A_full = create_spd_tridiagonal(RT, n)
-    A_cpu = SparseMatrixMPI{RT}(A_full)
-    A = assert_type(to_backend(A_cpu), ST_real)
+    A_cpu = SparseMatrixMPI(A_full, backend)
+    A = assert_type(A_cpu, ST_real)
     F = ldlt(A)
 
     b1_full = ones(RT, n)
-    b1 = assert_type(to_backend(VectorMPI(b1_full)), VT_real)
+    b1 = assert_type(VectorMPI(b1_full, backend), VT_real)
     x1 = assert_type(solve(F, b1), VT_real)
 
     b2_full = RT.(1:n)
-    b2 = assert_type(to_backend(VectorMPI(b2_full)), VT_real)
+    b2 = assert_type(VectorMPI(b2_full, backend), VT_real)
     x2 = assert_type(solve(F, b2), VT_real)
 
-    x1_cpu = TestUtils.to_cpu(x1)
-    x2_cpu = TestUtils.to_cpu(x2)
+    x1_cpu = to_backend(x1, cpu_backend)
+    x2_cpu = to_backend(x2, cpu_backend)
     x1_full = Vector(x1_cpu)
     x2_full = Vector(x2_cpu)
 
@@ -254,9 +256,9 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
 
         n = 8
         A_full = create_general_tridiagonal(T, n)
-        A = assert_type(SparseMatrixMPI{T}(A_full), ST)
+        A = assert_type(SparseMatrixMPI(A_full, backend), ST)
         b_full = ones(T, n)
-        b = assert_type(VectorMPI(b_full), VT)
+        b = assert_type(VectorMPI(b_full, backend), VT)
 
         x_t = assert_type(transpose(A) \ b, VT)
 
@@ -310,16 +312,16 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
     println(io0(), "[test] LDLT factorization - 2D Laplacian ($T, $backend_name)")
 
     A_2d_full = create_2d_laplacian(RT, 6, 6)  # 36-element grid
-    A_2d_cpu = SparseMatrixMPI{RT}(A_2d_full)
-    A_2d = assert_type(to_backend(A_2d_cpu), ST_real)
+    A_2d_cpu = SparseMatrixMPI(A_2d_full, backend)
+    A_2d = assert_type(A_2d_cpu, ST_real)
 
     F_2d = ldlt(A_2d)
 
     b_2d_full = ones(RT, 36)
-    b_2d = assert_type(to_backend(VectorMPI(b_2d_full)), VT_real)
+    b_2d = assert_type(VectorMPI(b_2d_full, backend), VT_real)
     x_2d = assert_type(solve(F_2d, b_2d), VT_real)
 
-    x_2d_cpu = TestUtils.to_cpu(x_2d)
+    x_2d_cpu = to_backend(x_2d, cpu_backend)
     x_2d_full = Vector(x_2d_cpu)
     residual_2d = A_2d_full * x_2d_full - b_2d_full
     err_2d = norm(residual_2d, Inf)
@@ -331,16 +333,16 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
     println(io0(), "[test] LU factorization - 2D Laplacian ($T, $backend_name)")
 
     A_2d_lu_full = create_2d_laplacian(T, 5, 5)  # 25-element grid
-    A_2d_lu_cpu = SparseMatrixMPI{T}(A_2d_lu_full)
-    A_2d_lu = assert_type(to_backend(A_2d_lu_cpu), ST)
+    A_2d_lu_cpu = SparseMatrixMPI(A_2d_lu_full, backend)
+    A_2d_lu = assert_type(A_2d_lu_cpu, ST)
 
     F_2d_lu = lu(A_2d_lu)
 
     b_2d_lu_full = ones(T, 25)
-    b_2d_lu = assert_type(to_backend(VectorMPI(b_2d_lu_full)), VT)
+    b_2d_lu = assert_type(VectorMPI(b_2d_lu_full, backend), VT)
     x_2d_lu = assert_type(solve(F_2d_lu, b_2d_lu), VT)
 
-    x_2d_lu_cpu = TestUtils.to_cpu(x_2d_lu)
+    x_2d_lu_cpu = to_backend(x_2d_lu, cpu_backend)
     x_2d_lu_full = Vector(x_2d_lu_cpu)
     residual_2d_lu = A_2d_lu_full * x_2d_lu_full - b_2d_lu_full
     err_2d_lu = norm(residual_2d_lu, Inf)
@@ -366,15 +368,15 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
             end
         end
     end
-    A_multi_cpu = SparseMatrixMPI{RT}(A_multi)
-    A_multi_mpi = assert_type(to_backend(A_multi_cpu), ST_real)
+    A_multi_cpu = SparseMatrixMPI(A_multi, backend)
+    A_multi_mpi = assert_type(A_multi_cpu, ST_real)
 
     F_multi = ldlt(A_multi_mpi)
 
     b_multi_full = ones(RT, n_multi)
-    b_multi = assert_type(to_backend(VectorMPI(b_multi_full)), VT_real)
+    b_multi = assert_type(VectorMPI(b_multi_full, backend), VT_real)
     x_multi = assert_type(solve(F_multi, b_multi), VT_real)
-    x_multi_cpu = TestUtils.to_cpu(x_multi)
+    x_multi_cpu = to_backend(x_multi, cpu_backend)
     x_multi_full = Vector(x_multi_cpu)
     err_multi = norm(A_multi * x_multi_full - b_multi_full, Inf)
 
@@ -386,16 +388,16 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
     println(io0(), "[test] Larger problem size (100x100 grid) ($T, $backend_name)")
 
     A_large_full = create_2d_laplacian(RT, 10, 10)  # 100 DOF
-    A_large_cpu = SparseMatrixMPI{RT}(A_large_full)
-    A_large = assert_type(to_backend(A_large_cpu), ST_real)
+    A_large_cpu = SparseMatrixMPI(A_large_full, backend)
+    A_large = assert_type(A_large_cpu, ST_real)
 
     F_large = ldlt(A_large)
 
     b_large_full = ones(RT, 100)
-    b_large = assert_type(to_backend(VectorMPI(b_large_full)), VT_real)
+    b_large = assert_type(VectorMPI(b_large_full, backend), VT_real)
     x_large = assert_type(solve(F_large, b_large), VT_real)
 
-    x_large_cpu = TestUtils.to_cpu(x_large)
+    x_large_cpu = to_backend(x_large, cpu_backend)
     x_large_full = Vector(x_large_cpu)
     residual_large = A_large_full * x_large_full - b_large_full
     err_large = norm(residual_large, Inf)
@@ -410,17 +412,17 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
 
     n = 8
     A_full = create_spd_tridiagonal(RT, n)
-    A_cpu = SparseMatrixMPI{RT}(A_full)
-    A = assert_type(to_backend(A_cpu), ST_real)
+    A_cpu = SparseMatrixMPI(A_full, backend)
+    A = assert_type(A_cpu, ST_real)
     F = ldlt(A)
 
     b_full = ones(RT, n)
-    b = assert_type(to_backend(VectorMPI(b_full)), VT_real)
-    x = assert_type(to_backend(VectorMPI(zeros(RT, n))), VT_real)
+    b = assert_type(VectorMPI(b_full, backend), VT_real)
+    x = assert_type(VectorMPI(zeros(RT, n), backend), VT_real)
 
     solve!(x, F, b)
 
-    x_cpu = TestUtils.to_cpu(x)
+    x_cpu = to_backend(x, cpu_backend)
     x_full = Vector(x_cpu)
     err = norm(A_full * x_full - b_full, Inf)
 
@@ -451,7 +453,7 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
             rp
         end
 
-        A_asym = SparseMatrixMPI{RT}(A_sym_full_asym; row_partition=row_part, col_partition=col_part)
+        A_asym = SparseMatrixMPI(A_sym_full_asym, backend; row_partition=row_part, col_partition=col_part)
         @test issymmetric(A_asym) == true
         println(io0(), "  Symmetric matrix with asymmetric partitions: passed")
 
@@ -459,7 +461,7 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
         println(io0(), "[test] issymmetric with asymmetric partitions - non-symmetric matrix ($T, $backend_name)")
 
         A_nonsym_full_asym = create_general_tridiagonal(RT, n_asym)
-        A_nonsym_asym = SparseMatrixMPI{RT}(A_nonsym_full_asym; row_partition=row_part, col_partition=col_part)
+        A_nonsym_asym = SparseMatrixMPI(A_nonsym_full_asym, backend; row_partition=row_part, col_partition=col_part)
         @test issymmetric(A_nonsym_asym) == false
         println(io0(), "  Non-symmetric matrix with asymmetric partitions: passed")
     end
@@ -472,16 +474,16 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
         n = 6
         A_full_real = create_general_tridiagonal(RT, n)
         A_full = Complex{RT}.(A_full_real) + im * spdiagm(0 => RT(0.1)*ones(RT, n))
-        A_cpu = SparseMatrixMPI{T}(A_full)
-        A = assert_type(to_backend(A_cpu), ST)
+        A_cpu = SparseMatrixMPI(A_full, backend)
+        A = assert_type(A_cpu, ST)
 
         F = lu(A)
 
         b_full = ones(T, n)
-        b = assert_type(to_backend(VectorMPI(b_full)), VT)
+        b = assert_type(VectorMPI(b_full, backend), VT)
         x = assert_type(solve(F, b), VT)
 
-        x_cpu = TestUtils.to_cpu(x)
+        x_cpu = to_backend(x, cpu_backend)
         x_full = Vector(x_cpu)
         residual = A_full * x_full - b_full
         err = norm(residual, Inf)
@@ -494,16 +496,16 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
 
         n = 6
         A_cx_full = create_complex_symmetric(T, n)
-        A_cx_cpu = SparseMatrixMPI{T}(A_cx_full)
-        A_cx = assert_type(to_backend(A_cx_cpu), ST)
+        A_cx_cpu = SparseMatrixMPI(A_cx_full, backend)
+        A_cx = assert_type(A_cx_cpu, ST)
 
         F_cx = ldlt(A_cx)
 
         b_cx_full = ones(T, n)
-        b_cx = assert_type(to_backend(VectorMPI(b_cx_full)), VT)
+        b_cx = assert_type(VectorMPI(b_cx_full, backend), VT)
         x_cx = assert_type(solve(F_cx, b_cx), VT)
 
-        x_cx_cpu = TestUtils.to_cpu(x_cx)
+        x_cx_cpu = to_backend(x_cx, cpu_backend)
         x_cx_full = Vector(x_cx_cpu)
         residual_cx = A_cx_full * x_cx_full - b_cx_full
         err_cx = norm(residual_cx, Inf)
@@ -512,7 +514,7 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
         @test err_cx < TOL
     end
 
-end  # for (T, to_backend, backend_name)
+end  # for (T, get_backend, backend_name)
 
 end  # QuietTestSet
 

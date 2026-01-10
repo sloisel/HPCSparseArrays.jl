@@ -95,9 +95,10 @@ end
 
 ts = @testset QuietTestSet "Block Matrices" begin
 
-for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
+for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     TOL = TestUtils.tolerance(T)
-    VT, ST, MT = TestUtils.expected_types(T, to_backend)
+    backend = get_backend()
+    VT, ST, MT = TestUtils.expected_types(T, backend)
 
     println(io0(), "[test] cat dims=1 (vcat) ($T, $backend_name)")
 
@@ -110,9 +111,9 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
     ref = cat(A, B, C; dims=1)
 
     # MPI version
-    Adist = to_backend(SparseMatrixMPI{T}(A))
-    Bdist = to_backend(SparseMatrixMPI{T}(B))
-    Cdist = to_backend(SparseMatrixMPI{T}(C))
+    Adist = SparseMatrixMPI(A, backend)
+    Bdist = SparseMatrixMPI(B, backend)
+    Cdist = SparseMatrixMPI(C, backend)
 
     result_dist = assert_type(cat(Adist, Bdist, Cdist; dims=1), ST)
     result = SparseMatrixCSC(result_dist)
@@ -131,9 +132,9 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
     ref = cat(A, B, C; dims=2)
 
     # MPI version
-    Adist = to_backend(SparseMatrixMPI{T}(A))
-    Bdist = to_backend(SparseMatrixMPI{T}(B))
-    Cdist = to_backend(SparseMatrixMPI{T}(C))
+    Adist = SparseMatrixMPI(A, backend)
+    Bdist = SparseMatrixMPI(B, backend)
+    Cdist = SparseMatrixMPI(C, backend)
 
     result_dist = assert_type(cat(Adist, Bdist, Cdist; dims=2), ST)
     result = SparseMatrixCSC(result_dist)
@@ -154,10 +155,10 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
     ref = [A B; C D]
 
     # MPI version (row-major order: A, B, C, D)
-    Adist = to_backend(SparseMatrixMPI{T}(A))
-    Bdist = to_backend(SparseMatrixMPI{T}(B))
-    Cdist = to_backend(SparseMatrixMPI{T}(C))
-    Ddist = to_backend(SparseMatrixMPI{T}(D))
+    Adist = SparseMatrixMPI(A, backend)
+    Bdist = SparseMatrixMPI(B, backend)
+    Cdist = SparseMatrixMPI(C, backend)
+    Ddist = SparseMatrixMPI(D, backend)
 
     result_dist = assert_type(cat(Adist, Bdist, Cdist, Ddist; dims=(2, 2)), ST)
     result = SparseMatrixCSC(result_dist)
@@ -182,12 +183,12 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
     ref = [A B; C D; E F]
 
     # MPI version
-    Adist = to_backend(SparseMatrixMPI{T}(A))
-    Bdist = to_backend(SparseMatrixMPI{T}(B))
-    Cdist = to_backend(SparseMatrixMPI{T}(C))
-    Ddist = to_backend(SparseMatrixMPI{T}(D))
-    Edist = to_backend(SparseMatrixMPI{T}(E))
-    Fdist = to_backend(SparseMatrixMPI{T}(F))
+    Adist = SparseMatrixMPI(A, backend)
+    Bdist = SparseMatrixMPI(B, backend)
+    Cdist = SparseMatrixMPI(C, backend)
+    Ddist = SparseMatrixMPI(D, backend)
+    Edist = SparseMatrixMPI(E, backend)
+    Fdist = SparseMatrixMPI(F, backend)
 
     result_dist = assert_type(cat(Adist, Bdist, Cdist, Ddist, Edist, Fdist; dims=(3, 2)), ST)
     result = SparseMatrixCSC(result_dist)
@@ -211,12 +212,12 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
     ref = [A B C; D E F]
 
     # MPI version
-    Adist = to_backend(SparseMatrixMPI{T}(A))
-    Bdist = to_backend(SparseMatrixMPI{T}(B))
-    Cdist = to_backend(SparseMatrixMPI{T}(C))
-    Ddist = to_backend(SparseMatrixMPI{T}(D))
-    Edist = to_backend(SparseMatrixMPI{T}(E))
-    Fdist = to_backend(SparseMatrixMPI{T}(F))
+    Adist = SparseMatrixMPI(A, backend)
+    Bdist = SparseMatrixMPI(B, backend)
+    Cdist = SparseMatrixMPI(C, backend)
+    Ddist = SparseMatrixMPI(D, backend)
+    Edist = SparseMatrixMPI(E, backend)
+    Fdist = SparseMatrixMPI(F, backend)
 
     result_dist = assert_type(cat(Adist, Bdist, Cdist, Ddist, Edist, Fdist; dims=(2, 3)), ST)
     result = SparseMatrixCSC(result_dist)
@@ -232,9 +233,9 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
 
     ref = vcat(v1, v2, v3)
 
-    v1dist = to_backend(VectorMPI(v1))
-    v2dist = to_backend(VectorMPI(v2))
-    v3dist = to_backend(VectorMPI(v3))
+    v1dist = VectorMPI(v1, backend)
+    v2dist = VectorMPI(v2, backend)
+    v3dist = VectorMPI(v3, backend)
 
     result_dist = assert_type(vcat(v1dist, v2dist, v3dist), VT)
     result = Vector(result_dist)
@@ -251,9 +252,9 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
 
     ref = hcat(v1, v2, v3)
 
-    v1dist = to_backend(VectorMPI(v1))
-    v2dist = to_backend(VectorMPI(v2))
-    v3dist = to_backend(VectorMPI(v3))
+    v1dist = VectorMPI(v1, backend)
+    v2dist = VectorMPI(v2, backend)
+    v3dist = VectorMPI(v3, backend)
 
     result_dist = assert_type(hcat(v1dist, v2dist, v3dist), MT)
 
@@ -271,9 +272,9 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
 
     ref = blockdiag(A, B, C)
 
-    Adist = to_backend(SparseMatrixMPI{T}(A))
-    Bdist = to_backend(SparseMatrixMPI{T}(B))
-    Cdist = to_backend(SparseMatrixMPI{T}(C))
+    Adist = SparseMatrixMPI(A, backend)
+    Bdist = SparseMatrixMPI(B, backend)
+    Cdist = SparseMatrixMPI(C, backend)
 
     result_dist = assert_type(blockdiag(Adist, Bdist, Cdist), ST)
     result = SparseMatrixCSC(result_dist)
@@ -291,9 +292,9 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
 
     ref = vcat(A_dense, B_dense, C_dense)
 
-    Adist = to_backend(MatrixMPI(A_dense))
-    Bdist = to_backend(MatrixMPI(B_dense))
-    Cdist = to_backend(MatrixMPI(C_dense))
+    Adist = MatrixMPI(A_dense, backend)
+    Bdist = MatrixMPI(B_dense, backend)
+    Cdist = MatrixMPI(C_dense, backend)
 
     result_dist = assert_type(vcat(Adist, Bdist, Cdist), MT)
 
@@ -312,9 +313,9 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
 
     ref = hcat(A_dense, B_dense, C_dense)
 
-    Adist = to_backend(MatrixMPI(A_dense))
-    Bdist = to_backend(MatrixMPI(B_dense))
-    Cdist = to_backend(MatrixMPI(C_dense))
+    Adist = MatrixMPI(A_dense, backend)
+    Bdist = MatrixMPI(B_dense, backend)
+    Cdist = MatrixMPI(C_dense, backend)
 
     result_dist = assert_type(hcat(Adist, Bdist, Cdist), MT)
 
@@ -333,10 +334,10 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
 
     ref = [A_dense B_dense; C_dense D_dense]
 
-    Adist = to_backend(MatrixMPI(A_dense))
-    Bdist = to_backend(MatrixMPI(B_dense))
-    Cdist = to_backend(MatrixMPI(C_dense))
-    Ddist = to_backend(MatrixMPI(D_dense))
+    Adist = MatrixMPI(A_dense, backend)
+    Bdist = MatrixMPI(B_dense, backend)
+    Cdist = MatrixMPI(C_dense, backend)
+    Ddist = MatrixMPI(D_dense, backend)
 
     result_dist = assert_type(cat(Adist, Bdist, Cdist, Ddist; dims=(2, 2)), MT)
 
@@ -354,9 +355,9 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
 
     ref = vcat(v1, v2, v3)
 
-    v1dist = to_backend(VectorMPI(v1))
-    v2dist = to_backend(VectorMPI(v2))
-    v3dist = to_backend(VectorMPI(v3))
+    v1dist = VectorMPI(v1, backend)
+    v2dist = VectorMPI(v2, backend)
+    v3dist = VectorMPI(v3, backend)
 
     result_dist = assert_type(cat(v1dist, v2dist, v3dist; dims=(3, 1)), VT)
     result = Vector(result_dist)
@@ -368,9 +369,9 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
     v2 = make_vector(T, 10) .* T(2)
     v3 = make_vector(T, 10) .* T(3)
 
-    v1dist = to_backend(VectorMPI(v1))
-    v2dist = to_backend(VectorMPI(v2))
-    v3dist = to_backend(VectorMPI(v3))
+    v1dist = VectorMPI(v1, backend)
+    v2dist = VectorMPI(v2, backend)
+    v3dist = VectorMPI(v3, backend)
 
     result_dist = assert_type(cat(v1dist, v2dist, v3dist; dims=(1, 3)), MT)
 
@@ -378,7 +379,7 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
 
     # Test dims=(1,1) with single vector
     v_single = make_vector(T, 15)
-    v_single_dist = to_backend(VectorMPI(v_single))
+    v_single_dist = VectorMPI(v_single, backend)
     result_single = assert_type(cat(v_single_dist; dims=(1, 1)), VT)
     result_gathered = Vector(result_single)
 

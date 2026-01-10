@@ -4,72 +4,81 @@ using Adapt
 using KernelAbstractions
 
 """
-    VectorMPI{T,AV}
+    VectorMPI{T, B<:HPCBackend}
 
 A distributed dense vector partitioned across MPI ranks.
 
 # Type Parameters
 - `T`: Element type (e.g., `Float64`, `ComplexF64`)
-- `AV<:AbstractVector{T}`: Storage type for local vector (e.g., `Vector{T}` or `MtlVector{T}`)
+- `B<:HPCBackend`: Backend configuration (device, communication, solver)
 
 # Fields
 - `structural_hash::Blake3Hash`: 256-bit Blake3 hash of the partition
 - `partition::Vector{Int}`: Partition boundaries, length = nranks + 1 (always on CPU)
-- `v::AV`: Local vector elements owned by this rank
+- `v::AbstractVector{T}`: Local vector elements owned by this rank
+- `backend::B`: The HPC backend configuration
 """
-struct VectorMPI{T,AV<:AbstractVector{T}} <: AbstractVector{T}
+struct VectorMPI{T, B<:HPCBackend} <: AbstractVector{T}
     structural_hash::Blake3Hash
     partition::Vector{Int}
-    v::AV
+    v::AbstractVector{T}
+    backend::B
     # Inner constructor that takes all arguments
-    function VectorMPI{T,AV}(hash::Blake3Hash, partition::Vector{Int}, v::AV) where {T,AV<:AbstractVector{T}}
-        new{T,AV}(hash, partition, v)
+    function VectorMPI{T,B}(hash::Blake3Hash, partition::Vector{Int}, v::AbstractVector{T}, backend::B) where {T, B<:HPCBackend}
+        new{T,B}(hash, partition, v, backend)
     end
 end
 
-# Type alias for CPU-backed VectorMPI (default, backwards compatible)
-const VectorMPI_CPU{T} = VectorMPI{T,Vector{T}}
+# Type aliases for common backend configurations
+const VectorMPI_CPU{T} = VectorMPI{T, HPCBackend{DeviceCPU, CommMPI, SolverMUMPS}}
+const VectorMPI_CPU_Serial{T} = VectorMPI{T, HPCBackend{DeviceCPU, CommSerial, SolverMUMPS}}
 
-# Convenience constructor that infers AV from the vector type (different signature: one type param)
-function VectorMPI{T}(hash::Blake3Hash, partition::Vector{Int}, v::AV) where {T,AV<:AbstractVector{T}}
-    VectorMPI{T,AV}(hash, partition, v)
+# Convenience constructor that infers B from the backend type
+function VectorMPI{T}(hash::Blake3Hash, partition::Vector{Int}, v::AbstractVector{T}, backend::B) where {T, B<:HPCBackend}
+    VectorMPI{T,B}(hash, partition, v, backend)
 end
 
-# Constructor that infers both T and AV from the vector (different signature: no type params)
-function VectorMPI(hash::Blake3Hash, partition::Vector{Int}, v::AV) where {T,AV<:AbstractVector{T}}
-    VectorMPI{T,AV}(hash, partition, v)
+# Constructor that infers T from the vector
+function VectorMPI(hash::Blake3Hash, partition::Vector{Int}, v::AbstractVector{T}, backend::B) where {T, B<:HPCBackend}
+    VectorMPI{T,B}(hash, partition, v, backend)
 end
 
-# Get the backend for a VectorMPI
-function get_backend(v::VectorMPI{T,AV}) where {T,AV}
+# Get the KernelAbstractions backend for a VectorMPI (for GPU kernels)
+function get_backend(v::VectorMPI)
     return KernelAbstractions.get_backend(v.v)
 end
 
+# Get the HPCBackend for a VectorMPI
+get_hpc_backend(v::VectorMPI) = v.backend
+
 """
-    VectorMPI_local(v_local::AbstractVector{T}, comm::MPI.Comm=MPI.COMM_WORLD) where T
+    VectorMPI_local(v_local::AbstractVector{T}, backend::HPCBackend) where T
 
 Create a VectorMPI from a local vector on each rank.
 
-Unlike `VectorMPI(v_global)` which takes a global vector and partitions it,
+Unlike `VectorMPI(v_global, backend)` which takes a global vector and partitions it,
 this constructor takes only the local portion of the vector that each rank owns.
 The partition is computed by gathering the local sizes from all ranks.
 
-The type of `v_local` determines the storage backend (CPU Vector, GPU MtlVector, etc.).
+# Arguments
+- `v_local`: Local vector portion owned by this rank
+- `backend`: The HPCBackend configuration (determines communication)
 
 # Example
 ```julia
+backend = backend_cpu_mpi(MPI.COMM_WORLD)
 # Rank 0 has [1.0, 2.0], Rank 1 has [3.0, 4.0, 5.0]
-v = VectorMPI_local([1.0, 2.0])  # on rank 0
-v = VectorMPI_local([3.0, 4.0, 5.0])  # on rank 1
+v = VectorMPI_local([1.0, 2.0], backend)  # on rank 0
+v = VectorMPI_local([3.0, 4.0, 5.0], backend)  # on rank 1
 # Result: distributed vector [1.0, 2.0, 3.0, 4.0, 5.0] with partition [1, 3, 6]
 ```
 """
-function VectorMPI_local(v_local::AV, comm::MPI.Comm=MPI.COMM_WORLD) where {T, AV<:AbstractVector{T}}
-    nranks = MPI.Comm_size(comm)
+function VectorMPI_local(v_local::AbstractVector{T}, backend::B) where {T, B<:HPCBackend}
+    nranks = comm_size(backend.comm)
 
     # Gather local sizes from all ranks
     local_size = Int32(length(v_local))
-    all_sizes = MPI.Allgather(local_size, comm)
+    all_sizes = comm_allgather(backend.comm, local_size)
 
     # Build partition from sizes
     partition = Vector{Int}(undef, nranks + 1)
@@ -79,12 +88,13 @@ function VectorMPI_local(v_local::AV, comm::MPI.Comm=MPI.COMM_WORLD) where {T, A
     end
 
     hash = compute_partition_hash(partition)
-    # Copy to preserve the same array type
-    return VectorMPI{T,AV}(hash, partition, copy(v_local))
+    # Convert to target device (handles CPU→GPU, GPU→CPU, and same-device cases)
+    local_v = _convert_array(v_local, backend.device)
+    return VectorMPI{T,B}(hash, partition, local_v, backend)
 end
 
 """
-    VectorMPI(v_global::Vector{T}; comm=MPI.COMM_WORLD, partition=uniform_partition(...)) where T
+    VectorMPI(v_global::Vector{T}, backend::HPCBackend; partition=uniform_partition(...)) where T
 
 Create a VectorMPI from a global vector, partitioning it across MPI ranks.
 
@@ -94,30 +104,35 @@ Each rank extracts only its local portion from `v_global`, so:
 - **Efficient usage**: Pass a vector with correct `length(v_global)` on all ranks,
   but only populate the elements that each rank owns (other elements are ignored)
 
+# Arguments
+- `v_global`: Global vector (identical on all ranks, or at least with local elements populated)
+- `backend`: The HPCBackend configuration
+
 # Keyword Arguments
-- `comm::MPI.Comm`: MPI communicator (default: `MPI.COMM_WORLD`)
 - `partition::Vector{Int}`: Partition boundaries (default: `uniform_partition(length(v_global), nranks)`)
 
 Use `uniform_partition(n, nranks)` to compute custom partitions.
 
-To create a GPU-backed VectorMPI, use `adapt(backend, v)` after creation,
+To create a GPU-backed VectorMPI, use `adapt(ka_backend, v)` after creation,
 or use `VectorMPI_local` with a GPU array.
 """
-function VectorMPI(v_global::Vector{T};
-                   comm::MPI.Comm=MPI.COMM_WORLD,
-                   partition::Vector{Int}=uniform_partition(length(v_global), MPI.Comm_size(comm))) where T
-    rank = MPI.Comm_rank(comm)
+function VectorMPI(v_global::Vector{T}, backend::B;
+                   partition::Vector{Int}=uniform_partition(length(v_global), comm_size(backend.comm))) where {T, B<:HPCBackend}
+    rank = comm_rank(backend.comm)
     local_range = partition[rank + 1]:(partition[rank + 2] - 1)
-    local_v = v_global[local_range]
+    local_v_cpu = v_global[local_range]
+    # Convert to target device (no-op for CPU, copies to GPU for GPU backends)
+    local_v = _convert_array(local_v_cpu, backend.device)
 
     hash = compute_partition_hash(partition)
-    return VectorMPI{T,Vector{T}}(hash, partition, local_v)
+    return VectorMPI{T,B}(hash, partition, local_v, backend)
 end
 
-# Adapt.jl support for converting VectorMPI between backends
-function Adapt.adapt_structure(to, v::VectorMPI{T,AV}) where {T,AV}
+# Adapt.jl support for converting VectorMPI between KernelAbstractions backends (GPU/CPU)
+# Note: This adapts the array storage but preserves the HPCBackend
+function Adapt.adapt_structure(to, v::VectorMPI{T,B}) where {T,B}
     new_v = adapt(to, v.v)
-    return VectorMPI{T,typeof(new_v)}(v.structural_hash, v.partition, new_v)
+    return VectorMPI{T,B}(v.structural_hash, v.partition, new_v, v.backend)
 end
 
 # Helper to create output vector with same storage type as reference
@@ -181,11 +196,11 @@ end
 """
     _to_gpu_indices(gpu_array, cpu_indices)
 
-Convert CPU index array to same GPU backend as gpu_array.
-Falls back to CPU-compatible type if conversion not possible.
+Convert CPU index array to same device as specified by the device type.
+Falls back to CPU if device is CPU.
 """
-_to_gpu_indices(::Vector, indices::Vector{Int}) = indices
-_to_gpu_indices(gpu_array::AbstractVector, indices::Vector{Int}) = _to_target_backend(indices, typeof(gpu_array))
+_to_gpu_indices(::DeviceCPU, indices::Vector{Int}) = indices
+_to_gpu_indices(device::AbstractDevice, indices::Vector{Int}) = _to_target_device(indices, device)
 
 """
     VectorPlan{T,AV}
@@ -214,10 +229,10 @@ mutable struct VectorPlan{T,AV<:AbstractVector{T}}
     send_rank_ids::Vector{Int}
     send_indices::Vector{Vector{Int}}
     send_bufs::Vector{Vector{T}}      # Always CPU for MPI
-    send_reqs::Vector{MPI.Request}
+    send_reqs::Vector{Any}            # MPI.Request or nothing for CommSerial
     recv_rank_ids::Vector{Int}
     recv_bufs::Vector{Vector{T}}      # Always CPU for MPI
-    recv_reqs::Vector{MPI.Request}
+    recv_reqs::Vector{Any}            # MPI.Request or nothing for CommSerial
     recv_perm::Vector{Vector{Int}}
     local_src_indices::Vector{Int}
     local_dst_indices::Vector{Int}
@@ -248,10 +263,12 @@ After executing, `plan.gathered` contains `source[target_partition[rank+1]:targe
 The gathered buffer will have the same storage type as the source vector (CPU or GPU).
 MPI communication always uses CPU staging buffers.
 """
-function VectorPlan(target_partition::Vector{Int}, source::VectorMPI{T,AV}) where {T,AV}
-    comm = MPI.COMM_WORLD
-    rank = MPI.Comm_rank(comm)
-    nranks = MPI.Comm_size(comm)
+function VectorPlan(target_partition::Vector{Int}, source::VectorMPI{T,B}) where {T,B<:HPCBackend}
+    # Get actual array type from the vector for VectorPlan type parameter
+    AV = typeof(source.v)
+    comm = source.backend.comm
+    rank = comm_rank(comm)
+    nranks = comm_size(comm)
 
     # Indices this rank needs from source (contiguous range)
     my_start = target_partition[rank+1]
@@ -274,11 +291,11 @@ function VectorPlan(target_partition::Vector{Int}, source::VectorMPI{T,AV}) wher
 
     # Step 2: Exchange counts via Alltoall
     send_counts = [length(needed_from[r+1]) for r in 0:(nranks-1)]
-    recv_counts = MPI.Alltoall(MPI.UBuffer(send_counts, 1), comm)
+    recv_counts = comm_alltoall(comm, MPI.UBuffer(send_counts, 1))
 
     # Step 3: Send requested indices to each owner rank
     struct_send_bufs = Dict{Int,Vector{Int}}()
-    struct_send_reqs = MPI.Request[]
+    struct_send_reqs = Any[]
     recv_rank_ids = Int[]
     recv_perm_map = Dict{Int,Vector{Int}}()
 
@@ -289,7 +306,7 @@ function VectorPlan(target_partition::Vector{Int}, source::VectorMPI{T,AV}) wher
             dst_indices = [t[2] for t in needed_from[r+1]]
             recv_perm_map[r] = dst_indices
             struct_send_bufs[r] = indices
-            req = MPI.Isend(indices, comm; dest=r, tag=22)
+            req = comm_isend(comm, indices, r, 22)
             push!(struct_send_reqs, req)
         end
     end
@@ -297,20 +314,20 @@ function VectorPlan(target_partition::Vector{Int}, source::VectorMPI{T,AV}) wher
     # Step 4: Receive requests from other ranks
     send_rank_ids = Int[]
     struct_recv_bufs = Dict{Int,Vector{Int}}()
-    struct_recv_reqs = MPI.Request[]
+    struct_recv_reqs = Any[]
 
     for r in 0:(nranks-1)
         if recv_counts[r+1] > 0 && r != rank
             push!(send_rank_ids, r)
             buf = Vector{Int}(undef, recv_counts[r+1])
-            req = MPI.Irecv!(buf, comm; source=r, tag=22)
+            req = comm_irecv!(comm, buf, r, 22)
             push!(struct_recv_reqs, req)
             struct_recv_bufs[r] = buf
         end
     end
 
-    MPI.Waitall(struct_recv_reqs)
-    MPI.Waitall(struct_send_reqs)
+    comm_waitall(comm, struct_recv_reqs)
+    comm_waitall(comm, struct_send_reqs)
 
     # Step 5: Convert received global indices to local indices for sending
     send_indices_map = Dict{Int,Vector{Int}}()
@@ -337,10 +354,11 @@ function VectorPlan(target_partition::Vector{Int}, source::VectorMPI{T,AV}) wher
     recv_perm_final = [recv_perm_map[r] for r in recv_rank_ids]
 
     # MPI buffers are always on CPU
+    AV = typeof(source.v)
     send_bufs = [Vector{T}(undef, length(inds)) for inds in send_indices_final]
     recv_bufs = [Vector{T}(undef, send_counts[r+1]) for r in recv_rank_ids]
-    send_reqs = Vector{MPI.Request}(undef, length(send_rank_ids))
-    recv_reqs = Vector{MPI.Request}(undef, length(recv_rank_ids))
+    send_reqs = Vector{Any}(undef, length(send_rank_ids))
+    recv_reqs = Vector{Any}(undef, length(recv_rank_ids))
 
     # CPU staging buffer (always needed for MPI)
     gathered_cpu = Vector{T}(undef, n_gathered)
@@ -360,7 +378,7 @@ function VectorPlan(target_partition::Vector{Int}, source::VectorMPI{T,AV}) wher
 end
 
 """
-    execute_plan!(plan::VectorPlan{T,AV}, x::VectorMPI{T,AV}) where {T,AV}
+    execute_plan!(plan::VectorPlan{T,AV}, x::VectorMPI{T,B}) where {T,AV,B}
 
 Execute a vector communication plan to gather elements from x.
 Returns plan.gathered containing x[A.col_indices] for the associated matrix A.
@@ -371,20 +389,21 @@ buffers, with automatic staging for GPU arrays.
 GPU optimization: When no MPI communication is needed (all data is local),
 uses a GPU gather kernel to avoid copying entire arrays to CPU.
 """
-function execute_plan!(plan::VectorPlan{T,AV}, x::VectorMPI{T,AV}) where {T,AV}
-    comm = MPI.COMM_WORLD
+function execute_plan!(plan::VectorPlan{T,AV}, x::VectorMPI{T,B}) where {T,AV,B}
+    comm = x.backend.comm
 
     # Check if we can use GPU-optimized path (no MPI communication needed)
     no_mpi_needed = isempty(plan.send_rank_ids) && isempty(plan.recv_rank_ids)
+    device = x.backend.device
 
     if no_mpi_needed && _use_gpu_gather(x.v) && !isempty(plan.local_src_indices)
         # GPU path: Use gather kernel directly, no CPU round-trip
         # Cache GPU index arrays on first use
         if plan.cached_local_src_gpu === nothing
-            plan.cached_local_src_gpu = _to_gpu_indices(x.v, plan.local_src_indices)
+            plan.cached_local_src_gpu = _to_gpu_indices(device, plan.local_src_indices)
         end
         if plan.cached_local_dst_gpu === nothing
-            plan.cached_local_dst_gpu = _to_gpu_indices(x.v, plan.local_dst_indices)
+            plan.cached_local_dst_gpu = _to_gpu_indices(device, plan.local_dst_indices)
         end
 
         # Execute GPU gather directly into plan.gathered
@@ -414,15 +433,15 @@ function execute_plan!(plan::VectorPlan{T,AV}, x::VectorMPI{T,AV}) where {T,AV}
         for k in eachindex(send_idx)
             buf[k] = x_cpu[send_idx[k]]
         end
-        plan.send_reqs[i] = MPI.Isend(buf, comm; dest=r, tag=21)
+        plan.send_reqs[i] = comm_isend(comm, buf, r, 21)
     end
 
     # Step 3: Receive values to CPU buffers
     @inbounds for i in eachindex(plan.recv_rank_ids)
-        plan.recv_reqs[i] = MPI.Irecv!(plan.recv_bufs[i], comm; source=plan.recv_rank_ids[i], tag=21)
+        plan.recv_reqs[i] = comm_irecv!(comm, plan.recv_bufs[i], plan.recv_rank_ids[i], 21)
     end
 
-    MPI.Waitall(plan.recv_reqs)
+    comm_waitall(comm, plan.recv_reqs)
 
     # Step 4: Scatter received values into CPU staging buffer
     @inbounds for i in eachindex(plan.recv_rank_ids)
@@ -433,7 +452,7 @@ function execute_plan!(plan::VectorPlan{T,AV}, x::VectorMPI{T,AV}) where {T,AV}
         end
     end
 
-    MPI.Waitall(plan.send_reqs)
+    comm_waitall(comm, plan.send_reqs)
 
     # Step 5: Copy to output buffer (no-op if CPU, copy if GPU)
     _copy_to_output!(plan.gathered, plan.gathered_cpu)
@@ -455,11 +474,11 @@ Communication plan for repartitioning a VectorMPI to a new partition.
 - `send_rank_ids::Vector{Int}`: Ranks we send elements to (0-indexed)
 - `send_ranges::Vector{UnitRange{Int}}`: For each rank, range of local indices to send
 - `send_bufs::Vector{Vector{T}}`: Pre-allocated send buffers
-- `send_reqs::Vector{MPI.Request}`: Pre-allocated send request handles
+- `send_reqs::Vector{Any}`: Pre-allocated send request handles (MPI.Request or nothing for CommSerial)
 - `recv_rank_ids::Vector{Int}`: Ranks we receive elements from (0-indexed)
 - `recv_counts::Vector{Int}`: Number of elements to receive from each rank
 - `recv_bufs::Vector{Vector{T}}`: Pre-allocated receive buffers
-- `recv_reqs::Vector{MPI.Request}`: Pre-allocated receive request handles
+- `recv_reqs::Vector{Any}`: Pre-allocated receive request handles (MPI.Request or nothing for CommSerial)
 - `recv_offsets::Vector{Int}`: Offset into result for each recv rank
 - `local_src_range::UnitRange{Int}`: Source range for local copy
 - `local_dst_offset::Int`: Destination offset for local copy
@@ -471,11 +490,11 @@ mutable struct VectorRepartitionPlan{T}
     send_rank_ids::Vector{Int}
     send_ranges::Vector{UnitRange{Int}}
     send_bufs::Vector{Vector{T}}
-    send_reqs::Vector{MPI.Request}
+    send_reqs::Vector{Any}
     recv_rank_ids::Vector{Int}
     recv_counts::Vector{Int}
     recv_bufs::Vector{Vector{T}}
-    recv_reqs::Vector{MPI.Request}
+    recv_reqs::Vector{Any}
     recv_offsets::Vector{Int}
     local_src_range::UnitRange{Int}
     local_dst_offset::Int
@@ -485,7 +504,7 @@ mutable struct VectorRepartitionPlan{T}
 end
 
 """
-    VectorRepartitionPlan(x::VectorMPI{T}, p::Vector{Int}) where T
+    VectorRepartitionPlan(x::VectorMPI{T,B}, p::Vector{Int}) where {T,B}
 
 Create a communication plan to repartition `x` to have partition `p`.
 
@@ -495,10 +514,10 @@ The plan computes:
 3. Pre-allocates all buffers for allocation-free execution
 4. Computes the result partition hash eagerly
 """
-function VectorRepartitionPlan(x::VectorMPI{T}, p::Vector{Int}) where T
-    comm = MPI.COMM_WORLD
-    rank = MPI.Comm_rank(comm)
-    nranks = MPI.Comm_size(comm)
+function VectorRepartitionPlan(x::VectorMPI{T,B}, p::Vector{Int}) where {T,B}
+    comm = x.backend.comm
+    rank = comm_rank(comm)
+    nranks = comm_size(comm)
 
     # Source partition info
     src_start = x.partition[rank+1]
@@ -535,7 +554,7 @@ function VectorRepartitionPlan(x::VectorMPI{T}, p::Vector{Int}) where T
 
     # Step 2: Exchange counts via Alltoall
     send_counts = Int32[haskey(send_ranges_map, r) ? length(send_ranges_map[r]) : 0 for r in 0:(nranks-1)]
-    recv_counts_raw = MPI.Alltoall(MPI.UBuffer(send_counts, 1), comm)
+    recv_counts_raw = comm_alltoall(comm, MPI.UBuffer(send_counts, 1))
 
     # Step 3: Build send/recv structures
     send_rank_ids = Int[]
@@ -586,8 +605,8 @@ function VectorRepartitionPlan(x::VectorMPI{T}, p::Vector{Int}) where T
     # Pre-allocate buffers
     send_bufs = [Vector{T}(undef, length(r)) for r in send_ranges]
     recv_bufs = [Vector{T}(undef, c) for c in recv_counts]
-    send_reqs = Vector{MPI.Request}(undef, length(send_rank_ids))
-    recv_reqs = Vector{MPI.Request}(undef, length(recv_rank_ids))
+    send_reqs = Vector{Any}(undef, length(send_rank_ids))
+    recv_reqs = Vector{Any}(undef, length(recv_rank_ids))
 
     return VectorRepartitionPlan{T}(
         send_rank_ids, send_ranges, send_bufs, send_reqs,
@@ -598,13 +617,13 @@ function VectorRepartitionPlan(x::VectorMPI{T}, p::Vector{Int}) where T
 end
 
 """
-    execute_plan!(plan::VectorRepartitionPlan{T}, x::VectorMPI{T,AV}) where {T,AV}
+    execute_plan!(plan::VectorRepartitionPlan{T}, x::VectorMPI{T,B}) where {T,B}
 
 Execute a vector repartition plan to redistribute elements from x to a new partition.
-Returns a new VectorMPI with the target partition, preserving the array type (CPU/GPU).
+Returns a new VectorMPI with the target partition, preserving the array type (CPU/GPU) and backend.
 """
-function execute_plan!(plan::VectorRepartitionPlan{T}, x::VectorMPI{T,AV}) where {T,AV}
-    comm = MPI.COMM_WORLD
+function execute_plan!(plan::VectorRepartitionPlan{T}, x::VectorMPI{T,B}) where {T,B}
+    comm = x.backend.comm
 
     # Get CPU version of input for MPI operations
     x_cpu = _ensure_cpu(x.v)
@@ -627,15 +646,15 @@ function execute_plan!(plan::VectorRepartitionPlan{T}, x::VectorMPI{T,AV}) where
         for (k, src_k) in enumerate(range)
             buf[k] = x_cpu[src_k]
         end
-        plan.send_reqs[i] = MPI.Isend(buf, comm; dest=r, tag=92)
+        plan.send_reqs[i] = comm_isend(comm, buf, r, 92)
     end
 
     # Step 3: Post receives
     @inbounds for i in eachindex(plan.recv_rank_ids)
-        plan.recv_reqs[i] = MPI.Irecv!(plan.recv_bufs[i], comm; source=plan.recv_rank_ids[i], tag=92)
+        plan.recv_reqs[i] = comm_irecv!(comm, plan.recv_bufs[i], plan.recv_rank_ids[i], 92)
     end
 
-    MPI.Waitall(plan.recv_reqs)
+    comm_waitall(comm, plan.recv_reqs)
 
     # Step 4: Scatter received values into result
     @inbounds for i in eachindex(plan.recv_rank_ids)
@@ -646,12 +665,12 @@ function execute_plan!(plan::VectorRepartitionPlan{T}, x::VectorMPI{T,AV}) where
         end
     end
 
-    MPI.Waitall(plan.send_reqs)
+    comm_waitall(comm, plan.send_reqs)
 
     # Copy result back to target array type using dispatch (no type checks)
     result_v = _values_to_backend(result_cpu, x.v)
 
-    return VectorMPI{T,typeof(result_v)}(plan.result_partition_hash, plan.result_partition, result_v)
+    return VectorMPI{T,B}(plan.result_partition_hash, plan.result_partition, result_v, x.backend)
 end
 
 """
@@ -701,12 +720,12 @@ end
 # Vector operations: conj, transpose, adjoint
 
 """
-    Base.conj(v::VectorMPI{T}) where T
+    Base.conj(v::VectorMPI{T,B}) where {T,B}
 
 Return a new VectorMPI with conjugated values.
 """
-function Base.conj(v::VectorMPI{T}) where T
-    return VectorMPI{T}(v.structural_hash, v.partition, conj.(v.v))
+function Base.conj(v::VectorMPI{T,B}) where {T,B}
+    return VectorMPI{T,B}(v.structural_hash, v.partition, conj.(v.v), v.backend)
 end
 
 """
@@ -727,39 +746,39 @@ Base.adjoint(v::VectorMPI{T}) where T = transpose(conj(v))
 # Vector norms and reductions
 
 """
-    LinearAlgebra.norm(v::VectorMPI{T}, p::Real=2) where T
+    LinearAlgebra.norm(v::VectorMPI{T,B}, p::Real=2) where {T,B}
 
 Compute the p-norm of the distributed vector v.
 - `p=2` (default): Euclidean norm (sqrt of sum of squared absolute values)
 - `p=1`: Sum of absolute values
 - `p=Inf`: Maximum absolute value
 """
-function LinearAlgebra.norm(v::VectorMPI{T}, p::Real=2) where T
-    comm = MPI.COMM_WORLD
+function LinearAlgebra.norm(v::VectorMPI{T,B}, p::Real=2) where {T,B}
+    comm = v.backend.comm
 
     if p == 2
         # Use BLAS-optimized local norm, then reduce
         local_nrm = isempty(v.v) ? zero(real(T)) : norm(v.v)
         local_sum = local_nrm * local_nrm
-        global_sum = MPI.Allreduce(local_sum, MPI.SUM, comm)
+        global_sum = comm_allreduce(comm, local_sum, +)
         return sqrt(global_sum)
     elseif p == 1
         # Use BLAS-optimized local norm(v, 1) = asum
         local_sum = isempty(v.v) ? zero(real(T)) : norm(v.v, 1)
-        return MPI.Allreduce(local_sum, MPI.SUM, comm)
+        return comm_allreduce(comm, local_sum, +)
     elseif p == Inf
         local_max = isempty(v.v) ? zero(real(T)) : norm(v.v, Inf)
-        return MPI.Allreduce(local_max, MPI.MAX, comm)
+        return comm_allreduce(comm, local_max, max)
     else
         # General p-norm - no BLAS optimization available
         local_sum = isempty(v.v) ? zero(real(T)) : sum(x -> abs(x)^p, v.v)
-        global_sum = MPI.Allreduce(local_sum, MPI.SUM, comm)
+        global_sum = comm_allreduce(comm, local_sum, +)
         return global_sum^(1 / p)
     end
 end
 
 """
-    LinearAlgebra.dot(x::VectorMPI{T}, y::VectorMPI{T}) where T
+    LinearAlgebra.dot(x::VectorMPI{T,B}, y::VectorMPI{T,B}) where {T,B}
 
 Compute the dot product of two distributed vectors.
 
@@ -768,70 +787,72 @@ the second vector is redistributed to match the first vector's partition.
 
 # Example
 ```julia
-x = VectorMPI(rand(10))
-y = VectorMPI(rand(10))
+backend = backend_cpu_mpi(MPI.COMM_WORLD)
+x = VectorMPI(rand(10), backend)
+y = VectorMPI(rand(10), backend)
 d = dot(x, y)
 ```
 """
-function LinearAlgebra.dot(x::VectorMPI{T}, y::VectorMPI{T}) where T
-    comm = MPI.COMM_WORLD
+function LinearAlgebra.dot(x::VectorMPI{T,B}, y::VectorMPI{T,B}) where {T,B}
+    assert_backends_compatible(x.backend, y.backend)
+    comm = x.backend.comm
 
     # If partitions match (compare hashes for efficiency), use local dot product directly
     if x.structural_hash == y.structural_hash
         local_dot = dot(x.v, y.v)
-        return MPI.Allreduce(local_dot, MPI.SUM, comm)
+        return comm_allreduce(comm, local_dot, +)
     else
         # Redistribute y to match x's partition using repartition
         y_aligned = repartition(y, x.partition)
         local_dot = dot(x.v, y_aligned.v)
-        return MPI.Allreduce(local_dot, MPI.SUM, comm)
+        return comm_allreduce(comm, local_dot, +)
     end
 end
 
 """
-    Base.maximum(v::VectorMPI{T}) where T
+    Base.maximum(v::VectorMPI{T,B}) where {T,B}
 
 Compute the maximum element of the distributed vector.
 """
-function Base.maximum(v::VectorMPI{T}) where T
-    comm = MPI.COMM_WORLD
+function Base.maximum(v::VectorMPI{T,B}) where {T,B}
+    comm = v.backend.comm
     local_max = isempty(v.v) ? typemin(real(T)) : maximum(real, v.v)
-    return MPI.Allreduce(local_max, MPI.MAX, comm)
+    return comm_allreduce(comm, local_max, max)
 end
 
 """
-    Base.minimum(v::VectorMPI{T}) where T
+    Base.minimum(v::VectorMPI{T,B}) where {T,B}
 
 Compute the minimum element of the distributed vector.
 """
-function Base.minimum(v::VectorMPI{T}) where T
-    comm = MPI.COMM_WORLD
+function Base.minimum(v::VectorMPI{T,B}) where {T,B}
+    comm = v.backend.comm
     local_min = isempty(v.v) ? typemax(real(T)) : minimum(real, v.v)
-    return MPI.Allreduce(local_min, MPI.MIN, comm)
+    return comm_allreduce(comm, local_min, min)
 end
 
 """
-    Base.sum(v::VectorMPI{T}) where T
+    Base.sum(v::VectorMPI{T,B}) where {T,B}
 
 Compute the sum of all elements in the distributed vector.
 """
-function Base.sum(v::VectorMPI{T}) where T
-    comm = MPI.COMM_WORLD
+function Base.sum(v::VectorMPI{T,B}) where {T,B}
+    comm = v.backend.comm
     # Use native sum without init for better performance; handle empty with ternary
     local_sum = isempty(v.v) ? zero(T) : sum(v.v)
-    return MPI.Allreduce(local_sum, MPI.SUM, comm)
+    return comm_allreduce(comm, local_sum, +)
 end
 
 """
-    Base.prod(v::VectorMPI{T}) where T
+    Base.prod(v::VectorMPI{T,B}) where {T,B}
 
 Compute the product of all elements in the distributed vector.
 """
-function Base.prod(v::VectorMPI{T}) where T
-    comm = MPI.COMM_WORLD
+function Base.prod(v::VectorMPI{T,B}) where {T,B}
+    comm = v.backend.comm
     # Use native prod without init for better performance; handle empty with ternary
     local_prod = isempty(v.v) ? one(T) : prod(v.v)
-    return MPI.Allreduce(local_prod, MPI.PROD, comm)
+    return comm_allreduce(comm, local_prod, *)
 end
 
 # Vector addition and subtraction
@@ -840,15 +861,16 @@ end
     Base.:+(u::VectorMPI{T}, v::VectorMPI{T}) where T
 
 Add two distributed vectors. If partitions differ, v is aligned to u's partition.
-The result has u's partition.
+The result has u's partition. Both vectors must have the same backend.
 """
-function Base.:+(u::VectorMPI{T}, v::VectorMPI{T}) where T
+function Base.:+(u::VectorMPI{T,B}, v::VectorMPI{T,B}) where {T,B}
+    assert_backends_compatible(u.backend, v.backend)
     if u.structural_hash == v.structural_hash
-        return VectorMPI{T}(u.structural_hash, u.partition, u.v .+ v.v)
+        return VectorMPI{T,B}(u.structural_hash, u.partition, u.v .+ v.v, u.backend)
     else
         # Align v to u's partition using repartition
         v_aligned = repartition(v, u.partition)
-        return VectorMPI{T}(u.structural_hash, u.partition, u.v .+ v_aligned.v)
+        return VectorMPI{T,B}(u.structural_hash, u.partition, u.v .+ v_aligned.v, u.backend)
     end
 end
 
@@ -856,25 +878,26 @@ end
     Base.:-(u::VectorMPI{T}, v::VectorMPI{T}) where T
 
 Subtract two distributed vectors. If partitions differ, v is aligned to u's partition.
-The result has u's partition.
+The result has u's partition. Both vectors must have the same backend.
 """
-function Base.:-(u::VectorMPI{T}, v::VectorMPI{T}) where T
+function Base.:-(u::VectorMPI{T,B}, v::VectorMPI{T,B}) where {T,B}
+    assert_backends_compatible(u.backend, v.backend)
     if u.structural_hash == v.structural_hash
-        return VectorMPI{T}(u.structural_hash, u.partition, u.v .- v.v)
+        return VectorMPI{T,B}(u.structural_hash, u.partition, u.v .- v.v, u.backend)
     else
         # Align v to u's partition using repartition
         v_aligned = repartition(v, u.partition)
-        return VectorMPI{T}(u.structural_hash, u.partition, u.v .- v_aligned.v)
+        return VectorMPI{T,B}(u.structural_hash, u.partition, u.v .- v_aligned.v, u.backend)
     end
 end
 
 """
-    Base.:-(v::VectorMPI{T}) where T
+    Base.:-(v::VectorMPI{T,B}) where {T,B}
 
 Negate a distributed vector.
 """
-function Base.:-(v::VectorMPI{T}) where T
-    return VectorMPI{T}(v.structural_hash, v.partition, .-v.v)
+function Base.:-(v::VectorMPI{T,B}) where {T,B}
+    return VectorMPI{T,B}(v.structural_hash, v.partition, .-v.v, v.backend)
 end
 
 # Mixed transpose addition/subtraction
@@ -912,30 +935,30 @@ end
 # Scalar multiplication for VectorMPI
 
 """
-    Base.:*(a::Number, v::VectorMPI{T}) where T
+    Base.:*(a::Number, v::VectorMPI{T,B}) where {T,B}
 
 Scalar times vector.
 """
-function Base.:*(a::Number, v::VectorMPI{T}) where T
+function Base.:*(a::Number, v::VectorMPI{T,B}) where {T,B}
     RT = promote_type(typeof(a), T)
-    return VectorMPI{RT}(v.structural_hash, v.partition, RT.(a .* v.v))
+    return VectorMPI{RT,B}(v.structural_hash, v.partition, RT.(a .* v.v), v.backend)
 end
 
 """
-    Base.:*(v::VectorMPI{T}, a::Number) where T
+    Base.:*(v::VectorMPI{T,B}, a::Number) where {T,B}
 
 Vector times scalar.
 """
-Base.:*(v::VectorMPI{T}, a::Number) where T = a * v
+Base.:*(v::VectorMPI{T,B}, a::Number) where {T,B} = a * v
 
 """
-    Base.:/(v::VectorMPI{T}, a::Number) where T
+    Base.:/(v::VectorMPI{T,B}, a::Number) where {T,B}
 
 Vector divided by scalar.
 """
-function Base.:/(v::VectorMPI{T}, a::Number) where T
+function Base.:/(v::VectorMPI{T,B}, a::Number) where {T,B}
     RT = promote_type(typeof(a), T)
-    return VectorMPI{RT}(v.structural_hash, v.partition, RT.(v.v ./ a))
+    return VectorMPI{RT,B}(v.structural_hash, v.partition, RT.(v.v ./ a), v.backend)
 end
 
 # Scalar multiplication for transposed VectorMPI
@@ -987,52 +1010,52 @@ Base.eltype(::Type{VectorMPI{T}}) where T = T
 # ============================================================================
 
 """
-    Base.abs(v::VectorMPI{T}) where T
+    Base.abs(v::VectorMPI{T,B}) where {T,B}
 
 Return a new VectorMPI with absolute values of all elements.
 """
-function Base.abs(v::VectorMPI{T}) where T
+function Base.abs(v::VectorMPI{T,B}) where {T,B}
     RT = real(T)
-    return VectorMPI{RT}(v.structural_hash, v.partition, abs.(v.v))
+    return VectorMPI{RT,B}(v.structural_hash, v.partition, abs.(v.v), v.backend)
 end
 
 """
-    Base.abs2(v::VectorMPI{T}) where T
+    Base.abs2(v::VectorMPI{T,B}) where {T,B}
 
 Return a new VectorMPI with squared absolute values of all elements.
 """
-function Base.abs2(v::VectorMPI{T}) where T
+function Base.abs2(v::VectorMPI{T,B}) where {T,B}
     RT = real(T)
-    return VectorMPI{RT}(v.structural_hash, v.partition, abs2.(v.v))
+    return VectorMPI{RT,B}(v.structural_hash, v.partition, abs2.(v.v), v.backend)
 end
 
 """
-    Base.real(v::VectorMPI{T}) where T
+    Base.real(v::VectorMPI{T,B}) where {T,B}
 
 Return a new VectorMPI containing the real parts of all elements.
 """
-function Base.real(v::VectorMPI{T}) where T
+function Base.real(v::VectorMPI{T,B}) where {T,B}
     RT = real(T)
-    return VectorMPI{RT}(v.structural_hash, v.partition, real.(v.v))
+    return VectorMPI{RT,B}(v.structural_hash, v.partition, real.(v.v), v.backend)
 end
 
 """
-    Base.imag(v::VectorMPI{T}) where T
+    Base.imag(v::VectorMPI{T,B}) where {T,B}
 
 Return a new VectorMPI containing the imaginary parts of all elements.
 """
-function Base.imag(v::VectorMPI{T}) where T
+function Base.imag(v::VectorMPI{T,B}) where {T,B}
     RT = real(T)
-    return VectorMPI{RT}(v.structural_hash, v.partition, imag.(v.v))
+    return VectorMPI{RT,B}(v.structural_hash, v.partition, imag.(v.v), v.backend)
 end
 
 """
-    Base.copy(v::VectorMPI{T}) where T
+    Base.copy(v::VectorMPI{T,B}) where {T,B}
 
 Create a deep copy of the distributed vector.
 """
-function Base.copy(v::VectorMPI{T}) where T
-    return VectorMPI{T}(v.structural_hash, copy(v.partition), copy(v.v))
+function Base.copy(v::VectorMPI{T,B}) where {T,B}
+    return VectorMPI{T,B}(v.structural_hash, copy(v.partition), copy(v.v), v.backend)
 end
 
 """
@@ -1112,36 +1135,36 @@ Prepare a broadcast argument for local computation.
 - Nested Broadcasted: recursively prepare and materialize
 - Scalar or other: return as-is
 """
-function _prepare_broadcast_arg(v::VectorMPI, ref_partition, comm)
+function _prepare_broadcast_arg(v::VectorMPI, ref_partition, backend)
     # Use identity check first (fast), then element-wise comparison
     if v.partition === ref_partition || v.partition == ref_partition
         return v.v
     else
-        # Align to reference partition using repartition
+        # Align to reference partition using repartition (uses v.backend for communication)
         return repartition(v, ref_partition).v
     end
 end
 
 # Handle nested Broadcasted objects by recursively preparing their arguments
-function _prepare_broadcast_arg(bc::Broadcasted{VectorMPIStyle}, ref_partition, comm)
+function _prepare_broadcast_arg(bc::Broadcasted{VectorMPIStyle}, ref_partition, backend)
     # Recursively prepare nested arguments
-    prepared_args = map(arg -> _prepare_broadcast_arg(arg, ref_partition, comm), bc.args)
+    prepared_args = map(arg -> _prepare_broadcast_arg(arg, ref_partition, backend), bc.args)
     # Return a new Broadcasted with prepared (local) arguments
     return Broadcasted{Nothing}(bc.f, prepared_args)
 end
 
 # Handle Broadcasted with other styles (e.g., scalar operations nested)
-function _prepare_broadcast_arg(bc::Broadcasted, ref_partition, comm)
+function _prepare_broadcast_arg(bc::Broadcasted, ref_partition, backend)
     # Recursively prepare nested arguments
-    prepared_args = map(arg -> _prepare_broadcast_arg(arg, ref_partition, comm), bc.args)
+    prepared_args = map(arg -> _prepare_broadcast_arg(arg, ref_partition, backend), bc.args)
     # Return a new Broadcasted with prepared arguments
     return Broadcasted{Nothing}(bc.f, prepared_args)
 end
 
 # Handle Base.RefValue (used in literal_pow for things like x.^2)
-_prepare_broadcast_arg(r::Base.RefValue, ref_partition, comm) = r
+_prepare_broadcast_arg(r::Base.RefValue, ref_partition, backend) = r
 
-_prepare_broadcast_arg(x, ref_partition, comm) = x
+_prepare_broadcast_arg(x, ref_partition, backend) = x
 
 """
     Base.similar(bc::Broadcasted{VectorMPIStyle}, ::Type{ElType}) where ElType
@@ -1150,15 +1173,16 @@ Allocate output array for VectorMPI broadcast.
 Preserves the storage type (CPU/GPU) of the first VectorMPI in the broadcast.
 """
 function Base.similar(bc::Broadcasted{VectorMPIStyle}, ::Type{ElType}) where ElType
-    # Find a VectorMPI to get partition info and array type
+    # Find a VectorMPI to get partition info, array type, and backend
     v = _find_vectormpi(bc.args...)
     if v === nothing
         error("No VectorMPI found in broadcast arguments")
     end
-    # Create output with same partition and storage type
+    # Create output with same partition, storage type, and backend
     # similar() preserves the array type (CPU Vector or GPU MtlVector)
     new_v = similar(v.v, ElType, length(v.v))
-    return VectorMPI{ElType,typeof(new_v)}(v.structural_hash, v.partition, new_v)
+    B = typeof(v.backend)
+    return VectorMPI{ElType,B}(v.structural_hash, v.partition, new_v, v.backend)
 end
 
 """
@@ -1167,7 +1191,8 @@ end
 Execute the broadcast operation and store results in dest.
 """
 function Base.copyto!(dest::VectorMPI, bc::Broadcasted{VectorMPIStyle})
-    comm = MPI.COMM_WORLD
+    # Use backend from destination for communication
+    backend = dest.backend
 
     # Find all VectorMPI arguments
     all_vmpi = _find_all_vectormpi(bc.args)
@@ -1176,7 +1201,7 @@ function Base.copyto!(dest::VectorMPI, bc::Broadcasted{VectorMPIStyle})
     ref_partition = dest.partition
 
     # Prepare all arguments (align VectorMPI to ref_partition, pass others through)
-    prepared_args = map(arg -> _prepare_broadcast_arg(arg, ref_partition, comm), bc.args)
+    prepared_args = map(arg -> _prepare_broadcast_arg(arg, ref_partition, backend), bc.args)
 
     # Perform local broadcast
     local_bc = Broadcasted{Nothing}(bc.f, prepared_args, axes(dest.v))

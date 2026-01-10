@@ -1,7 +1,7 @@
 # MatrixMPI type and dense matrix operations
 
 """
-    compute_dense_structural_hash(row_partition, col_partition, local_size, comm) -> Blake3Hash
+    compute_dense_structural_hash(row_partition, col_partition, local_size, comm::AbstractComm) -> Blake3Hash
 
 Compute a structural hash for a dense matrix that is identical across all ranks.
 
@@ -10,7 +10,7 @@ Compute a structural hash for a dense matrix that is identical across all ranks.
 3. Hash the gathered hashes to produce a global hash
 """
 function compute_dense_structural_hash(row_partition::Vector{Int}, col_partition::Vector{Int},
-    local_size::Tuple{Int,Int}, comm::MPI.Comm)::Blake3Hash
+    local_size::Tuple{Int,Int}, comm::AbstractComm)::Blake3Hash
     # Step 1: Compute rank-local hash
     # IMPORTANT: Prefix each vector with its length to disambiguate boundaries.
     # Without length prefixes, different structures could hash to the same value
@@ -25,7 +25,7 @@ function compute_dense_structural_hash(row_partition::Vector{Int}, col_partition
     local_hash = digest(ctx)
 
     # Step 2: Allgather all local hashes
-    all_hashes = MPI.Allgather(local_hash, comm)
+    all_hashes = comm_allgather(comm, local_hash)
 
     # Step 3: Hash them together to produce global hash
     ctx2 = Blake3Ctx()
@@ -34,19 +34,20 @@ function compute_dense_structural_hash(row_partition::Vector{Int}, col_partition
 end
 
 """
-    MatrixMPI{T,AM}
+    MatrixMPI{T, B<:HPCBackend}
 
 A distributed dense matrix partitioned by rows across MPI ranks.
 
 # Type Parameters
 - `T`: Element type (e.g., `Float64`, `ComplexF64`)
-- `AM<:AbstractMatrix{T}`: Storage type for local matrix (e.g., `Matrix{T}` or `MtlMatrix{T}`)
+- `B<:HPCBackend`: Backend configuration (device, communication, solver)
 
 # Fields
 - `structural_hash::Blake3Hash`: 256-bit Blake3 hash of the structural pattern
 - `row_partition::Vector{Int}`: Row partition boundaries, length = nranks + 1 (always on CPU)
 - `col_partition::Vector{Int}`: Column partition boundaries, length = nranks + 1 (always on CPU)
-- `A::AM`: Local rows (NOT transposed), size = (local_nrows, ncols)
+- `A::AbstractMatrix{T}`: Local rows (NOT transposed), size = (local_nrows, ncols)
+- `backend::B`: The HPC backend configuration
 
 # Invariants
 - `row_partition` and `col_partition` are sorted
@@ -55,42 +56,48 @@ A distributed dense matrix partitioned by rows across MPI ranks.
 - `size(A, 1) == row_partition[rank+2] - row_partition[rank+1]`
 - `size(A, 2) == col_partition[end] - 1`
 """
-mutable struct MatrixMPI{T,AM<:AbstractMatrix{T}} <: AbstractMatrix{T}
+mutable struct MatrixMPI{T, B<:HPCBackend} <: AbstractMatrix{T}
     structural_hash::OptionalBlake3Hash
     row_partition::Vector{Int}
     col_partition::Vector{Int}
-    A::AM
+    A::AbstractMatrix{T}
+    backend::B
     # Inner constructor that takes all arguments
-    function MatrixMPI{T,AM}(hash::OptionalBlake3Hash, row_partition::Vector{Int}, col_partition::Vector{Int}, A::AM) where {T,AM<:AbstractMatrix{T}}
-        new{T,AM}(hash, row_partition, col_partition, A)
+    function MatrixMPI{T,B}(hash::OptionalBlake3Hash, row_partition::Vector{Int}, col_partition::Vector{Int}, A::AbstractMatrix{T}, backend::B) where {T, B<:HPCBackend}
+        new{T,B}(hash, row_partition, col_partition, A, backend)
     end
 end
 
-# Type alias for CPU-backed MatrixMPI (default, backwards compatible)
-const MatrixMPI_CPU{T} = MatrixMPI{T,Matrix{T}}
+# Type aliases for common backend configurations
+const MatrixMPI_CPU{T} = MatrixMPI{T, HPCBackend{DeviceCPU, CommMPI, SolverMUMPS}}
+const MatrixMPI_CPU_Serial{T} = MatrixMPI{T, HPCBackend{DeviceCPU, CommSerial, SolverMUMPS}}
 
-# Convenience constructor that infers AM from the matrix type (different signature: one type param)
-function MatrixMPI{T}(hash::OptionalBlake3Hash, row_partition::Vector{Int}, col_partition::Vector{Int}, A::AM) where {T,AM<:AbstractMatrix{T}}
-    MatrixMPI{T,AM}(hash, row_partition, col_partition, A)
+# Convenience constructor that infers B from the backend type
+function MatrixMPI{T}(hash::OptionalBlake3Hash, row_partition::Vector{Int}, col_partition::Vector{Int}, A::AbstractMatrix{T}, backend::B) where {T, B<:HPCBackend}
+    MatrixMPI{T,B}(hash, row_partition, col_partition, A, backend)
 end
 
-# Constructor that infers both T and AM from the matrix (different signature: no type params)
-function MatrixMPI(hash::OptionalBlake3Hash, row_partition::Vector{Int}, col_partition::Vector{Int}, A::AM) where {T,AM<:AbstractMatrix{T}}
-    MatrixMPI{T,AM}(hash, row_partition, col_partition, A)
+# Constructor that infers T from the matrix
+function MatrixMPI(hash::OptionalBlake3Hash, row_partition::Vector{Int}, col_partition::Vector{Int}, A::AbstractMatrix{T}, backend::B) where {T, B<:HPCBackend}
+    MatrixMPI{T,B}(hash, row_partition, col_partition, A, backend)
 end
 
-# Adapt.jl support for converting MatrixMPI between backends
-function Adapt.adapt_structure(to, M::MatrixMPI{T,AM}) where {T,AM}
+# Get the HPCBackend for a MatrixMPI
+get_hpc_backend(M::MatrixMPI) = M.backend
+
+# Adapt.jl support for converting MatrixMPI between KernelAbstractions backends (GPU/CPU)
+# Note: This adapts the array storage but preserves the HPCBackend
+function Adapt.adapt_structure(to, M::MatrixMPI{T,B}) where {T,B}
     new_A = adapt(to, M.A)
-    return MatrixMPI{T,typeof(new_A)}(M.structural_hash, M.row_partition, M.col_partition, new_A)
+    return MatrixMPI{T,B}(M.structural_hash, M.row_partition, M.col_partition, new_A, M.backend)
 end
 
 """
-    MatrixMPI_local(A_local::AbstractMatrix{T}; comm=MPI.COMM_WORLD, col_partition=...) where T
+    MatrixMPI_local(A_local::AbstractMatrix{T}, backend::HPCBackend; col_partition=...) where T
 
 Create a MatrixMPI from a local matrix on each rank.
 
-Unlike `MatrixMPI(M_global)` which takes a global matrix and partitions it,
+Unlike `MatrixMPI(M_global, backend)` which takes a global matrix and partitions it,
 this constructor takes only the local rows of the matrix that each rank owns.
 The row partition is computed by gathering the local row counts from all ranks.
 
@@ -99,28 +106,31 @@ The type of `A_local` determines the storage backend (CPU Matrix, GPU MtlMatrix,
 All ranks must have local matrices with the same number of columns.
 A collective error is raised if the column counts don't match.
 
+# Arguments
+- `A_local::AbstractMatrix{T}`: Local rows owned by this rank
+- `backend::HPCBackend`: The HPC backend configuration
+
 # Keyword Arguments
-- `comm::MPI.Comm`: MPI communicator (default: `MPI.COMM_WORLD`)
 - `col_partition::Vector{Int}`: Column partition boundaries (default: `uniform_partition(size(A_local,2), nranks)`)
 
 # Example
 ```julia
+backend = backend_cpu_mpi(MPI.COMM_WORLD)
 # Rank 0 has 2×3 matrix, Rank 1 has 3×3 matrix
-A = MatrixMPI_local(randn(2, 3))  # on rank 0
-A = MatrixMPI_local(randn(3, 3))  # on rank 1
+A = MatrixMPI_local(randn(2, 3), backend)  # on rank 0
+A = MatrixMPI_local(randn(3, 3), backend)  # on rank 1
 # Result: 5×3 distributed matrix with row_partition [1, 3, 6]
 ```
 """
-function MatrixMPI_local(A_local::AM;
-                         comm::MPI.Comm=MPI.COMM_WORLD,
-                         col_partition::Vector{Int}=uniform_partition(size(A_local, 2), MPI.Comm_size(comm))) where {T,AM<:AbstractMatrix{T}}
-    nranks = MPI.Comm_size(comm)
+function MatrixMPI_local(A_local::AbstractMatrix{T}, backend::B;
+                         col_partition::Vector{Int}=uniform_partition(size(A_local, 2), comm_size(backend.comm))) where {T, B<:HPCBackend}
+    nranks = comm_size(backend.comm)
 
     local_nrows, local_ncols = size(A_local)
 
     # Gather local row counts and column counts from all ranks
     local_info = Int32[local_nrows, local_ncols]
-    all_info = MPI.Allgather(local_info, comm)
+    all_info = comm_allgather(backend.comm, local_info)
 
     # Extract row counts and verify column counts match
     all_row_counts = [all_info[2*(r-1)+1] for r in 1:nranks]
@@ -139,13 +149,14 @@ function MatrixMPI_local(A_local::AM;
         row_partition[r+1] = row_partition[r] + all_row_counts[r]
     end
 
-    # Copy to preserve the same array type
+    # Convert to target device (no-op for CPU, copies to GPU for GPU backends)
+    A_target = _convert_array(A_local isa Matrix ? A_local : Matrix(A_local), backend.device)
     # Structural hash computed lazily on first use via _ensure_hash
-    return MatrixMPI{T,AM}(nothing, row_partition, col_partition, copy(A_local))
+    return MatrixMPI{T,B}(nothing, row_partition, col_partition, A_target, backend)
 end
 
 """
-    MatrixMPI(M::Matrix{T}; comm=MPI.COMM_WORLD, row_partition=..., col_partition=...) where T
+    MatrixMPI(M::Matrix{T}, backend::HPCBackend; row_partition=..., col_partition=...) where T
 
 Create a MatrixMPI from a global matrix M, partitioning it by rows across MPI ranks.
 
@@ -155,28 +166,38 @@ Each rank extracts only its local rows from `M`, so:
 - **Efficient usage**: Pass a matrix with correct `size(M)` on all ranks,
   but only populate the rows that each rank owns (other rows are ignored)
 
+# Arguments
+- `M::Matrix{T}`: The global matrix
+- `backend::HPCBackend`: The HPC backend configuration
+
 # Keyword Arguments
-- `comm::MPI.Comm`: MPI communicator (default: `MPI.COMM_WORLD`)
 - `row_partition::Vector{Int}`: Row partition boundaries (default: `uniform_partition(size(M,1), nranks)`)
 - `col_partition::Vector{Int}`: Column partition boundaries (default: `uniform_partition(size(M,2), nranks)`)
 
 Use `uniform_partition(n, nranks)` to compute custom partitions.
+
+# Example
+```julia
+backend = backend_cpu_mpi(MPI.COMM_WORLD)
+A = MatrixMPI(randn(100, 50), backend)
+```
 """
-function MatrixMPI(M::Matrix{T};
-                   comm::MPI.Comm=MPI.COMM_WORLD,
-                   row_partition::Vector{Int}=uniform_partition(size(M, 1), MPI.Comm_size(comm)),
-                   col_partition::Vector{Int}=uniform_partition(size(M, 2), MPI.Comm_size(comm))) where T
-    rank = MPI.Comm_rank(comm)
+function MatrixMPI(M::Matrix{T}, backend::B;
+                   row_partition::Vector{Int}=uniform_partition(size(M, 1), comm_size(backend.comm)),
+                   col_partition::Vector{Int}=uniform_partition(size(M, 2), comm_size(backend.comm))) where {T, B<:HPCBackend}
+    rank = comm_rank(backend.comm)
 
     # Local row range (1-indexed, Julia style)
     row_start = row_partition[rank+1]
     row_end = row_partition[rank+2] - 1
 
     # Extract local rows from M (NOT transposed, unlike SparseMatrixMPI)
-    A = M[row_start:row_end, :]
+    A_cpu = M[row_start:row_end, :]
+    # Convert to target device (no-op for CPU, copies to GPU for GPU backends)
+    A = _convert_array(A_cpu, backend.device)
 
     # Structural hash computed lazily on first use via _ensure_hash
-    return MatrixMPI{T}(nothing, row_partition, col_partition, A)
+    return MatrixMPI{T,B}(nothing, row_partition, col_partition, A, backend)
 end
 
 # ============================================================================
@@ -184,7 +205,7 @@ end
 # ============================================================================
 
 """
-    _gather_dense_rows(A::MatrixMPI{T}, global_rows::AbstractVector{Int}) where T
+    _gather_dense_rows(A::MatrixMPI{T,B}, global_rows::AbstractVector{Int}) where {T,B}
 
 Gather specific rows from a MatrixMPI by global row index.
 
@@ -193,7 +214,7 @@ global row global_rows[i]. Uses point-to-point communication (Isend/Irecv)
 to minimize data transfer - only exchanges rows that are actually needed.
 
 # Arguments
-- `A::MatrixMPI{T}`: The distributed dense matrix
+- `A::MatrixMPI{T,B}`: The distributed dense matrix
 - `global_rows::AbstractVector{Int}`: Global row indices to gather
 
 # Returns
@@ -201,38 +222,46 @@ Matrix{T} of size (length(global_rows), ncols) with the requested rows.
 
 Communication tags used: 34 (row indices), 35 (row values)
 """
-function _gather_dense_rows(A::MatrixMPI{T}, global_rows::AbstractVector{Int}) where T
-    comm = MPI.COMM_WORLD
-    rank = MPI.Comm_rank(comm)
-    nranks = MPI.Comm_size(comm)
+function _gather_dense_rows(A::MatrixMPI{T,B}, global_rows::AbstractVector{Int}) where {T,B}
+    comm = A.backend.comm
+    rank = comm_rank(comm)
+    nranks = comm_size(comm)
 
     n_requested = length(global_rows)
     ncols = size(A, 2)
 
     # NOTE: Do NOT early return here even if n_requested == 0!
-    # All ranks must participate in MPI collectives below.
-
-    my_row_start = A.row_partition[rank+1]
+    # All ranks must participate in collectives below.
 
     # Ensure matrix data is on CPU for row extraction and MPI (GPU arrays not supported)
     A_cpu = _ensure_cpu(A.A)
+
+    my_row_start = A.row_partition[rank+1]
+
+    # Build position mapping for received rows
+    position_map = Dict{Int,Int}()  # global_row => position in result
+    for (pos, global_row) in enumerate(global_rows)
+        position_map[global_row] = pos
+    end
+
+    result = Matrix{T}(undef, n_requested, ncols)
 
     # Step 1: Partition rows by owner
     rows_by_owner = _partition_rows_by_owner(global_rows, A.row_partition)
 
     # Step 2: Exchange row request counts via Alltoall
     send_counts = Int32[haskey(rows_by_owner, r) ? length(rows_by_owner[r]) : 0 for r in 0:(nranks-1)]
-    recv_counts = MPI.Alltoall(MPI.UBuffer(send_counts, 1), comm)
+    recv_counts = comm_alltoall(comm, MPI.UBuffer(send_counts, 1))
 
     # Step 3: Send row requests to owner ranks
-    row_send_reqs = MPI.Request[]
+    row_send_reqs = []
     row_recv_bufs = Dict{Int,Vector{Int32}}()
-    row_recv_reqs = MPI.Request[]
+    row_recv_reqs = []
 
     for r in 0:(nranks-1)
         if send_counts[r+1] > 0 && r != rank
             rows_to_request = Int32.(rows_by_owner[r])
-            req = MPI.Isend(rows_to_request, comm; dest=r, tag=34)
+            req = comm_isend(comm, rows_to_request, r, 34)
             push!(row_send_reqs, req)
         end
     end
@@ -241,18 +270,18 @@ function _gather_dense_rows(A::MatrixMPI{T}, global_rows::AbstractVector{Int}) w
     for r in 0:(nranks-1)
         if recv_counts[r+1] > 0 && r != rank
             buf = Vector{Int32}(undef, recv_counts[r+1])
-            req = MPI.Irecv!(buf, comm; source=r, tag=34)
+            req = comm_irecv!(comm, buf, r, 34)
             push!(row_recv_reqs, req)
             row_recv_bufs[r] = buf
         end
     end
 
-    MPI.Waitall(row_recv_reqs)
-    MPI.Waitall(row_send_reqs)
+    comm_waitall(comm, row_recv_reqs)
+    comm_waitall(comm, row_send_reqs)
 
     # Step 5: Send row data for received requests
     row_data_send_bufs = Dict{Int,Matrix{T}}()
-    row_data_send_reqs = MPI.Request[]
+    row_data_send_reqs = []
 
     for r in 0:(nranks-1)
         if recv_counts[r+1] > 0 && r != rank
@@ -266,28 +295,21 @@ function _gather_dense_rows(A::MatrixMPI{T}, global_rows::AbstractVector{Int}) w
             end
 
             row_data_send_bufs[r] = data_to_send
-            req = MPI.Isend(vec(data_to_send), comm; dest=r, tag=35)
+            req = comm_isend(comm, vec(data_to_send), r, 35)
             push!(row_data_send_reqs, req)
         end
     end
 
     # Step 6: Receive row data
-    result = Matrix{T}(undef, n_requested, ncols)
     row_data_recv_bufs = Dict{Int,Vector{T}}()
-    row_data_recv_reqs = MPI.Request[]
+    row_data_recv_reqs = []
     recv_positions = Dict{Int,Vector{Int}}()  # Track where each rank's data goes
-
-    # Build position mapping for received rows
-    position_map = Dict{Int,Int}()  # global_row => position in result
-    for (pos, global_row) in enumerate(global_rows)
-        position_map[global_row] = pos
-    end
 
     for r in 0:(nranks-1)
         if send_counts[r+1] > 0 && r != rank
             n_rows = send_counts[r+1]
             buf = Vector{T}(undef, n_rows * ncols)
-            req = MPI.Irecv!(buf, comm; source=r, tag=35)
+            req = comm_irecv!(comm, buf, r, 35)
             push!(row_data_recv_reqs, req)
             row_data_recv_bufs[r] = buf
             # Track positions for this rank's rows
@@ -304,7 +326,7 @@ function _gather_dense_rows(A::MatrixMPI{T}, global_rows::AbstractVector{Int}) w
         end
     end
 
-    MPI.Waitall(row_data_recv_reqs)
+    comm_waitall(comm, row_data_recv_reqs)
 
     # Step 8: Unpack received row data
     for r in 0:(nranks-1)
@@ -319,7 +341,7 @@ function _gather_dense_rows(A::MatrixMPI{T}, global_rows::AbstractVector{Int}) w
         end
     end
 
-    MPI.Waitall(row_data_send_reqs)
+    comm_waitall(comm, row_data_send_reqs)
 
     return result
 end
@@ -362,10 +384,10 @@ The plan gathers these elements from the distributed vector x based on x's parti
 - `send_rank_ids::Vector{Int}`: Ranks we send elements to (0-indexed)
 - `send_indices::Vector{Vector{Int}}`: For each rank, local indices to send
 - `send_bufs::Vector{Vector{T}}`: Pre-allocated send buffers
-- `send_reqs::Vector{MPI.Request}`: Pre-allocated send request handles
+- `send_reqs::Vector{Any}`: Pre-allocated send request handles
 - `recv_rank_ids::Vector{Int}`: Ranks we receive elements from (0-indexed)
 - `recv_bufs::Vector{Vector{T}}`: Pre-allocated receive buffers
-- `recv_reqs::Vector{MPI.Request}`: Pre-allocated receive request handles
+- `recv_reqs::Vector{Any}`: Pre-allocated receive request handles
 - `recv_perm::Vector{Vector{Int}}`: For each recv rank, indices into gathered
 - `local_src_indices::Vector{Int}`: Source indices for local copy (into x.v)
 - `local_dst_indices::Vector{Int}`: Destination indices for local copy (into gathered)
@@ -376,10 +398,10 @@ mutable struct DenseMatrixVectorPlan{T,AV<:AbstractVector{T}}
     send_rank_ids::Vector{Int}
     send_indices::Vector{Vector{Int}}
     send_bufs::Vector{Vector{T}}      # Always CPU for MPI
-    send_reqs::Vector{MPI.Request}
+    send_reqs::Vector{Any}
     recv_rank_ids::Vector{Int}
     recv_bufs::Vector{Vector{T}}      # Always CPU for MPI
-    recv_reqs::Vector{MPI.Request}
+    recv_reqs::Vector{Any}
     recv_perm::Vector{Vector{Int}}
     local_src_indices::Vector{Int}
     local_dst_indices::Vector{Int}
@@ -394,15 +416,16 @@ end
 const DenseMatrixVectorPlan_CPU{T} = DenseMatrixVectorPlan{T,Vector{T}}
 
 """
-    DenseMatrixVectorPlan(A::MatrixMPI{T,AM}, x::VectorMPI{T,AV}) where {T,AM,AV}
+    DenseMatrixVectorPlan(A::MatrixMPI{T,B}, x::VectorMPI{T,B}) where {T,B<:HPCBackend}
 
 Create a communication plan to gather all x elements (x[1:ncols]) for dense matrix-vector multiplication.
 The gathered buffer will have the same storage type as the input vector x.
 """
-function DenseMatrixVectorPlan(A::MatrixMPI{T,AM}, x::VectorMPI{T,AV}) where {T,AM,AV}
-    comm = MPI.COMM_WORLD
-    rank = MPI.Comm_rank(comm)
-    nranks = MPI.Comm_size(comm)
+function DenseMatrixVectorPlan(A::MatrixMPI{T,B}, x::VectorMPI{T,B}) where {T,B<:HPCBackend}
+    assert_backends_compatible(A.backend, x.backend)
+    comm = A.backend.comm
+    rank = comm_rank(comm)
+    nranks = comm_size(comm)
 
     # For dense matrix, we need all elements 1:ncols
     ncols = A.col_partition[end] - 1
@@ -423,11 +446,11 @@ function DenseMatrixVectorPlan(A::MatrixMPI{T,AM}, x::VectorMPI{T,AV}) where {T,
 
     # Step 2: Exchange counts via Alltoall
     send_counts = [length(needed_from[r+1]) for r in 0:(nranks-1)]
-    recv_counts = MPI.Alltoall(MPI.UBuffer(send_counts, 1), comm)
+    recv_counts = comm_alltoall(comm, MPI.UBuffer(send_counts, 1))
 
     # Step 3: Send requested indices to each owner rank
     struct_send_bufs = Dict{Int,Vector{Int}}()
-    struct_send_reqs = MPI.Request[]
+    struct_send_reqs = []
     recv_rank_ids = Int[]
     recv_perm_map = Dict{Int,Vector{Int}}()
 
@@ -438,7 +461,7 @@ function DenseMatrixVectorPlan(A::MatrixMPI{T,AM}, x::VectorMPI{T,AV}) where {T,
             dst_indices = [t[2] for t in needed_from[r+1]]
             recv_perm_map[r] = dst_indices
             struct_send_bufs[r] = indices
-            req = MPI.Isend(indices, comm; dest=r, tag=30)
+            req = comm_isend(comm, indices, r, 30)
             push!(struct_send_reqs, req)
         end
     end
@@ -446,20 +469,20 @@ function DenseMatrixVectorPlan(A::MatrixMPI{T,AM}, x::VectorMPI{T,AV}) where {T,
     # Step 4: Receive requests from other ranks
     send_rank_ids = Int[]
     struct_recv_bufs = Dict{Int,Vector{Int}}()
-    struct_recv_reqs = MPI.Request[]
+    struct_recv_reqs = []
 
     for r in 0:(nranks-1)
         if recv_counts[r+1] > 0 && r != rank
             push!(send_rank_ids, r)
             buf = Vector{Int}(undef, recv_counts[r+1])
-            req = MPI.Irecv!(buf, comm; source=r, tag=30)
+            req = comm_irecv!(comm, buf, r, 30)
             push!(struct_recv_reqs, req)
             struct_recv_bufs[r] = buf
         end
     end
 
-    MPI.Waitall(struct_recv_reqs)
-    MPI.Waitall(struct_send_reqs)
+    comm_waitall(comm, struct_recv_reqs)
+    comm_waitall(comm, struct_send_reqs)
 
     # Step 5: Convert received global indices to local indices for sending
     send_indices_map = Dict{Int,Vector{Int}}()
@@ -488,8 +511,8 @@ function DenseMatrixVectorPlan(A::MatrixMPI{T,AM}, x::VectorMPI{T,AV}) where {T,
     # MPI buffers are always on CPU
     send_bufs = [Vector{T}(undef, length(inds)) for inds in send_indices_final]
     recv_bufs = [Vector{T}(undef, send_counts[r+1]) for r in recv_rank_ids]
-    send_reqs = Vector{MPI.Request}(undef, length(send_rank_ids))
-    recv_reqs = Vector{MPI.Request}(undef, length(recv_rank_ids))
+    send_reqs = Vector{Any}(undef, length(send_rank_ids))
+    recv_reqs = Vector{Any}(undef, length(recv_rank_ids))
 
     # CPU staging buffer (always needed for MPI)
     gathered_cpu = Vector{T}(undef, n_gathered)
@@ -497,7 +520,7 @@ function DenseMatrixVectorPlan(A::MatrixMPI{T,AM}, x::VectorMPI{T,AV}) where {T,
     # Gathered buffer matches source vector's storage type
     gathered = similar(x.v, n_gathered)
 
-    return DenseMatrixVectorPlan{T,AV}(
+    return DenseMatrixVectorPlan{T,typeof(gathered)}(
         send_rank_ids, send_indices_final, send_bufs, send_reqs,
         recv_rank_ids, recv_bufs, recv_reqs, recv_perm_final,
         local_src_indices, local_dst_indices, gathered, gathered_cpu,
@@ -506,7 +529,7 @@ function DenseMatrixVectorPlan(A::MatrixMPI{T,AM}, x::VectorMPI{T,AV}) where {T,
 end
 
 """
-    execute_plan!(plan::DenseMatrixVectorPlan{T,AV}, x::VectorMPI{T,AV}) where {T,AV}
+    execute_plan!(plan::DenseMatrixVectorPlan{T,AV}, x::VectorMPI{T,B}) where {T,AV,B}
 
 Execute a dense vector communication plan to gather elements from x.
 Returns plan.gathered containing x[1:ncols] for the associated matrix.
@@ -514,8 +537,8 @@ Returns plan.gathered containing x[1:ncols] for the associated matrix.
 Works uniformly for CPU and GPU vectors - MPI communication always uses CPU
 buffers, with automatic staging for GPU arrays.
 """
-function execute_plan!(plan::DenseMatrixVectorPlan{T,AV}, x::VectorMPI{T,AV}) where {T,AV}
-    comm = MPI.COMM_WORLD
+function execute_plan!(plan::DenseMatrixVectorPlan{T,AV}, x::VectorMPI{T,B}) where {T,AV,B}
+    comm = x.backend.comm
 
     # Get CPU data for MPI operations (no-op for CPU, copy for GPU)
     x_cpu = _ensure_cpu(x.v)
@@ -526,6 +549,7 @@ function execute_plan!(plan::DenseMatrixVectorPlan{T,AV}, x::VectorMPI{T,AV}) wh
     end
 
     # Step 2: Fill send buffers and send
+    send_reqs = []
     @inbounds for i in eachindex(plan.send_rank_ids)
         r = plan.send_rank_ids[i]
         send_idx = plan.send_indices[i]
@@ -533,15 +557,18 @@ function execute_plan!(plan::DenseMatrixVectorPlan{T,AV}, x::VectorMPI{T,AV}) wh
         for k in eachindex(send_idx)
             buf[k] = x_cpu[send_idx[k]]
         end
-        plan.send_reqs[i] = MPI.Isend(buf, comm; dest=r, tag=31)
+        req = comm_isend(comm, buf, r, 31)
+        push!(send_reqs, req)
     end
 
     # Step 3: Receive values to CPU buffers
+    recv_reqs = []
     @inbounds for i in eachindex(plan.recv_rank_ids)
-        plan.recv_reqs[i] = MPI.Irecv!(plan.recv_bufs[i], comm; source=plan.recv_rank_ids[i], tag=31)
+        req = comm_irecv!(comm, plan.recv_bufs[i], plan.recv_rank_ids[i], 31)
+        push!(recv_reqs, req)
     end
 
-    MPI.Waitall(plan.recv_reqs)
+    comm_waitall(comm, recv_reqs)
 
     # Step 4: Scatter received values into CPU staging buffer
     @inbounds for i in eachindex(plan.recv_rank_ids)
@@ -552,7 +579,7 @@ function execute_plan!(plan::DenseMatrixVectorPlan{T,AV}, x::VectorMPI{T,AV}) wh
         end
     end
 
-    MPI.Waitall(plan.send_reqs)
+    comm_waitall(comm, send_reqs)
 
     # Step 5: Copy to output buffer (no-op if CPU, copy if GPU)
     _copy_to_output!(plan.gathered, plan.gathered_cpu)
@@ -561,15 +588,15 @@ function execute_plan!(plan::DenseMatrixVectorPlan{T,AV}, x::VectorMPI{T,AV}) wh
 end
 
 """
-    get_dense_vector_plan(A::MatrixMPI{T,AM}, x::VectorMPI{T,AV}) where {T,AM,AV}
+    get_dense_vector_plan(A::MatrixMPI{T,B}, x::VectorMPI{T,B}) where {T,B<:HPCBackend}
 
 Get a memoized DenseMatrixVectorPlan for A * x.
-The plan is cached based on the structural hashes of A and x, plus the array types.
+The plan is cached based on the structural hashes of A and x, plus the backend type.
 """
-function get_dense_vector_plan(A::MatrixMPI{T,AM}, x::VectorMPI{T,AV}) where {T,AM,AV}
-    key = (_ensure_hash(A), x.structural_hash, T, AM, AV)
+function get_dense_vector_plan(A::MatrixMPI{T,B}, x::VectorMPI{T,B}) where {T,B<:HPCBackend}
+    key = (_ensure_hash(A), x.structural_hash, T, B)
     if haskey(_dense_vector_plan_cache, key)
-        return _dense_vector_plan_cache[key]::DenseMatrixVectorPlan{T,AV}
+        return _dense_vector_plan_cache[key]::DenseMatrixVectorPlan{T}
     end
     plan = DenseMatrixVectorPlan(A, x)
     _dense_vector_plan_cache[key] = plan
@@ -578,24 +605,21 @@ end
 
 
 """
-    LinearAlgebra.mul!(y::VectorMPI{T,AV}, A::MatrixMPI{T,AM}, x::VectorMPI{T,AV}) where {T,AM,AV}
+    LinearAlgebra.mul!(y::VectorMPI{T,B}, A::MatrixMPI{T,B}, x::VectorMPI{T,B}) where {T,B<:HPCBackend}
 
 In-place dense matrix-vector multiplication: y = A * x.
 
-Requires matching backends: CPU matrix with CPU vectors, or GPU matrix with GPU vectors.
+Requires matching backends.
 """
-function LinearAlgebra.mul!(y::VectorMPI{T,AV}, A::MatrixMPI{T,AM}, x::VectorMPI{T,AV}) where {T,AM,AV}
-    # Check backend consistency
-    matrix_is_cpu = AM <: Matrix
-    vector_is_cpu = AV <: Vector
-    if matrix_is_cpu != vector_is_cpu
-        error("Mixed CPU/GPU operations not supported: matrix is $(matrix_is_cpu ? "CPU" : "GPU"), vector is $(vector_is_cpu ? "CPU" : "GPU")")
-    end
+function LinearAlgebra.mul!(y::VectorMPI{T,B}, A::MatrixMPI{T,B}, x::VectorMPI{T,B}) where {T,B<:HPCBackend}
+    assert_backends_compatible(A.backend, x.backend)
+    assert_backends_compatible(A.backend, y.backend)
 
     plan = get_dense_vector_plan(A, x)
     execute_plan!(plan, x)
 
-    if matrix_is_cpu
+    # Check if CPU or GPU based on device type
+    if A.backend.device isa DeviceCPU
         # CPU path
         y_local_cpu = Vector{T}(undef, length(y.v))
         LinearAlgebra.mul!(y_local_cpu, A.A, plan.gathered_cpu)
@@ -608,20 +632,15 @@ function LinearAlgebra.mul!(y::VectorMPI{T,AV}, A::MatrixMPI{T,AM}, x::VectorMPI
 end
 
 """
-    Base.:*(A::MatrixMPI{T,AM}, x::VectorMPI{T,AV}) where {T,AM,AV}
+    Base.:*(A::MatrixMPI{T,B}, x::VectorMPI{T,B}) where {T,B<:HPCBackend}
 
 Dense matrix-vector multiplication returning a new VectorMPI.
-The result has the same row partition as A and same storage type.
+The result has the same row partition as A and inherits the backend.
 """
-function Base.:*(A::MatrixMPI{T,AM}, x::VectorMPI{T,AV}) where {T,AM,AV}
-    # Check backend consistency
-    matrix_is_cpu = AM <: Matrix
-    vector_is_cpu = AV <: Vector
-    if matrix_is_cpu != vector_is_cpu
-        error("Mixed CPU/GPU operations not supported: matrix is $(matrix_is_cpu ? "CPU" : "GPU"), vector is $(vector_is_cpu ? "CPU" : "GPU")")
-    end
+function Base.:*(A::MatrixMPI{T,B}, x::VectorMPI{T,B}) where {T,B<:HPCBackend}
+    assert_backends_compatible(A.backend, x.backend)
 
-    rank = MPI.Comm_rank(MPI.COMM_WORLD)
+    rank = comm_rank(A.backend.comm)
     local_rows = A.row_partition[rank + 2] - A.row_partition[rank + 1]
 
     # Get the plan and use cached partition hash if available
@@ -634,7 +653,8 @@ function Base.:*(A::MatrixMPI{T,AM}, x::VectorMPI{T,AV}) where {T,AM,AV}
     # Execute the plan to gather vector elements
     execute_plan!(plan, x)
 
-    if matrix_is_cpu
+    # Check if CPU or GPU based on device type
+    if A.backend.device isa DeviceCPU
         # CPU path
         y_v = Vector{T}(undef, local_rows)
         LinearAlgebra.mul!(y_v, A.A, plan.gathered_cpu)
@@ -644,10 +664,11 @@ function Base.:*(A::MatrixMPI{T,AM}, x::VectorMPI{T,AV}) where {T,AM,AV}
         LinearAlgebra.mul!(y_v, A.A, plan.gathered)
     end
 
-    return VectorMPI{T,AV}(
+    return VectorMPI{T,B}(
         plan.result_partition_hash,
         plan.result_partition,  # Partition is immutable, no need to copy
-        y_v
+        y_v,
+        A.backend
     )
 end
 
@@ -669,12 +690,12 @@ The transpose of A (with row_partition R and col_partition C) will have:
 - `send_row_ranges::Vector{UnitRange{Int}}`: For each rank, local row range to send
 - `send_col_ranges::Vector{UnitRange{Int}}`: For each rank, column range to send
 - `send_bufs::Vector{Vector{T}}`: Pre-allocated send buffers
-- `send_reqs::Vector{MPI.Request}`: Pre-allocated send request handles
+- `send_reqs::Vector{Any}`: Pre-allocated send request handles
 - `recv_rank_ids::Vector{Int}`: Ranks we receive data from (0-indexed)
 - `recv_row_ranges::Vector{UnitRange{Int}}`: For each recv rank, row range in result
 - `recv_col_ranges::Vector{UnitRange{Int}}`: For each recv rank, column range in result
 - `recv_bufs::Vector{Vector{T}}`: Pre-allocated receive buffers
-- `recv_reqs::Vector{MPI.Request}`: Pre-allocated receive request handles
+- `recv_reqs::Vector{Any}`: Pre-allocated receive request handles
 - `local_row_range::UnitRange{Int}`: Local rows that stay on this rank
 - `local_col_range::UnitRange{Int}`: Local columns that stay on this rank
 - `AT::Matrix{T}`: Pre-allocated result matrix
@@ -686,12 +707,12 @@ mutable struct DenseTransposePlan{T}
     send_row_ranges::Vector{UnitRange{Int}}
     send_col_ranges::Vector{UnitRange{Int}}
     send_bufs::Vector{Vector{T}}
-    send_reqs::Vector{MPI.Request}
+    send_reqs::Vector{Any}
     recv_rank_ids::Vector{Int}
     recv_row_ranges::Vector{UnitRange{Int}}
     recv_col_ranges::Vector{UnitRange{Int}}
     recv_bufs::Vector{Vector{T}}
-    recv_reqs::Vector{MPI.Request}
+    recv_reqs::Vector{Any}
     local_row_range::UnitRange{Int}
     local_col_range::UnitRange{Int}
     AT::Matrix{T}
@@ -702,7 +723,7 @@ mutable struct DenseTransposePlan{T}
 end
 
 """
-    DenseTransposePlan(A::MatrixMPI{T}) where T
+    DenseTransposePlan(A::MatrixMPI{T,B}) where {T,B}
 
 Create a communication plan for computing A^T.
 
@@ -713,10 +734,10 @@ The algorithm:
    - These become rows r's local A^T
 3. Exchange data via point-to-point communication
 """
-function DenseTransposePlan(A::MatrixMPI{T}) where T
-    comm = MPI.COMM_WORLD
-    rank = MPI.Comm_rank(comm)
-    nranks = MPI.Comm_size(comm)
+function DenseTransposePlan(A::MatrixMPI{T,B}) where {T,B}
+    comm = A.backend.comm
+    rank = comm_rank(comm)
+    nranks = comm_size(comm)
 
     # The transpose has swapped partitions
     result_row_partition = A.col_partition
@@ -819,8 +840,8 @@ function DenseTransposePlan(A::MatrixMPI{T}) where T
         recv_bufs[i] = Vector{T}(undef, nrows_to_recv * ncols_to_recv)
     end
 
-    send_reqs = Vector{MPI.Request}(undef, length(rank_ids))
-    recv_reqs = Vector{MPI.Request}(undef, length(recv_rank_ids))
+    send_reqs = Vector{Any}(undef, length(rank_ids))
+    recv_reqs = Vector{Any}(undef, length(recv_rank_ids))
 
     return DenseTransposePlan{T}(
         rank_ids, send_row_ranges, send_col_ranges, send_bufs, send_reqs,
@@ -832,14 +853,14 @@ function DenseTransposePlan(A::MatrixMPI{T}) where T
 end
 
 """
-    execute_plan!(plan::DenseTransposePlan{T}, A::MatrixMPI{T}) where T
+    execute_plan!(plan::DenseTransposePlan{T}, A::MatrixMPI{T,B}) where {T,B}
 
 Execute a dense transpose plan to compute A^T.
 Returns a MatrixMPI representing the transpose.
 """
-function execute_plan!(plan::DenseTransposePlan{T}, A::MatrixMPI{T}) where T
-    comm = MPI.COMM_WORLD
-    rank = MPI.Comm_rank(comm)
+function execute_plan!(plan::DenseTransposePlan{T}, A::MatrixMPI{T,B}) where {T,B}
+    comm = A.backend.comm
+    rank = comm_rank(comm)
 
     my_row_start = A.row_partition[rank+1]
     result_row_start = plan.row_partition[rank+1]
@@ -860,6 +881,7 @@ function execute_plan!(plan::DenseTransposePlan{T}, A::MatrixMPI{T}) where T
     end
 
     # Step 2: Fill send buffers (pack transposed data) and send
+    send_reqs = []
     for (i, r) in enumerate(plan.rank_ids)
         row_range = plan.send_row_ranges[i]
         col_range = plan.send_col_ranges[i]
@@ -873,15 +895,18 @@ function execute_plan!(plan::DenseTransposePlan{T}, A::MatrixMPI{T}) where T
                 buf_idx += 1
             end
         end
-        plan.send_reqs[i] = MPI.Isend(buf, comm; dest=r, tag=40)
+        req = comm_isend(comm, buf, r, 40)
+        push!(send_reqs, req)
     end
 
     # Step 3: Receive values
+    recv_reqs = []
     for (i, r) in enumerate(plan.recv_rank_ids)
-        plan.recv_reqs[i] = MPI.Irecv!(plan.recv_bufs[i], comm; source=r, tag=40)
+        req = comm_irecv!(comm, plan.recv_bufs[i], r, 40)
+        push!(recv_reqs, req)
     end
 
-    MPI.Waitall(plan.recv_reqs)
+    comm_waitall(comm, recv_reqs)
 
     # Step 4: Unpack received values into AT (transposing in the process)
     for (i, r) in enumerate(plan.recv_rank_ids)
@@ -900,7 +925,7 @@ function execute_plan!(plan::DenseTransposePlan{T}, A::MatrixMPI{T}) where T
         end
     end
 
-    MPI.Waitall(plan.send_reqs)
+    comm_waitall(comm, send_reqs)
 
     # Create result with a copy of AT
     result_AT = copy(plan.AT)
@@ -912,23 +937,22 @@ function execute_plan!(plan::DenseTransposePlan{T}, A::MatrixMPI{T}) where T
     end
 
     # Convert result to match input array type (CPU or GPU)
-    AM = typeof(A.A)
-    if AM !== Matrix{T}
+    if !(A.backend.device isa DeviceCPU)
         # Input was GPU - convert result back to GPU
         result_AT_gpu = copyto!(similar(A.A, size(result_AT)), result_AT)
-        return MatrixMPI{T,AM}(plan.structural_hash, plan.row_partition, plan.col_partition, result_AT_gpu)
+        return MatrixMPI{T,B}(plan.structural_hash, plan.row_partition, plan.col_partition, result_AT_gpu, A.backend)
     end
-    return MatrixMPI{T,AM}(plan.structural_hash, plan.row_partition, plan.col_partition, result_AT)
+    return MatrixMPI{T,B}(plan.structural_hash, plan.row_partition, plan.col_partition, result_AT, A.backend)
 end
 
 """
-    get_dense_transpose_plan(A::MatrixMPI{T}) where T
+    get_dense_transpose_plan(A::MatrixMPI{T,B}) where {T,B}
 
 Get a memoized DenseTransposePlan for A^T.
 The plan is cached based on the structural hash of A and the element type.
 """
-function get_dense_transpose_plan(A::MatrixMPI{T}) where T
-    key = (_ensure_hash(A), T)
+function get_dense_transpose_plan(A::MatrixMPI{T,B}) where {T,B}
+    key = (_ensure_hash(A), T, B)
     if haskey(_dense_transpose_plan_cache, key)
         return _dense_transpose_plan_cache[key]::DenseTransposePlan{T}
     end
@@ -940,30 +964,30 @@ end
 # Lazy transpose support for MatrixMPI
 
 """
-    Base.transpose(A::MatrixMPI{T}) where T
+    Base.transpose(A::MatrixMPI{T,B}) where {T,B}
 
 Return a lazy transpose wrapper around A.
 """
-Base.transpose(A::MatrixMPI{T}) where T = Transpose(A)
+Base.transpose(A::MatrixMPI{T,B}) where {T,B} = Transpose(A)
 
 """
-    Base.conj(A::MatrixMPI{T,AM}) where {T,AM}
+    Base.conj(A::MatrixMPI{T,B}) where {T,B}
 
 Return a new MatrixMPI with conjugated values.
 """
-function Base.conj(A::MatrixMPI{T,AM}) where {T,AM}
-    return MatrixMPI{T,AM}(A.structural_hash, A.row_partition, A.col_partition, conj.(A.A))
+function Base.conj(A::MatrixMPI{T,B}) where {T,B}
+    return MatrixMPI{T,B}(A.structural_hash, A.row_partition, A.col_partition, conj.(A.A), A.backend)
 end
 
 """
-    Base.adjoint(A::MatrixMPI{T,AM}) where {T,AM}
+    Base.adjoint(A::MatrixMPI{T,B}) where {T,B}
 
 Return transpose(conj(A)), i.e., the conjugate transpose.
 """
-Base.adjoint(A::MatrixMPI{T,AM}) where {T,AM} = transpose(conj(A))
+Base.adjoint(A::MatrixMPI{T,B}) where {T,B} = transpose(conj(A))
 
-# Type alias for transpose of MatrixMPI (matches any AM)
-const TransposedMatrixMPI{T,AM} = Transpose{T,MatrixMPI{T,AM}}
+# Type alias for transpose of MatrixMPI (matches any backend)
+const TransposedMatrixMPI{T,B} = Transpose{T,MatrixMPI{T,B}}
 
 """
     LinearAlgebra.copy(At::Transpose{T,<:MatrixMPI{T}}) where T
@@ -996,10 +1020,10 @@ mutable struct DenseTransposeVectorPlan{T,AV<:AbstractVector{T}}
     send_rank_ids::Vector{Int}
     send_indices::Vector{Vector{Int}}
     send_bufs::Vector{Vector{T}}      # Always CPU for MPI
-    send_reqs::Vector{MPI.Request}
+    send_reqs::Vector{Any}
     recv_rank_ids::Vector{Int}
     recv_bufs::Vector{Vector{T}}      # Always CPU for MPI
-    recv_reqs::Vector{MPI.Request}
+    recv_reqs::Vector{Any}
     recv_perm::Vector{Vector{Int}}
     local_src_indices::Vector{Int}
     local_dst_indices::Vector{Int}
@@ -1010,19 +1034,20 @@ mutable struct DenseTransposeVectorPlan{T,AV<:AbstractVector{T}}
     result_partition::Union{Nothing, Vector{Int}}
 end
 
-# Cache for DenseTransposeVectorPlans (includes AV type in key)
+# Cache for DenseTransposeVectorPlans (includes backend type in key)
 const _dense_transpose_vector_plan_cache = Dict{Tuple{Blake3Hash,Blake3Hash,DataType,DataType},Any}()
 
 """
-    DenseTransposeVectorPlan(A::MatrixMPI{T}, x::VectorMPI{T,AV}) where {T,AV}
+    DenseTransposeVectorPlan(A::MatrixMPI{T,B}, x::VectorMPI{T,B}) where {T,B<:HPCBackend}
 
 Create a plan to gather x elements according to A's row_partition for transpose(A) * x.
 The gathered buffer has the same storage type as x (CPU or GPU).
 """
-function DenseTransposeVectorPlan(A::MatrixMPI{T}, x::VectorMPI{T,AV}) where {T,AV}
-    comm = MPI.COMM_WORLD
-    rank = MPI.Comm_rank(comm)
-    nranks = MPI.Comm_size(comm)
+function DenseTransposeVectorPlan(A::MatrixMPI{T,B}, x::VectorMPI{T,B}) where {T,B<:HPCBackend}
+    assert_backends_compatible(A.backend, x.backend)
+    comm = A.backend.comm
+    rank = comm_rank(comm)
+    nranks = comm_size(comm)
 
     # For transpose(A) * x, we need x[1:nrows] where nrows = A.row_partition[end] - 1
     nrows = A.row_partition[end] - 1
@@ -1043,11 +1068,11 @@ function DenseTransposeVectorPlan(A::MatrixMPI{T}, x::VectorMPI{T,AV}) where {T,
 
     # Exchange counts via Alltoall
     send_counts = [length(needed_from[r+1]) for r in 0:(nranks-1)]
-    recv_counts = MPI.Alltoall(MPI.UBuffer(send_counts, 1), comm)
+    recv_counts = comm_alltoall(comm, MPI.UBuffer(send_counts, 1))
 
     # Send requested indices to each owner rank
     struct_send_bufs = Dict{Int,Vector{Int}}()
-    struct_send_reqs = MPI.Request[]
+    struct_send_reqs = []
     recv_rank_ids = Int[]
     recv_perm_map = Dict{Int,Vector{Int}}()
 
@@ -1058,7 +1083,7 @@ function DenseTransposeVectorPlan(A::MatrixMPI{T}, x::VectorMPI{T,AV}) where {T,
             dst_indices = [t[2] for t in needed_from[r+1]]
             recv_perm_map[r] = dst_indices
             struct_send_bufs[r] = indices
-            req = MPI.Isend(indices, comm; dest=r, tag=50)
+            req = comm_isend(comm, indices, r, 50)
             push!(struct_send_reqs, req)
         end
     end
@@ -1066,20 +1091,20 @@ function DenseTransposeVectorPlan(A::MatrixMPI{T}, x::VectorMPI{T,AV}) where {T,
     # Receive requests from other ranks
     send_rank_ids = Int[]
     struct_recv_bufs = Dict{Int,Vector{Int}}()
-    struct_recv_reqs = MPI.Request[]
+    struct_recv_reqs = []
 
     for r in 0:(nranks-1)
         if recv_counts[r+1] > 0 && r != rank
             push!(send_rank_ids, r)
             buf = Vector{Int}(undef, recv_counts[r+1])
-            req = MPI.Irecv!(buf, comm; source=r, tag=50)
+            req = comm_irecv!(comm, buf, r, 50)
             push!(struct_recv_reqs, req)
             struct_recv_bufs[r] = buf
         end
     end
 
-    MPI.Waitall(struct_recv_reqs)
-    MPI.Waitall(struct_send_reqs)
+    comm_waitall(comm, struct_recv_reqs)
+    comm_waitall(comm, struct_send_reqs)
 
     # Convert received global indices to local indices for sending
     send_indices_map = Dict{Int,Vector{Int}}()
@@ -1107,14 +1132,14 @@ function DenseTransposeVectorPlan(A::MatrixMPI{T}, x::VectorMPI{T,AV}) where {T,
 
     send_bufs = [Vector{T}(undef, length(inds)) for inds in send_indices_final]
     recv_bufs = [Vector{T}(undef, send_counts[r+1]) for r in recv_rank_ids]
-    send_reqs = Vector{MPI.Request}(undef, length(send_rank_ids))
-    recv_reqs = Vector{MPI.Request}(undef, length(recv_rank_ids))
+    send_reqs = Vector{Any}(undef, length(send_rank_ids))
+    recv_reqs = Vector{Any}(undef, length(recv_rank_ids))
 
     # Create gathered buffer with same type as input and CPU staging buffer
     gathered_cpu = Vector{T}(undef, n_gathered)
     gathered = similar(x.v, n_gathered)
 
-    return DenseTransposeVectorPlan{T,AV}(
+    return DenseTransposeVectorPlan{T,typeof(gathered)}(
         send_rank_ids, send_indices_final, send_bufs, send_reqs,
         recv_rank_ids, recv_bufs, recv_reqs, recv_perm_final,
         local_src_indices, local_dst_indices, gathered, gathered_cpu,
@@ -1123,15 +1148,15 @@ function DenseTransposeVectorPlan(A::MatrixMPI{T}, x::VectorMPI{T,AV}) where {T,
 end
 
 """
-    execute_plan!(plan::DenseTransposeVectorPlan{T,AV}, x::VectorMPI{T,AV}) where {T,AV}
+    execute_plan!(plan::DenseTransposeVectorPlan{T,AV}, x::VectorMPI{T,B}) where {T,AV,B}
 
 Execute the transpose vector plan to gather x elements.
 
 Works uniformly for CPU and GPU vectors - MPI communication always uses CPU
 buffers, with automatic staging for GPU arrays.
 """
-function execute_plan!(plan::DenseTransposeVectorPlan{T,AV}, x::VectorMPI{T,AV}) where {T,AV}
-    comm = MPI.COMM_WORLD
+function execute_plan!(plan::DenseTransposeVectorPlan{T,AV}, x::VectorMPI{T,B}) where {T,AV,B}
+    comm = x.backend.comm
 
     # Get CPU data for MPI operations (no-op for CPU, copy for GPU)
     x_cpu = _ensure_cpu(x.v)
@@ -1142,6 +1167,7 @@ function execute_plan!(plan::DenseTransposeVectorPlan{T,AV}, x::VectorMPI{T,AV})
     end
 
     # Step 2: Fill send buffers and send
+    send_reqs = []
     @inbounds for i in eachindex(plan.send_rank_ids)
         r = plan.send_rank_ids[i]
         send_idx = plan.send_indices[i]
@@ -1149,15 +1175,18 @@ function execute_plan!(plan::DenseTransposeVectorPlan{T,AV}, x::VectorMPI{T,AV})
         for k in eachindex(send_idx)
             buf[k] = x_cpu[send_idx[k]]
         end
-        plan.send_reqs[i] = MPI.Isend(buf, comm; dest=r, tag=51)
+        req = comm_isend(comm, buf, r, 51)
+        push!(send_reqs, req)
     end
 
     # Step 3: Receive values to CPU buffers
+    recv_reqs = []
     @inbounds for i in eachindex(plan.recv_rank_ids)
-        plan.recv_reqs[i] = MPI.Irecv!(plan.recv_bufs[i], comm; source=plan.recv_rank_ids[i], tag=51)
+        req = comm_irecv!(comm, plan.recv_bufs[i], plan.recv_rank_ids[i], 51)
+        push!(recv_reqs, req)
     end
 
-    MPI.Waitall(plan.recv_reqs)
+    comm_waitall(comm, recv_reqs)
 
     # Step 4: Scatter received values into CPU staging buffer
     @inbounds for i in eachindex(plan.recv_rank_ids)
@@ -1168,7 +1197,7 @@ function execute_plan!(plan::DenseTransposeVectorPlan{T,AV}, x::VectorMPI{T,AV})
         end
     end
 
-    MPI.Waitall(plan.send_reqs)
+    comm_waitall(comm, send_reqs)
 
     # Step 5: Copy to output buffer (no-op if CPU, copy if GPU)
     _copy_to_output!(plan.gathered, plan.gathered_cpu)
@@ -1177,15 +1206,15 @@ function execute_plan!(plan::DenseTransposeVectorPlan{T,AV}, x::VectorMPI{T,AV})
 end
 
 """
-    get_dense_transpose_vector_plan(A::MatrixMPI{T}, x::VectorMPI{T,AV}) where {T,AV}
+    get_dense_transpose_vector_plan(A::MatrixMPI{T,B}, x::VectorMPI{T,B}) where {T,B}
 
 Get a memoized DenseTransposeVectorPlan for transpose(A) * x.
-Cache key includes array type for GPU/CPU separation.
+Cache key includes backend type for GPU/CPU separation.
 """
-function get_dense_transpose_vector_plan(A::MatrixMPI{T}, x::VectorMPI{T,AV}) where {T,AV}
-    key = (_ensure_hash(A), x.structural_hash, T, AV)
+function get_dense_transpose_vector_plan(A::MatrixMPI{T,B}, x::VectorMPI{T,B}) where {T,B}
+    key = (_ensure_hash(A), x.structural_hash, T, B)
     if haskey(_dense_transpose_vector_plan_cache, key)
-        return _dense_transpose_vector_plan_cache[key]::DenseTransposeVectorPlan{T,AV}
+        return _dense_transpose_vector_plan_cache[key]::DenseTransposeVectorPlan{T}
     end
     plan = DenseTransposeVectorPlan(A, x)
     _dense_transpose_vector_plan_cache[key] = plan
@@ -1193,21 +1222,16 @@ function get_dense_transpose_vector_plan(A::MatrixMPI{T}, x::VectorMPI{T,AV}) wh
 end
 
 """
-    Base.:*(At::Transpose{T,MatrixMPI{T,AM}}, x::VectorMPI{T,AV}) where {T,AM,AV}
+    Base.:*(At::Transpose{T,MatrixMPI{T,B}}, x::VectorMPI{T,B}) where {T,B<:HPCBackend}
 
 Compute transpose(A) * x without materializing the transpose.
 """
-function Base.:*(At::Transpose{T,MatrixMPI{T,AM}}, x::VectorMPI{T,AV}) where {T,AM,AV}
-    # Check backend consistency
-    matrix_is_cpu = AM <: Matrix
-    vector_is_cpu = AV <: Vector
-    if matrix_is_cpu != vector_is_cpu
-        error("Mixed CPU/GPU operations not supported: matrix is $(matrix_is_cpu ? "CPU" : "GPU"), vector is $(vector_is_cpu ? "CPU" : "GPU")")
-    end
-
+function Base.:*(At::Transpose{T,MatrixMPI{T,B}}, x::VectorMPI{T,B}) where {T,B<:HPCBackend}
     A = At.parent
-    comm = MPI.COMM_WORLD
-    rank = MPI.Comm_rank(comm)
+    assert_backends_compatible(A.backend, x.backend)
+
+    comm = A.backend.comm
+    rank = comm_rank(comm)
 
     plan = get_dense_transpose_vector_plan(A, x)
 
@@ -1225,7 +1249,7 @@ function Base.:*(At::Transpose{T,MatrixMPI{T,AM}}, x::VectorMPI{T,AV}) where {T,
     my_row_start = A.row_partition[rank+1]
     my_row_end = A.row_partition[rank+2] - 1
 
-    if matrix_is_cpu
+    if A.backend.device isa DeviceCPU
         # CPU path
         local_gathered = @view plan.gathered_cpu[my_row_start:my_row_end]
         partial_result = transpose(A.A) * local_gathered
@@ -1236,11 +1260,11 @@ function Base.:*(At::Transpose{T,MatrixMPI{T,AM}}, x::VectorMPI{T,AV}) where {T,
         local_gathered_gpu = similar(A.A, length(local_gathered))
         copyto!(local_gathered_gpu, Array(local_gathered))
         partial_result_gpu = transpose(A.A) * local_gathered_gpu
-        partial_result = Array(partial_result_gpu)  # Need CPU for MPI.Allreduce
+        partial_result = Array(partial_result_gpu)  # Need CPU for Allreduce
     end
 
     # Allreduce to sum contributions from all ranks
-    full_result = MPI.Allreduce(partial_result, MPI.SUM, comm)
+    full_result = comm_allreduce(comm, partial_result, +)
 
     # Extract our portion according to col_partition
     my_col_start = A.col_partition[rank+1]
@@ -1248,13 +1272,14 @@ function Base.:*(At::Transpose{T,MatrixMPI{T,AM}}, x::VectorMPI{T,AV}) where {T,
     local_result_cpu = full_result[my_col_start:my_col_end]
 
     # Copy to GPU if needed
-    local_result = vector_is_cpu ? local_result_cpu : copyto!(similar(x.v, length(local_result_cpu)), local_result_cpu)
+    local_result = (A.backend.device isa DeviceCPU) ? local_result_cpu : copyto!(similar(x.v, length(local_result_cpu)), local_result_cpu)
 
     # Create result vector (partition is immutable, no need to copy)
-    y = VectorMPI{T,AV}(
+    y = VectorMPI{T,B}(
         plan.result_partition_hash,
         plan.result_partition,
-        local_result
+        local_result,
+        A.backend
     )
     return y
 end
@@ -1277,22 +1302,22 @@ end
 # ============================================================================
 
 """
-    Base.:*(At::TransposedMatrixMPI{T}, B::MatrixMPI{T}) where T
+    Base.:*(At::TransposedMatrixMPI{T,B}, Bmat::MatrixMPI{T,B}) where {T,B}
 
 Compute transpose(A) * B for dense matrices.
 Uses column-by-column multiplication via transpose(A) * b_col.
 """
-function Base.:*(At::TransposedMatrixMPI{T}, B::MatrixMPI{T}) where T
+function Base.:*(At::TransposedMatrixMPI{T,B}, Bmat::MatrixMPI{T,B}) where {T,B}
     A = At.parent
-    n = size(B, 2)
+    assert_backends_compatible(A.backend, Bmat.backend)
+    n = size(Bmat, 2)
 
-    comm = MPI.COMM_WORLD
-    rank = MPI.Comm_rank(comm)
+    rank = comm_rank(A.backend.comm)
 
     # Multiply column by column using existing transpose(A) * vector
-    columns = Vector{VectorMPI{T}}(undef, n)
+    columns = Vector{VectorMPI{T,B}}(undef, n)
     for k in 1:n
-        b_col = B[:, k]
+        b_col = Bmat[:, k]
         columns[k] = transpose(A) * b_col
     end
 
@@ -1306,41 +1331,41 @@ function Base.:*(At::TransposedMatrixMPI{T}, B::MatrixMPI{T}) where T
         local_result[:, k] = Array(columns[k].v)  # Ensure CPU for MatrixMPI_local
     end
 
-    return MatrixMPI_local(local_result)
+    return MatrixMPI_local(local_result, A.backend)
 end
 
 # Scalar multiplication for MatrixMPI
 
 """
-    Base.:*(a::Number, A::MatrixMPI{T}) where T
+    Base.:*(a::Number, A::MatrixMPI{T,B}) where {T,B}
 
 Scalar times dense matrix.
 """
-function Base.:*(a::Number, A::MatrixMPI{T}) where T
+function Base.:*(a::Number, A::MatrixMPI{T,B}) where {T,B}
     RT = promote_type(typeof(a), T)
-    return MatrixMPI{RT}(A.structural_hash, A.row_partition, A.col_partition, RT.(a .* A.A))
+    return MatrixMPI{RT,B}(A.structural_hash, A.row_partition, A.col_partition, RT.(a .* A.A), A.backend)
 end
 
 """
-    Base.:*(A::MatrixMPI{T}, a::Number) where T
+    Base.:*(A::MatrixMPI{T,B}, a::Number) where {T,B}
 
 Dense matrix times scalar.
 """
-Base.:*(A::MatrixMPI{T}, a::Number) where T = a * A
+Base.:*(A::MatrixMPI{T,B}, a::Number) where {T,B} = a * A
 
 """
-    Base.:*(a::Number, At::TransposedMatrixMPI{T}) where T
+    Base.:*(a::Number, At::TransposedMatrixMPI{T,B}) where {T,B}
 
 Scalar times transposed dense matrix.
 """
-Base.:*(a::Number, At::TransposedMatrixMPI{T}) where T = transpose(a * At.parent)
+Base.:*(a::Number, At::TransposedMatrixMPI{T,B}) where {T,B} = transpose(a * At.parent)
 
 """
-    Base.:*(At::TransposedMatrixMPI{T}, a::Number) where T
+    Base.:*(At::TransposedMatrixMPI{T,B}, a::Number) where {T,B}
 
 Transposed dense matrix times scalar.
 """
-Base.:*(At::TransposedMatrixMPI{T}, a::Number) where T = transpose(At.parent * a)
+Base.:*(At::TransposedMatrixMPI{T,B}, a::Number) where {T,B} = transpose(At.parent * a)
 
 # Utility methods for MatrixMPI
 
@@ -1361,75 +1386,73 @@ Base.eltype(::MatrixMPI{T}) where T = T
 Base.eltype(::Type{MatrixMPI{T}}) where T = T
 
 """
-    Base.sum(A::MatrixMPI{T}; dims=nothing) where T
+    Base.sum(A::MatrixMPI{T,B}; dims=nothing) where {T,B}
 
 Compute the sum of all elements in the distributed matrix.
 If dims is specified, sum along that dimension.
 """
-function Base.sum(A::MatrixMPI{T}; dims=nothing) where T
-    comm = MPI.COMM_WORLD
+function Base.sum(A::MatrixMPI{T,B}; dims=nothing) where {T,B}
+    comm = A.backend.comm
 
     if dims === nothing
         # Sum all elements
         local_sum = sum(A.A; init=zero(T))
-        return MPI.Allreduce(local_sum, MPI.SUM, comm)
+        return comm_allreduce(comm, local_sum, +)
     elseif dims == 1
         # Sum along rows (each rank has some rows, result is a row vector)
         # Each rank computes column sums of its local rows
         local_colsums = sum(A.A, dims=1)
         # Reduce across all ranks
-        global_colsums = MPI.Allreduce(local_colsums, MPI.SUM, comm)
+        global_colsums = comm_allreduce(comm, local_colsums, +)
         return global_colsums
     elseif dims == 2
         # Sum along columns (result is distributed column vector)
         local_rowsums = sum(A.A, dims=2)
         # Result inherits row partition from A
-        return MatrixMPI{T,typeof(A.A)}(A.structural_hash, A.row_partition, A.col_partition, local_rowsums)
+        return MatrixMPI{T,B}(A.structural_hash, A.row_partition, A.col_partition, local_rowsums, A.backend)
     else
         error("dims must be nothing, 1, or 2")
     end
 end
 
 """
-    LinearAlgebra.norm(A::MatrixMPI{T}, p::Real=2) where T
+    LinearAlgebra.norm(A::MatrixMPI{T,B}, p::Real=2) where {T,B}
 
 Compute the p-norm of A treated as a vector of elements.
 - `p=2` (default): Frobenius norm
 - `p=1`: Sum of absolute values
 - `p=Inf`: Maximum absolute value
 """
-function LinearAlgebra.norm(A::MatrixMPI{T}, p::Real=2) where T
-    comm = MPI.COMM_WORLD
+function LinearAlgebra.norm(A::MatrixMPI{T,B}, p::Real=2) where {T,B}
+    comm = A.backend.comm
     local_vals = A.A
 
     if p == 2
         local_sum = sum(abs2, local_vals; init=zero(real(T)))
-        global_sum = MPI.Allreduce(local_sum, MPI.SUM, comm)
+        global_sum = comm_allreduce(comm, local_sum, +)
         return sqrt(global_sum)
     elseif p == 1
         local_sum = sum(abs, local_vals; init=zero(real(T)))
-        return MPI.Allreduce(local_sum, MPI.SUM, comm)
+        return comm_allreduce(comm, local_sum, +)
     elseif p == Inf
         local_max = isempty(local_vals) ? zero(real(T)) : maximum(abs, local_vals)
-        return MPI.Allreduce(local_max, MPI.MAX, comm)
+        return comm_allreduce(comm, local_max, max)
     else
         local_sum = sum(x -> abs(x)^p, local_vals; init=zero(real(T)))
-        global_sum = MPI.Allreduce(local_sum, MPI.SUM, comm)
+        global_sum = comm_allreduce(comm, local_sum, +)
         return global_sum^(1 / p)
     end
 end
 
 """
-    LinearAlgebra.opnorm(A::MatrixMPI{T}, p::Real=1) where T
+    LinearAlgebra.opnorm(A::MatrixMPI{T,B}, p::Real=1) where {T,B}
 
 Compute the induced operator norm of dense matrix A.
 - `p=1`: Maximum absolute column sum
 - `p=Inf`: Maximum absolute row sum
 """
-function LinearAlgebra.opnorm(A::MatrixMPI{T}, p::Real=1) where T
-    comm = MPI.COMM_WORLD
-    nranks = MPI.Comm_size(comm)
-    rank = MPI.Comm_rank(comm)
+function LinearAlgebra.opnorm(A::MatrixMPI{T,B}, p::Real=1) where {T,B}
+    comm = A.backend.comm
 
     if p == Inf
         # Maximum absolute row sum
@@ -1440,7 +1463,7 @@ function LinearAlgebra.opnorm(A::MatrixMPI{T}, p::Real=1) where T
             row_sum = sum(abs, @view A.A[i, :]; init=zero(real(T)))
             local_max = max(local_max, row_sum)
         end
-        return MPI.Allreduce(local_max, MPI.MAX, comm)
+        return comm_allreduce(comm, local_max, max)
 
     elseif p == 1
         # Maximum absolute column sum
@@ -1449,7 +1472,7 @@ function LinearAlgebra.opnorm(A::MatrixMPI{T}, p::Real=1) where T
         for j in 1:ncols
             local_col_sums[j] = sum(abs, @view A.A[:, j]; init=zero(real(T)))
         end
-        global_col_sums = MPI.Allreduce(local_col_sums, MPI.SUM, comm)
+        global_col_sums = comm_allreduce(comm, local_col_sums, +)
         return maximum(global_col_sums; init=zero(real(T)))
 
     else
@@ -1460,7 +1483,7 @@ end
 # mapslices for MatrixMPI
 
 """
-    Base.mapslices(f, A::MatrixMPI{T}; dims) where T
+    Base.mapslices(f, A::MatrixMPI{T,B}; dims) where {T,B}
 
 Apply function f to slices of distributed matrix A along dimension dims.
 
@@ -1471,15 +1494,16 @@ Returns a MatrixMPI with the results.
 
 # Example
 ```julia
-A = MatrixMPI(randn(5,3))
+backend = backend_cpu_mpi(MPI.COMM_WORLD)
+A = MatrixMPI(randn(5,3), backend)
 # Apply function to each row, returning 2-element result
 B = mapslices(x -> [norm(x), maximum(x)], A; dims=2)  # Returns 5×2 MatrixMPI
 ```
 """
-function Base.mapslices(f, A::MatrixMPI{T}; dims) where T
-    comm = MPI.COMM_WORLD
-    rank = MPI.Comm_rank(comm)
-    nranks = MPI.Comm_size(comm)
+function Base.mapslices(f, A::MatrixMPI{T,B}; dims) where {T,B}
+    comm = A.backend.comm
+    rank = comm_rank(comm)
+    nranks = comm_size(comm)
 
     if dims == 2
         # Apply f to each row - LOCAL operation (rows are distributed)
@@ -1496,7 +1520,7 @@ function Base.mapslices(f, A::MatrixMPI{T}; dims) where T
             A.row_partition, new_col_partition, size(local_result), comm)
 
         RT = eltype(local_result)
-        return MatrixMPI{RT}(new_hash, A.row_partition, new_col_partition, local_result)
+        return MatrixMPI{RT,B}(new_hash, A.row_partition, new_col_partition, local_result, A.backend)
 
     elseif dims == 1
         # Apply f to each column - REQUIRES MPI (columns span ranks)
@@ -1506,10 +1530,12 @@ function Base.mapslices(f, A::MatrixMPI{T}; dims) where T
         results = Vector{Any}(undef, n)
         for j in 1:n
             # Gather full column j from all ranks
+            # Convert to CPU for MPI communication (no-op for CPU arrays)
             local_col = A.A[:, j]
+            local_col_cpu = local_col isa Vector ? local_col : Vector(local_col)
             counts = Int32[A.row_partition[r+1] - A.row_partition[r] for r in 1:nranks]
             full_col = Vector{T}(undef, m_global)
-            MPI.Allgatherv!(local_col, MPI.VBuffer(full_col, counts), comm)
+            comm_allgatherv!(comm, local_col_cpu, MPI.VBuffer(full_col, counts))
 
             # Apply f to full column
             results[j] = f(full_col)
@@ -1531,7 +1557,7 @@ function Base.mapslices(f, A::MatrixMPI{T}; dims) where T
             new_row_partition, new_col_partition, size(local_result), comm)
 
         RT = eltype(local_result)
-        return MatrixMPI{RT}(new_hash, new_row_partition, new_col_partition, local_result)
+        return MatrixMPI{RT,B}(new_hash, new_row_partition, new_col_partition, local_result, A.backend)
     else
         error("dims must be 1 or 2")
     end
@@ -1555,11 +1581,11 @@ Communication plan for repartitioning a MatrixMPI to a new row partition.
 - `send_rank_ids::Vector{Int}`: Ranks we send rows to (0-indexed)
 - `send_row_ranges::Vector{UnitRange{Int}}`: For each rank, range of local rows to send
 - `send_bufs::Vector{Matrix{T}}`: Pre-allocated send buffers
-- `send_reqs::Vector{MPI.Request}`: Pre-allocated send request handles
+- `send_reqs::Vector{Any}`: Pre-allocated send request handles
 - `recv_rank_ids::Vector{Int}`: Ranks we receive rows from (0-indexed)
 - `recv_row_counts::Vector{Int}`: Number of rows to receive from each rank
 - `recv_bufs::Vector{Matrix{T}}`: Pre-allocated receive buffers
-- `recv_reqs::Vector{MPI.Request}`: Pre-allocated receive request handles
+- `recv_reqs::Vector{Any}`: Pre-allocated receive request handles
 - `recv_dst_ranges::Vector{UnitRange{Int}}`: Destination row ranges in result for each recv
 - `local_src_range::UnitRange{Int}`: Source row range for local copy
 - `local_dst_range::UnitRange{Int}`: Destination row range for local copy
@@ -1573,11 +1599,11 @@ mutable struct DenseRepartitionPlan{T}
     send_rank_ids::Vector{Int}
     send_row_ranges::Vector{UnitRange{Int}}
     send_bufs::Vector{Matrix{T}}
-    send_reqs::Vector{MPI.Request}
+    send_reqs::Vector{Any}
     recv_rank_ids::Vector{Int}
     recv_row_counts::Vector{Int}
     recv_bufs::Vector{Matrix{T}}
-    recv_reqs::Vector{MPI.Request}
+    recv_reqs::Vector{Any}
     recv_dst_ranges::Vector{UnitRange{Int}}
     local_src_range::UnitRange{Int}
     local_dst_range::UnitRange{Int}
@@ -1589,7 +1615,7 @@ mutable struct DenseRepartitionPlan{T}
 end
 
 """
-    DenseRepartitionPlan(A::MatrixMPI{T}, p::Vector{Int}) where T
+    DenseRepartitionPlan(A::MatrixMPI{T,B}, p::Vector{Int}) where {T,B}
 
 Create a communication plan to repartition `A` to have row partition `p`.
 The col_partition remains unchanged.
@@ -1600,10 +1626,10 @@ The plan computes:
 3. Pre-allocates all buffers for allocation-free execution
 4. Computes the result structural hash eagerly
 """
-function DenseRepartitionPlan(A::MatrixMPI{T}, p::Vector{Int}) where T
-    comm = MPI.COMM_WORLD
-    rank = MPI.Comm_rank(comm)
-    nranks = MPI.Comm_size(comm)
+function DenseRepartitionPlan(A::MatrixMPI{T,B}, p::Vector{Int}) where {T,B}
+    comm = A.backend.comm
+    rank = comm_rank(comm)
+    nranks = comm_size(comm)
 
     # Source partition info
     src_start = A.row_partition[rank+1]
@@ -1638,7 +1664,7 @@ function DenseRepartitionPlan(A::MatrixMPI{T}, p::Vector{Int}) where T
 
     # Step 2: Exchange counts via Alltoall
     send_counts = Int32[haskey(send_row_ranges_map, r) ? length(send_row_ranges_map[r]) : 0 for r in 0:(nranks-1)]
-    recv_counts_raw = MPI.Alltoall(MPI.UBuffer(send_counts, 1), comm)
+    recv_counts_raw = comm_alltoall(comm, MPI.UBuffer(send_counts, 1))
 
     # Step 3: Build send/recv structures
     send_rank_ids = Int[]
@@ -1690,8 +1716,8 @@ function DenseRepartitionPlan(A::MatrixMPI{T}, p::Vector{Int}) where T
     # Pre-allocate buffers
     send_bufs = [Matrix{T}(undef, length(r), ncols) for r in send_row_ranges]
     recv_bufs = [Matrix{T}(undef, c, ncols) for c in recv_row_counts]
-    send_reqs = Vector{MPI.Request}(undef, length(send_rank_ids))
-    recv_reqs = Vector{MPI.Request}(undef, length(recv_rank_ids))
+    send_reqs = Vector{Any}(undef, length(send_rank_ids))
+    recv_reqs = Vector{Any}(undef, length(recv_rank_ids))
 
     # Compute result structural hash eagerly
     result_local_size = (result_local_nrows, ncols)
@@ -1707,13 +1733,13 @@ function DenseRepartitionPlan(A::MatrixMPI{T}, p::Vector{Int}) where T
 end
 
 """
-    execute_plan!(plan::DenseRepartitionPlan{T}, A::MatrixMPI{T,AM}) where {T,AM}
+    execute_plan!(plan::DenseRepartitionPlan{T}, A::MatrixMPI{T,B}) where {T,B}
 
 Execute a dense repartition plan to redistribute rows from A to a new partition.
-Returns a new MatrixMPI with the target row partition, preserving the array type (CPU/GPU).
+Returns a new MatrixMPI with the target row partition, preserving the backend.
 """
-function execute_plan!(plan::DenseRepartitionPlan{T}, A::MatrixMPI{T,AM}) where {T,AM}
-    comm = MPI.COMM_WORLD
+function execute_plan!(plan::DenseRepartitionPlan{T}, A::MatrixMPI{T,B}) where {T,B}
+    comm = A.backend.comm
 
     # Get CPU version of input for MPI operations
     A_cpu = _ensure_cpu(A.A)
@@ -1727,20 +1753,24 @@ function execute_plan!(plan::DenseRepartitionPlan{T}, A::MatrixMPI{T,AM}) where 
     end
 
     # Step 2: Fill send buffers and send (from CPU staging)
+    send_reqs = []
     @inbounds for i in eachindex(plan.send_rank_ids)
         r = plan.send_rank_ids[i]
         row_range = plan.send_row_ranges[i]
         buf = plan.send_bufs[i]
         buf .= @view A_cpu[row_range, :]
-        plan.send_reqs[i] = MPI.Isend(vec(buf), comm; dest=r, tag=93)
+        req = comm_isend(comm, vec(buf), r, 93)
+        push!(send_reqs, req)
     end
 
     # Step 3: Post receives
+    recv_reqs = []
     @inbounds for i in eachindex(plan.recv_rank_ids)
-        plan.recv_reqs[i] = MPI.Irecv!(vec(plan.recv_bufs[i]), comm; source=plan.recv_rank_ids[i], tag=93)
+        req = comm_irecv!(comm, vec(plan.recv_bufs[i]), plan.recv_rank_ids[i], 93)
+        push!(recv_reqs, req)
     end
 
-    MPI.Waitall(plan.recv_reqs)
+    comm_waitall(comm, recv_reqs)
 
     # Step 4: Copy received rows into result
     @inbounds for i in eachindex(plan.recv_rank_ids)
@@ -1749,23 +1779,23 @@ function execute_plan!(plan::DenseRepartitionPlan{T}, A::MatrixMPI{T,AM}) where 
         result_cpu[dst_range, :] = buf
     end
 
-    MPI.Waitall(plan.send_reqs)
+    comm_waitall(comm, send_reqs)
 
     # Copy result back to target array type using dispatch (no type checks)
     result_A = _matrix_to_backend(result_cpu, A.A)
 
-    return MatrixMPI{T,typeof(result_A)}(plan.result_structural_hash, plan.result_row_partition, plan.result_col_partition, result_A)
+    return MatrixMPI{T,B}(plan.result_structural_hash, plan.result_row_partition, plan.result_col_partition, result_A, A.backend)
 end
 
 """
-    get_repartition_plan(A::MatrixMPI{T}, p::Vector{Int}) where T
+    get_repartition_plan(A::MatrixMPI{T,B}, p::Vector{Int}) where {T,B}
 
 Get a memoized DenseRepartitionPlan for repartitioning `A` to row partition `p`.
 The plan is cached based on the structural hash of A and the target partition hash.
 """
-function get_repartition_plan(A::MatrixMPI{T}, p::Vector{Int}) where T
+function get_repartition_plan(A::MatrixMPI{T,B}, p::Vector{Int}) where {T,B}
     target_hash = compute_partition_hash(p)
-    key = (_ensure_hash(A), target_hash, T)
+    key = (_ensure_hash(A), target_hash, T, B)
     if haskey(_repartition_plan_cache, key)
         return _repartition_plan_cache[key]::DenseRepartitionPlan{T}
     end
@@ -1807,34 +1837,34 @@ end
 # ============================================================================
 
 """
-    Base.:*(α::Number, A::MatrixMPI{T,AM}) where {T,AM}
+    Base.:*(α::Number, A::MatrixMPI{T,B}) where {T,B<:HPCBackend}
 
 Scalar-matrix multiplication. GPU-compatible: uses the underlying array's
 multiplication which dispatches to GPU kernels.
 """
-function Base.:*(α::Number, A::MatrixMPI{T,AM}) where {T,AM}
+function Base.:*(α::Number, A::MatrixMPI{T,B}) where {T,B<:HPCBackend}
     new_A = T(α) * A.A
-    MatrixMPI{T,typeof(new_A)}(nothing, A.row_partition, A.col_partition, new_A)
+    MatrixMPI{T,B}(nothing, A.row_partition, A.col_partition, new_A, A.backend)
 end
 
 """
-    Base.:*(A::MatrixMPI{T,AM}, α::Number) where {T,AM}
+    Base.:*(A::MatrixMPI{T,B}, α::Number) where {T,B<:HPCBackend}
 
 Matrix-scalar multiplication. GPU-compatible.
 """
-function Base.:*(A::MatrixMPI{T,AM}, α::Number) where {T,AM}
+function Base.:*(A::MatrixMPI{T,B}, α::Number) where {T,B<:HPCBackend}
     new_A = A.A * T(α)
-    MatrixMPI{T,typeof(new_A)}(nothing, A.row_partition, A.col_partition, new_A)
+    MatrixMPI{T,B}(nothing, A.row_partition, A.col_partition, new_A, A.backend)
 end
 
 """
-    Base.:/(A::MatrixMPI{T,AM}, α::Number) where {T,AM}
+    Base.:/(A::MatrixMPI{T,B}, α::Number) where {T,B<:HPCBackend}
 
 Matrix-scalar division. GPU-compatible.
 """
-function Base.:/(A::MatrixMPI{T,AM}, α::Number) where {T,AM}
+function Base.:/(A::MatrixMPI{T,B}, α::Number) where {T,B<:HPCBackend}
     new_A = A.A / T(α)
-    MatrixMPI{T,typeof(new_A)}(nothing, A.row_partition, A.col_partition, new_A)
+    MatrixMPI{T,B}(nothing, A.row_partition, A.col_partition, new_A, A.backend)
 end
 
 # Broadcasting: scalar .* matrix - redirect to scalar * matrix

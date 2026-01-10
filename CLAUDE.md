@@ -103,9 +103,10 @@ Sparse matrices remain on CPU (Julia's `SparseMatrixCSC` doesn't support GPU arr
 
 ### Extension Files
 
-- `ext/LinearAlgebraMPIMetalExt.jl` - Metal extension with `mtl()` and `cpu()` functions
-- `ext/LinearAlgebraMPICUDAExt.jl` - CUDA extension with `cu()` and `cpu()` functions, plus cuDSS multi-GPU solver
+- `ext/LinearAlgebraMPIMetalExt.jl` - Metal extension with DeviceMetal backend support
+- `ext/LinearAlgebraMPICUDAExt.jl` - CUDA extension with DeviceCUDA backend support and cuDSS multi-GPU solver
 - Loaded automatically when `using Metal` or `using CUDA` before `using LinearAlgebraMPI`
+- Use `to_backend(obj, target_backend)` to convert between backends
 
 ### CUDA-Specific: cuDSS Multi-GPU Solver
 

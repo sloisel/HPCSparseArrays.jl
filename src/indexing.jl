@@ -76,9 +76,11 @@ v = VectorMPI([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0])
 w = v[3:6]  # Returns VectorMPI with elements [3.0, 4.0, 5.0, 6.0]
 ```
 """
-function Base.getindex(v::VectorMPI{T}, rng::UnitRange{Int}) where T
-    comm = MPI.COMM_WORLD
-    rank = MPI.Comm_rank(comm)
+function Base.getindex(v::VectorMPI{T,B}, rng::UnitRange{Int}) where {T, B<:HPCBackend}
+    backend = v.backend
+    comm = backend.comm
+    device = backend.device
+    rank = comm_rank(comm)
 
     n = length(v)
     if first(rng) < 1 || last(rng) > n
@@ -87,9 +89,9 @@ function Base.getindex(v::VectorMPI{T}, rng::UnitRange{Int}) where T
 
     if isempty(rng)
         # Empty range - return empty VectorMPI
-        new_partition = ones(Int, MPI.Comm_size(comm) + 1)
+        new_partition = ones(Int, comm_size(comm) + 1)
         hash = compute_partition_hash(new_partition)
-        return VectorMPI{T}(hash, new_partition, T[])
+        return VectorMPI{T,B}(hash, new_partition, similar(v.v, 0), backend)
     end
 
     # Compute new partition (local computation, no communication)
@@ -109,13 +111,13 @@ function Base.getindex(v::VectorMPI{T}, rng::UnitRange{Int}) where T
         local_end = intersect_end - my_start + 1
         local_v = v.v[local_start:local_end]
     else
-        local_v = T[]
+        local_v = similar(v.v, 0)
     end
 
     # Compute hash (requires Allgather for consistency)
     hash = compute_partition_hash(new_partition)
 
-    return VectorMPI{T}(hash, new_partition, local_v)
+    return VectorMPI{T,B}(hash, new_partition, local_v, backend)
 end
 
 """
@@ -138,9 +140,10 @@ v[2:3] = 0.0  # Set elements 2 and 3 to zero
 v[2:3] = [5.0, 6.0]  # Set elements 2 and 3 to 5.0 and 6.0
 ```
 """
-function Base.setindex!(v::VectorMPI{T}, val::Number, rng::UnitRange{Int}) where T
-    comm = MPI.COMM_WORLD
-    rank = MPI.Comm_rank(comm)
+function Base.setindex!(v::VectorMPI{T,B}, val::Number, rng::UnitRange{Int}) where {T, B<:HPCBackend}
+    backend = v.backend
+    comm = backend.comm
+    rank = comm_rank(comm)
 
     n = length(v)
     if first(rng) < 1 || last(rng) > n
@@ -168,9 +171,10 @@ function Base.setindex!(v::VectorMPI{T}, val::Number, rng::UnitRange{Int}) where
     return val
 end
 
-function Base.setindex!(v::VectorMPI{T}, vals::AbstractVector, rng::UnitRange{Int}) where T
-    comm = MPI.COMM_WORLD
-    rank = MPI.Comm_rank(comm)
+function Base.setindex!(v::VectorMPI{T,B}, vals::AbstractVector, rng::UnitRange{Int}) where {T, B<:HPCBackend}
+    backend = v.backend
+    comm = backend.comm
+    rank = comm_rank(comm)
 
     n = length(v)
     if first(rng) < 1 || last(rng) > n
@@ -223,9 +227,10 @@ src = VectorMPI([10.0, 20.0, 30.0])
 v[2:4] = src  # Each rank only writes to elements it owns
 ```
 """
-function Base.setindex!(v::VectorMPI{T}, src::VectorMPI, rng::UnitRange{Int}) where T
-    comm = MPI.COMM_WORLD
-    rank = MPI.Comm_rank(comm)
+function Base.setindex!(v::VectorMPI{T,B}, src::VectorMPI, rng::UnitRange{Int}) where {T, B<:HPCBackend}
+    backend = v.backend
+    comm = backend.comm
+    rank = comm_rank(comm)
 
     n = length(v)
     if first(rng) < 1 || last(rng) > n
@@ -292,10 +297,12 @@ A = MatrixMPI(reshape(1.0:12.0, 4, 3))
 B = A[2:3, 1:2]  # Returns MatrixMPI submatrix
 ```
 """
-function Base.getindex(A::MatrixMPI{T}, row_rng::UnitRange{Int}, col_rng::UnitRange{Int}) where T
-    comm = MPI.COMM_WORLD
-    rank = MPI.Comm_rank(comm)
-    nranks = MPI.Comm_size(comm)
+function Base.getindex(A::MatrixMPI{T,B}, row_rng::UnitRange{Int}, col_rng::UnitRange{Int}) where {T, B<:HPCBackend}
+    backend = A.backend
+    comm = backend.comm
+    device = backend.device
+    rank = comm_rank(comm)
+    nranks = comm_size(comm)
 
     m, n = size(A)
     if first(row_rng) < 1 || last(row_rng) > m
@@ -314,7 +321,7 @@ function Base.getindex(A::MatrixMPI{T}, row_rng::UnitRange{Int}, col_rng::UnitRa
         new_col_partition = uniform_partition(new_ncols, nranks)
         my_local_rows = new_row_partition[rank + 2] - new_row_partition[rank + 1]
         hash = compute_dense_structural_hash(new_row_partition, new_col_partition, (new_nrows, new_ncols), comm)
-        return MatrixMPI{T}(hash, new_row_partition, new_col_partition, Matrix{T}(undef, my_local_rows, new_ncols))
+        return MatrixMPI{T,B}(hash, new_row_partition, new_col_partition, similar(A.A, my_local_rows, new_ncols), backend)
     end
 
     # Compute new row partition (local computation, no communication)
@@ -337,13 +344,13 @@ function Base.getindex(A::MatrixMPI{T}, row_rng::UnitRange{Int}, col_rng::UnitRa
         local_row_end = intersect_end - my_row_start + 1
         local_A = A.A[local_row_start:local_row_end, col_rng]
     else
-        local_A = Matrix{T}(undef, 0, new_ncols)
+        local_A = similar(A.A, 0, new_ncols)
     end
 
     # Compute hash (requires Allgather for consistency)
     hash = compute_dense_structural_hash(new_row_partition, new_col_partition, size(local_A), comm)
 
-    return MatrixMPI{T}(hash, new_row_partition, new_col_partition, local_A)
+    return MatrixMPI{T,B}(hash, new_row_partition, new_col_partition, local_A, backend)
 end
 
 # Convenience: A[row_rng, :] - all columns
@@ -382,7 +389,7 @@ function Base.getindex(A::MatrixMPI{T}, ::Colon, k::Integer) where T
     end
     # Extract local portion of column k
     local_col = A.A[:, k]
-    return VectorMPI_local(local_col)
+    return VectorMPI_local(local_col, A.backend)
 end
 
 """
@@ -400,9 +407,9 @@ A[2:3, 1:2] = 0.0  # Set submatrix to zeros
 A[2:3, 1:2] = [5.0 6.0; 7.0 8.0]  # Set submatrix to specific values
 ```
 """
-function Base.setindex!(A::MatrixMPI{T}, val::Number, row_rng::UnitRange{Int}, col_rng::UnitRange{Int}) where T
-    comm = MPI.COMM_WORLD
-    rank = MPI.Comm_rank(comm)
+function Base.setindex!(A::MatrixMPI{T,B}, val::Number, row_rng::UnitRange{Int}, col_rng::UnitRange{Int}) where {T, B<:HPCBackend}
+    comm = A.backend.comm
+    rank = comm_rank(comm)
 
     m, n = size(A)
     if first(row_rng) < 1 || last(row_rng) > m
@@ -432,9 +439,9 @@ function Base.setindex!(A::MatrixMPI{T}, val::Number, row_rng::UnitRange{Int}, c
     return val
 end
 
-function Base.setindex!(A::MatrixMPI{T}, vals::AbstractMatrix, row_rng::UnitRange{Int}, col_rng::UnitRange{Int}) where T
-    comm = MPI.COMM_WORLD
-    rank = MPI.Comm_rank(comm)
+function Base.setindex!(A::MatrixMPI{T,B}, vals::AbstractMatrix, row_rng::UnitRange{Int}, col_rng::UnitRange{Int}) where {T, B<:HPCBackend}
+    comm = A.backend.comm
+    rank = comm_rank(comm)
 
     m, n = size(A)
     if first(row_rng) < 1 || last(row_rng) > m
@@ -489,10 +496,10 @@ src = MatrixMPI(ones(3, 2))
 A[2:4, 1:2] = src  # Each rank only writes to rows it owns
 ```
 """
-function Base.setindex!(A::MatrixMPI{T}, src::MatrixMPI, row_rng::UnitRange{Int}, col_rng::UnitRange{Int}) where T
-    comm = MPI.COMM_WORLD
-    rank = MPI.Comm_rank(comm)
-    nranks = MPI.Comm_size(comm)
+function Base.setindex!(A::MatrixMPI{T,B}, src::MatrixMPI, row_rng::UnitRange{Int}, col_rng::UnitRange{Int}) where {T, B<:HPCBackend}
+    comm = A.backend.comm
+    rank = comm_rank(comm)
+    nranks = comm_size(comm)
 
     m, n = size(A)
     if first(row_rng) < 1 || last(row_rng) > m
@@ -595,7 +602,7 @@ function Base.setindex!(A::MatrixMPI{T}, src::MatrixMPI, row_rng::UnitRange{Int}
         for r in 0:(nranks-1)
             if recv_counts[r + 1] > 0 && r != rank
                 recv_bufs[r] = Matrix{T}(undef, recv_counts[r + 1], ncols_src)
-                push!(recv_reqs, MPI.Irecv!(recv_bufs[r], comm; source=r, tag=60))
+                push!(recv_reqs, comm_irecv!(comm, recv_bufs[r], r, 60))
             end
         end
 
@@ -608,12 +615,12 @@ function Base.setindex!(A::MatrixMPI{T}, src::MatrixMPI, row_rng::UnitRange{Int}
                 local_start = first(rng) - my_src_start + 1
                 local_end = last(rng) - my_src_start + 1
                 send_bufs[r] = convert.(T, src.A[local_start:local_end, 1:ncols_src])
-                push!(send_reqs, MPI.Isend(send_bufs[r], comm; dest=r, tag=60))
+                push!(send_reqs, comm_isend(comm, send_bufs[r], r, 60))
             end
         end
 
         # Wait for receives
-        MPI.Waitall(recv_reqs)
+        comm_waitall(comm, recv_reqs)
 
         # Assemble the aligned local matrix
         if num_rows_needed > 0
@@ -647,7 +654,7 @@ function Base.setindex!(A::MatrixMPI{T}, src::MatrixMPI, row_rng::UnitRange{Int}
         end
 
         # Wait for sends
-        MPI.Waitall(send_reqs)
+        comm_waitall(comm, send_reqs)
     end
 
     return src
@@ -681,10 +688,12 @@ A = SparseMatrixMPI{Float64}(sprand(10, 10, 0.3))
 B = A[3:7, 2:8]  # Returns SparseMatrixMPI submatrix
 ```
 """
-function Base.getindex(A::SparseMatrixMPI{T,Ti,AV}, row_rng::UnitRange{Int}, col_rng::UnitRange{Int}) where {T,Ti,AV}
-    comm = MPI.COMM_WORLD
-    rank = MPI.Comm_rank(comm)
-    nranks = MPI.Comm_size(comm)
+function Base.getindex(A::SparseMatrixMPI{T,Ti,Bk}, row_rng::UnitRange{Int}, col_rng::UnitRange{Int}) where {T,Ti,Bk<:HPCBackend}
+    backend = A.backend
+    comm = backend.comm
+    device = backend.device
+    rank = comm_rank(comm)
+    nranks = comm_size(comm)
 
     m, n = size(A)
     if first(row_rng) < 1 || last(row_rng) > m
@@ -707,11 +716,11 @@ function Base.getindex(A::SparseMatrixMPI{T,Ti,AV}, row_rng::UnitRange{Int}, col
         hash = compute_structural_hash(new_row_partition, Int[], empty_AT, comm)
         # Convert to target backend
         empty_nzval = _values_to_backend(empty_AT.nzval, A.nzval)
-        rowptr_target = _to_target_backend(empty_AT.colptr, AV)
-        colval_target = _to_target_backend(empty_AT.rowval, AV)
-        return SparseMatrixMPI{T,Ti,AV}(hash, new_row_partition, new_col_partition, Int[],
+        rowptr_target = _to_target_device(empty_AT.colptr, device)
+        colval_target = _to_target_device(empty_AT.rowval, device)
+        return SparseMatrixMPI{T,Ti,Bk}(hash, new_row_partition, new_col_partition, Int[],
                                    empty_AT.colptr, empty_AT.rowval, empty_nzval,
-                                   my_local_rows, 0, nothing, nothing, rowptr_target, colval_target)
+                                   my_local_rows, 0, nothing, nothing, rowptr_target, colval_target, backend)
     end
 
     # Compute new row partition (local computation, no communication)
@@ -822,12 +831,12 @@ function Base.getindex(A::SparseMatrixMPI{T,Ti,AV}, row_rng::UnitRange{Int}, col
 
     # Convert to target backend (no-op for CPU, copy for GPU)
     result_nzval = _values_to_backend(new_AT.nzval, A.nzval)
-    rowptr_target = _to_target_backend(new_AT.colptr, AV)
-    colval_target = _to_target_backend(new_AT.rowval, AV)
+    rowptr_target = _to_target_device(new_AT.colptr, device)
+    colval_target = _to_target_device(new_AT.rowval, device)
 
-    return SparseMatrixMPI{T,Ti,AV}(hash, new_row_partition, new_col_partition, final_col_indices,
+    return SparseMatrixMPI{T,Ti,Bk}(hash, new_row_partition, new_col_partition, final_col_indices,
                                new_AT.colptr, new_AT.rowval, result_nzval, local_nrows,
-                               length(final_col_indices), nothing, nothing, rowptr_target, colval_target)
+                               length(final_col_indices), nothing, nothing, rowptr_target, colval_target, backend)
 end
 
 # Convenience: A[row_rng, :] - all columns
@@ -860,14 +869,15 @@ A = SparseMatrixMPI{Float64}(sprand(10, 5, 0.3))
 v = A[:, 2]  # Get second column as VectorMPI
 ```
 """
-function Base.getindex(A::SparseMatrixMPI{T,Ti,AV}, ::Colon, k::Integer) where {T,Ti,AV}
+function Base.getindex(A::SparseMatrixMPI{T,Ti,Bk}, ::Colon, k::Integer) where {T,Ti,Bk<:HPCBackend}
     m, n = size(A)
     if k < 1 || k > n
         error("SparseMatrixMPI column index out of bounds: k=$k, ncols=$n")
     end
 
-    comm = MPI.COMM_WORLD
-    rank = MPI.Comm_rank(comm)
+    backend = A.backend
+    comm = backend.comm
+    rank = comm_rank(comm)
 
     # Get local row range
     my_row_start = A.row_partition[rank + 1]
@@ -900,7 +910,7 @@ function Base.getindex(A::SparseMatrixMPI{T,Ti,AV}, ::Colon, k::Integer) where {
     # Convert to same backend as input sparse matrix
     local_col = _values_to_backend(local_col_cpu, A.nzval)
 
-    return VectorMPI_local(local_col)
+    return VectorMPI_local(local_col, A.backend)
 end
 
 """
@@ -919,9 +929,9 @@ A[2:4, 3:5] = 0.0  # Set all structural nonzeros in range to zero
 A[2:4, 3:5] = 2.0  # Set all structural nonzeros in range to 2.0
 ```
 """
-function Base.setindex!(A::SparseMatrixMPI{T}, val::Number, row_rng::UnitRange{Int}, col_rng::UnitRange{Int}) where T
-    comm = MPI.COMM_WORLD
-    rank = MPI.Comm_rank(comm)
+function Base.setindex!(A::SparseMatrixMPI{T,Ti,Bk}, val::Number, row_rng::UnitRange{Int}, col_rng::UnitRange{Int}) where {T,Ti,Bk<:HPCBackend}
+    comm = A.backend.comm
+    rank = comm_rank(comm)
 
     m, n = size(A)
     if first(row_rng) < 1 || last(row_rng) > m
@@ -997,10 +1007,10 @@ src = SparseMatrixMPI{Float64}(sparse([1, 2], [1, 2], [1.0, 2.0], 3, 3))
 A[2:4, 1:3] = src  # Each rank only writes to rows it owns
 ```
 """
-function Base.setindex!(A::SparseMatrixMPI{T}, src::SparseMatrixMPI{T}, row_rng::UnitRange{Int}, col_rng::UnitRange{Int}) where T
-    comm = MPI.COMM_WORLD
-    rank = MPI.Comm_rank(comm)
-    nranks = MPI.Comm_size(comm)
+function Base.setindex!(A::SparseMatrixMPI{T,Ti,Bk}, src::SparseMatrixMPI{T,Ti,Bk}, row_rng::UnitRange{Int}, col_rng::UnitRange{Int}) where {T,Ti,Bk<:HPCBackend}
+    comm = A.backend.comm
+    rank = comm_rank(comm)
+    nranks = comm_size(comm)
 
     m, n = size(A)
     if first(row_rng) < 1 || last(row_rng) > m
@@ -1152,7 +1162,7 @@ function Base.setindex!(A::SparseMatrixMPI{T}, src::SparseMatrixMPI{T}, row_rng:
         for r in 0:(nranks-1)
             if recv_counts[r + 1] > 0 && r != rank
                 recv_nnz_per_row[r] = Vector{Int}(undef, recv_counts[r + 1])
-                push!(recv_reqs_nnz, MPI.Irecv!(recv_nnz_per_row[r], comm; source=r, tag=70))
+                push!(recv_reqs_nnz, comm_irecv!(comm, recv_nnz_per_row[r], r, 70))
             end
         end
 
@@ -1160,11 +1170,11 @@ function Base.setindex!(A::SparseMatrixMPI{T}, src::SparseMatrixMPI{T}, row_rng:
         send_reqs_nnz = MPI.Request[]
         for r in 0:(nranks-1)
             if haskey(send_nnz_per_row, r)
-                push!(send_reqs_nnz, MPI.Isend(send_nnz_per_row[r], comm; dest=r, tag=70))
+                push!(send_reqs_nnz, comm_isend(comm, send_nnz_per_row[r], r, 70))
             end
         end
 
-        MPI.Waitall(recv_reqs_nnz)
+        comm_waitall(comm, recv_reqs_nnz)
 
         # Post receives for col indices and values
         recv_reqs_data = MPI.Request[]
@@ -1176,8 +1186,8 @@ function Base.setindex!(A::SparseMatrixMPI{T}, src::SparseMatrixMPI{T}, row_rng:
                 if total_nnz > 0
                     recv_col_indices[r] = Vector{Int}(undef, total_nnz)
                     recv_values[r] = Vector{T}(undef, total_nnz)
-                    push!(recv_reqs_data, MPI.Irecv!(recv_col_indices[r], comm; source=r, tag=71))
-                    push!(recv_reqs_data, MPI.Irecv!(recv_values[r], comm; source=r, tag=72))
+                    push!(recv_reqs_data, comm_irecv!(comm, recv_col_indices[r], r, 71))
+                    push!(recv_reqs_data, comm_irecv!(comm, recv_values[r], r, 72))
                 end
             end
         end
@@ -1186,13 +1196,13 @@ function Base.setindex!(A::SparseMatrixMPI{T}, src::SparseMatrixMPI{T}, row_rng:
         send_reqs_data = MPI.Request[]
         for r in 0:(nranks-1)
             if haskey(send_col_indices, r) && !isempty(send_col_indices[r])
-                push!(send_reqs_data, MPI.Isend(send_col_indices[r], comm; dest=r, tag=71))
-                push!(send_reqs_data, MPI.Isend(send_values[r], comm; dest=r, tag=72))
+                push!(send_reqs_data, comm_isend(comm, send_col_indices[r], r, 71))
+                push!(send_reqs_data, comm_isend(comm, send_values[r], r, 72))
             end
         end
 
-        MPI.Waitall(send_reqs_nnz)
-        MPI.Waitall(recv_reqs_data)
+        comm_waitall(comm, send_reqs_nnz)
+        comm_waitall(comm, recv_reqs_data)
 
         # Build insertions from received data and local data
         for r in 0:(nranks-1)
@@ -1238,7 +1248,7 @@ function Base.setindex!(A::SparseMatrixMPI{T}, src::SparseMatrixMPI{T}, row_rng:
             end
         end
 
-        MPI.Waitall(send_reqs_data)
+        comm_waitall(comm, send_reqs_data)
     end
 
     # First, zero out existing entries in the target region (within owned rows)
@@ -1326,10 +1336,10 @@ idx = VectorMPI([3, 1, 5, 2])
 result = v[idx]  # Returns VectorMPI with values [3.0, 1.0, 5.0, 2.0]
 ```
 """
-function Base.getindex(v::VectorMPI{T}, idx::VectorMPI{Int}) where T
-    comm = MPI.COMM_WORLD
-    rank = MPI.Comm_rank(comm)
-    nranks = MPI.Comm_size(comm)
+function Base.getindex(v::VectorMPI{T,B}, idx::VectorMPI{Int}) where {T,B<:HPCBackend}
+    comm = v.backend.comm
+    rank = comm_rank(comm)
+    nranks = comm_size(comm)
 
     n = length(v)
 
@@ -1356,7 +1366,7 @@ function Base.getindex(v::VectorMPI{T}, idx::VectorMPI{Int}) where T
 
     # Exchange counts via Alltoall
     send_counts = Int32[length(needed_from[r + 1]) for r in 0:(nranks-1)]
-    recv_counts = MPI.Alltoall(MPI.UBuffer(send_counts, 1), comm)
+    recv_counts = comm_alltoall(comm, MPI.UBuffer(send_counts, 1))
 
     # Send requested indices to each owner rank
     struct_send_reqs = MPI.Request[]
@@ -1369,7 +1379,7 @@ function Base.getindex(v::VectorMPI{T}, idx::VectorMPI{Int}) where T
             dst_indices = [t[2] for t in needed_from[r + 1]]
             recv_perm_map[r] = dst_indices
             struct_send_bufs[r] = indices
-            push!(struct_send_reqs, MPI.Isend(indices, comm; dest=r, tag=80))
+            push!(struct_send_reqs, comm_isend(comm, indices, r, 80))
         end
     end
 
@@ -1380,13 +1390,13 @@ function Base.getindex(v::VectorMPI{T}, idx::VectorMPI{Int}) where T
     for r in 0:(nranks-1)
         if recv_counts[r + 1] > 0 && r != rank
             buf = Vector{Int}(undef, recv_counts[r + 1])
-            push!(struct_recv_reqs, MPI.Irecv!(buf, comm; source=r, tag=80))
+            push!(struct_recv_reqs, comm_irecv!(comm, buf, r, 80))
             struct_recv_bufs[r] = buf
         end
     end
 
-    MPI.Waitall(struct_recv_reqs)
-    MPI.Waitall(struct_send_reqs)
+    comm_waitall(comm, struct_recv_reqs)
+    comm_waitall(comm, struct_send_reqs)
 
     # Prepare to send values
     my_v_start = v.partition[rank + 1]
@@ -1397,7 +1407,7 @@ function Base.getindex(v::VectorMPI{T}, idx::VectorMPI{Int}) where T
     for r in 0:(nranks-1)
         if send_counts[r + 1] > 0 && r != rank
             recv_bufs[r] = Vector{T}(undef, send_counts[r + 1])
-            push!(recv_reqs, MPI.Irecv!(recv_bufs[r], comm; source=r, tag=81))
+            push!(recv_reqs, comm_irecv!(comm, recv_bufs[r], r, 81))
         end
     end
 
@@ -1413,11 +1423,11 @@ function Base.getindex(v::VectorMPI{T}, idx::VectorMPI{Int}) where T
                 vals[k] = v.v[local_idx_in_v]
             end
             send_bufs[r] = vals
-            push!(send_reqs, MPI.Isend(vals, comm; dest=r, tag=81))
+            push!(send_reqs, comm_isend(comm, vals, r, 81))
         end
     end
 
-    MPI.Waitall(recv_reqs)
+    comm_waitall(comm, recv_reqs)
 
     # Assemble result
     result_v = Vector{T}(undef, n_local)
@@ -1439,10 +1449,12 @@ function Base.getindex(v::VectorMPI{T}, idx::VectorMPI{Int}) where T
         end
     end
 
-    MPI.Waitall(send_reqs)
+    comm_waitall(comm, send_reqs)
 
     # Result has same partition as idx, so same hash
-    return VectorMPI{T}(idx.structural_hash, idx.partition, result_v)
+    # Convert result to target device if needed
+    result_v_backend = _convert_array(result_v, v.backend.device)
+    return VectorMPI{T,B}(idx.structural_hash, idx.partition, result_v_backend, v.backend)
 end
 
 # ============================================================================
@@ -1468,10 +1480,10 @@ col_idx = VectorMPI([3, 1])
 result = A[row_idx, col_idx]  # Returns MatrixMPI submatrix
 ```
 """
-function Base.getindex(A::MatrixMPI{T}, row_idx::VectorMPI{Int}, col_idx::VectorMPI{Int}) where T
-    comm = MPI.COMM_WORLD
-    rank = MPI.Comm_rank(comm)
-    nranks = MPI.Comm_size(comm)
+function Base.getindex(A::MatrixMPI{T,B}, row_idx::VectorMPI{Int}, col_idx::VectorMPI{Int}) where {T,B<:HPCBackend}
+    comm = A.backend.comm
+    rank = comm_rank(comm)
+    nranks = comm_size(comm)
 
     m, n = size(A)
 
@@ -1514,7 +1526,7 @@ function Base.getindex(A::MatrixMPI{T}, row_idx::VectorMPI{Int}, col_idx::Vector
 
     # Exchange counts via Alltoall
     send_counts = Int32[length(needed_from[r + 1]) for r in 0:(nranks-1)]
-    recv_counts = MPI.Alltoall(MPI.UBuffer(send_counts, 1), comm)
+    recv_counts = comm_alltoall(comm, MPI.UBuffer(send_counts, 1))
 
     # Send requested row indices to each owner rank
     struct_send_reqs = MPI.Request[]
@@ -1527,7 +1539,7 @@ function Base.getindex(A::MatrixMPI{T}, row_idx::VectorMPI{Int}, col_idx::Vector
             dst_indices = [t[2] for t in needed_from[r + 1]]
             recv_perm_map[r] = dst_indices
             struct_send_bufs[r] = indices
-            push!(struct_send_reqs, MPI.Isend(indices, comm; dest=r, tag=82))
+            push!(struct_send_reqs, comm_isend(comm, indices, r, 82))
         end
     end
 
@@ -1538,13 +1550,13 @@ function Base.getindex(A::MatrixMPI{T}, row_idx::VectorMPI{Int}, col_idx::Vector
     for r in 0:(nranks-1)
         if recv_counts[r + 1] > 0 && r != rank
             buf = Vector{Int}(undef, recv_counts[r + 1])
-            push!(struct_recv_reqs, MPI.Irecv!(buf, comm; source=r, tag=82))
+            push!(struct_recv_reqs, comm_irecv!(comm, buf, r, 82))
             struct_recv_bufs[r] = buf
         end
     end
 
-    MPI.Waitall(struct_recv_reqs)
-    MPI.Waitall(struct_send_reqs)
+    comm_waitall(comm, struct_recv_reqs)
+    comm_waitall(comm, struct_send_reqs)
 
     # Prepare to send row data
     my_A_row_start = A.row_partition[rank + 1]
@@ -1555,7 +1567,7 @@ function Base.getindex(A::MatrixMPI{T}, row_idx::VectorMPI{Int}, col_idx::Vector
     for r in 0:(nranks-1)
         if send_counts[r + 1] > 0 && r != rank
             recv_bufs[r] = Matrix{T}(undef, send_counts[r + 1], ncols_result)
-            push!(recv_reqs, MPI.Irecv!(recv_bufs[r], comm; source=r, tag=83))
+            push!(recv_reqs, comm_irecv!(comm, recv_bufs[r], r, 83))
         end
     end
 
@@ -1574,11 +1586,11 @@ function Base.getindex(A::MatrixMPI{T}, row_idx::VectorMPI{Int}, col_idx::Vector
                 end
             end
             send_bufs[r] = data
-            push!(send_reqs, MPI.Isend(data, comm; dest=r, tag=83))
+            push!(send_reqs, comm_isend(comm, data, r, 83))
         end
     end
 
-    MPI.Waitall(recv_reqs)
+    comm_waitall(comm, recv_reqs)
 
     # Assemble result
     result_A = Matrix{T}(undef, n_local_rows, ncols_result)
@@ -1602,7 +1614,7 @@ function Base.getindex(A::MatrixMPI{T}, row_idx::VectorMPI{Int}, col_idx::Vector
         end
     end
 
-    MPI.Waitall(send_reqs)
+    comm_waitall(comm, send_reqs)
 
     # Compute column partition for result
     result_col_partition = uniform_partition(ncols_result, nranks)
@@ -1610,7 +1622,9 @@ function Base.getindex(A::MatrixMPI{T}, row_idx::VectorMPI{Int}, col_idx::Vector
     # Compute hash for result
     hash = compute_dense_structural_hash(result_row_partition, result_col_partition, size(result_A), comm)
 
-    return MatrixMPI{T}(hash, result_row_partition, result_col_partition, result_A)
+    # Convert result to target device if needed (no-op for CPU, copies to GPU for GPU backends)
+    result_A_backend = _convert_array(result_A, A.backend.device)
+    return MatrixMPI{T,B}(hash, result_row_partition, result_col_partition, result_A_backend, A.backend)
 end
 
 # ============================================================================
@@ -1637,10 +1651,10 @@ col_idx = VectorMPI([3, 1])
 result = A[row_idx, col_idx]  # Returns MatrixMPI (dense) submatrix
 ```
 """
-function Base.getindex(A::SparseMatrixMPI{T}, row_idx::VectorMPI{Int}, col_idx::VectorMPI{Int}) where T
-    comm = MPI.COMM_WORLD
-    rank = MPI.Comm_rank(comm)
-    nranks = MPI.Comm_size(comm)
+function Base.getindex(A::SparseMatrixMPI{T,Ti,Bk}, row_idx::VectorMPI{Int}, col_idx::VectorMPI{Int}) where {T,Ti,Bk<:HPCBackend}
+    comm = A.backend.comm
+    rank = comm_rank(comm)
+    nranks = comm_size(comm)
 
     m, n = size(A)
 
@@ -1689,7 +1703,7 @@ function Base.getindex(A::SparseMatrixMPI{T}, row_idx::VectorMPI{Int}, col_idx::
 
     # Exchange counts via Alltoall
     send_counts = Int32[length(needed_from[r + 1]) for r in 0:(nranks-1)]
-    recv_counts = MPI.Alltoall(MPI.UBuffer(send_counts, 1), comm)
+    recv_counts = comm_alltoall(comm, MPI.UBuffer(send_counts, 1))
 
     # Send requested row indices to each owner rank
     struct_send_reqs = MPI.Request[]
@@ -1702,7 +1716,7 @@ function Base.getindex(A::SparseMatrixMPI{T}, row_idx::VectorMPI{Int}, col_idx::
             dst_indices = [t[2] for t in needed_from[r + 1]]
             recv_perm_map[r] = dst_indices
             struct_send_bufs[r] = indices
-            push!(struct_send_reqs, MPI.Isend(indices, comm; dest=r, tag=84))
+            push!(struct_send_reqs, comm_isend(comm, indices, r, 84))
         end
     end
 
@@ -1713,13 +1727,13 @@ function Base.getindex(A::SparseMatrixMPI{T}, row_idx::VectorMPI{Int}, col_idx::
     for r in 0:(nranks-1)
         if recv_counts[r + 1] > 0 && r != rank
             buf = Vector{Int}(undef, recv_counts[r + 1])
-            push!(struct_recv_reqs, MPI.Irecv!(buf, comm; source=r, tag=84))
+            push!(struct_recv_reqs, comm_irecv!(comm, buf, r, 84))
             struct_recv_bufs[r] = buf
         end
     end
 
-    MPI.Waitall(struct_recv_reqs)
-    MPI.Waitall(struct_send_reqs)
+    comm_waitall(comm, struct_recv_reqs)
+    comm_waitall(comm, struct_send_reqs)
 
     # Prepare to send row data
     my_A_row_start = A.row_partition[rank + 1]
@@ -1747,7 +1761,7 @@ function Base.getindex(A::SparseMatrixMPI{T}, row_idx::VectorMPI{Int}, col_idx::
     for r in 0:(nranks-1)
         if send_counts[r + 1] > 0 && r != rank
             recv_bufs[r] = Matrix{T}(undef, send_counts[r + 1], ncols_result)
-            push!(recv_reqs, MPI.Irecv!(recv_bufs[r], comm; source=r, tag=85))
+            push!(recv_reqs, comm_irecv!(comm, recv_bufs[r], r, 85))
         end
     end
 
@@ -1764,11 +1778,11 @@ function Base.getindex(A::SparseMatrixMPI{T}, row_idx::VectorMPI{Int}, col_idx::
                 data[k, :] .= extract_sparse_row(local_row_in_A, col_indices, col_to_result)
             end
             send_bufs[r] = data
-            push!(send_reqs, MPI.Isend(data, comm; dest=r, tag=85))
+            push!(send_reqs, comm_isend(comm, data, r, 85))
         end
     end
 
-    MPI.Waitall(recv_reqs)
+    comm_waitall(comm, recv_reqs)
 
     # Assemble result
     result_A = zeros(T, n_local_rows, ncols_result)
@@ -1790,7 +1804,7 @@ function Base.getindex(A::SparseMatrixMPI{T}, row_idx::VectorMPI{Int}, col_idx::
         end
     end
 
-    MPI.Waitall(send_reqs)
+    comm_waitall(comm, send_reqs)
 
     # Compute column partition for result
     result_col_partition = uniform_partition(ncols_result, nranks)
@@ -1798,18 +1812,20 @@ function Base.getindex(A::SparseMatrixMPI{T}, row_idx::VectorMPI{Int}, col_idx::
     # Compute hash for result
     hash = compute_dense_structural_hash(result_row_partition, result_col_partition, size(result_A), comm)
 
-    return MatrixMPI{T}(hash, result_row_partition, result_col_partition, result_A)
+    # Convert result to target device if needed (no-op for CPU, copies to GPU for GPU backends)
+    result_A_backend = _convert_array(result_A, A.backend.device)
+    return MatrixMPI{T,Bk}(hash, result_row_partition, result_col_partition, result_A_backend, A.backend)
 end
 
 # Helper function to gather a VectorMPI to all ranks (generic version for any element type)
-function _gather_vector_to_all(v::VectorMPI{T}, comm::MPI.Comm) where T
-    rank = MPI.Comm_rank(comm)
-    nranks = MPI.Comm_size(comm)
+function _gather_vector_to_all(v::VectorMPI{T}, comm::AbstractComm) where T
+    rank = comm_rank(comm)
+    nranks = comm_size(comm)
 
     # Gather counts
     local_count = Int32(length(v.v))
     counts = Vector{Int32}(undef, nranks)
-    MPI.Allgather!(Ref(local_count), MPI.UBuffer(counts, 1), comm)
+    comm_allgather!(comm, Ref(local_count), MPI.UBuffer(counts, 1))
 
     # Compute displacements
     displs = Vector{Int32}(undef, nranks)
@@ -1822,7 +1838,7 @@ function _gather_vector_to_all(v::VectorMPI{T}, comm::MPI.Comm) where T
     result = Vector{T}(undef, total)
 
     # Allgatherv
-    MPI.Allgatherv!(v.v, MPI.VBuffer(result, counts, displs), comm)
+    comm_allgatherv!(comm, v.v, MPI.VBuffer(result, counts, displs))
 
     return result
 end
@@ -1852,10 +1868,10 @@ src = VectorMPI([30.0, 10.0, 50.0, 20.0])
 v[idx] = src  # Sets v[3]=30, v[1]=10, v[5]=50, v[2]=20
 ```
 """
-function Base.setindex!(v::VectorMPI{T}, src::VectorMPI{T}, idx::VectorMPI{Int}) where T
-    comm = MPI.COMM_WORLD
-    rank = MPI.Comm_rank(comm)
-    nranks = MPI.Comm_size(comm)
+function Base.setindex!(v::VectorMPI{T,B}, src::VectorMPI{T,B}, idx::VectorMPI{Int}) where {T,B<:HPCBackend}
+    comm = v.backend.comm
+    rank = comm_rank(comm)
+    nranks = comm_size(comm)
 
     n = length(v)
 
@@ -1890,7 +1906,7 @@ function Base.setindex!(v::VectorMPI{T}, src::VectorMPI{T}, idx::VectorMPI{Int})
 
     # Exchange counts via Alltoall
     send_counts = Int32[length(send_to[r + 1]) for r in 0:(nranks-1)]
-    recv_counts = MPI.Alltoall(MPI.UBuffer(send_counts, 1), comm)
+    recv_counts = comm_alltoall(comm, MPI.UBuffer(send_counts, 1))
 
     # Send indices to destination ranks
     struct_send_reqs = MPI.Request[]
@@ -1900,7 +1916,7 @@ function Base.setindex!(v::VectorMPI{T}, src::VectorMPI{T}, idx::VectorMPI{Int})
         if send_counts[r + 1] > 0 && r != rank
             indices = [t[1] for t in send_to[r + 1]]
             struct_send_bufs[r] = indices
-            push!(struct_send_reqs, MPI.Isend(indices, comm; dest=r, tag=90))
+            push!(struct_send_reqs, comm_isend(comm, indices, r, 90))
         end
     end
 
@@ -1911,13 +1927,13 @@ function Base.setindex!(v::VectorMPI{T}, src::VectorMPI{T}, idx::VectorMPI{Int})
     for r in 0:(nranks-1)
         if recv_counts[r + 1] > 0 && r != rank
             buf = Vector{Int}(undef, recv_counts[r + 1])
-            push!(struct_recv_reqs, MPI.Irecv!(buf, comm; source=r, tag=90))
+            push!(struct_recv_reqs, comm_irecv!(comm, buf, r, 90))
             struct_recv_bufs[r] = buf
         end
     end
 
-    MPI.Waitall(struct_recv_reqs)
-    MPI.Waitall(struct_send_reqs)
+    comm_waitall(comm, struct_recv_reqs)
+    comm_waitall(comm, struct_send_reqs)
 
     # Send values to destination ranks
     send_reqs = MPI.Request[]
@@ -1927,7 +1943,7 @@ function Base.setindex!(v::VectorMPI{T}, src::VectorMPI{T}, idx::VectorMPI{Int})
         if send_counts[r + 1] > 0 && r != rank
             values = [t[2] for t in send_to[r + 1]]
             send_bufs[r] = values
-            push!(send_reqs, MPI.Isend(values, comm; dest=r, tag=91))
+            push!(send_reqs, comm_isend(comm, values, r, 91))
         end
     end
 
@@ -1938,12 +1954,12 @@ function Base.setindex!(v::VectorMPI{T}, src::VectorMPI{T}, idx::VectorMPI{Int})
     for r in 0:(nranks-1)
         if recv_counts[r + 1] > 0 && r != rank
             buf = Vector{T}(undef, recv_counts[r + 1])
-            push!(recv_reqs, MPI.Irecv!(buf, comm; source=r, tag=91))
+            push!(recv_reqs, comm_irecv!(comm, buf, r, 91))
             recv_bufs[r] = buf
         end
     end
 
-    MPI.Waitall(recv_reqs)
+    comm_waitall(comm, recv_reqs)
 
     # Apply local assignments (from my own send_to[rank+1])
     my_v_start = v.partition[rank + 1]
@@ -1964,7 +1980,7 @@ function Base.setindex!(v::VectorMPI{T}, src::VectorMPI{T}, idx::VectorMPI{Int})
         end
     end
 
-    MPI.Waitall(send_reqs)
+    comm_waitall(comm, send_reqs)
 
     return src
 end
@@ -1994,10 +2010,10 @@ src = MatrixMPI(ones(3, 2))
 A[row_idx, col_idx] = src  # Sets A[2,3]=1, A[2,1]=1, A[4,3]=1, etc.
 ```
 """
-function Base.setindex!(A::MatrixMPI{T}, src::MatrixMPI{T}, row_idx::VectorMPI{Int}, col_idx::VectorMPI{Int}) where T
-    comm = MPI.COMM_WORLD
-    rank = MPI.Comm_rank(comm)
-    nranks = MPI.Comm_size(comm)
+function Base.setindex!(A::MatrixMPI{T,B}, src::MatrixMPI{T,B}, row_idx::VectorMPI{Int}, col_idx::VectorMPI{Int}) where {T,B<:HPCBackend}
+    comm = A.backend.comm
+    rank = comm_rank(comm)
+    nranks = comm_size(comm)
 
     m, n = size(A)
 
@@ -2047,7 +2063,7 @@ function Base.setindex!(A::MatrixMPI{T}, src::MatrixMPI{T}, row_idx::VectorMPI{I
 
     # Exchange counts via Alltoall
     send_counts = Int32[length(send_to[r + 1]) for r in 0:(nranks-1)]
-    recv_counts = MPI.Alltoall(MPI.UBuffer(send_counts, 1), comm)
+    recv_counts = comm_alltoall(comm, MPI.UBuffer(send_counts, 1))
 
     # Send row indices to destination ranks
     struct_send_reqs = MPI.Request[]
@@ -2057,7 +2073,7 @@ function Base.setindex!(A::MatrixMPI{T}, src::MatrixMPI{T}, row_idx::VectorMPI{I
         if send_counts[r + 1] > 0 && r != rank
             indices = [t[1] for t in send_to[r + 1]]
             struct_send_bufs[r] = indices
-            push!(struct_send_reqs, MPI.Isend(indices, comm; dest=r, tag=92))
+            push!(struct_send_reqs, comm_isend(comm, indices, r, 92))
         end
     end
 
@@ -2068,13 +2084,13 @@ function Base.setindex!(A::MatrixMPI{T}, src::MatrixMPI{T}, row_idx::VectorMPI{I
     for r in 0:(nranks-1)
         if recv_counts[r + 1] > 0 && r != rank
             buf = Vector{Int}(undef, recv_counts[r + 1])
-            push!(struct_recv_reqs, MPI.Irecv!(buf, comm; source=r, tag=92))
+            push!(struct_recv_reqs, comm_irecv!(comm, buf, r, 92))
             struct_recv_bufs[r] = buf
         end
     end
 
-    MPI.Waitall(struct_recv_reqs)
-    MPI.Waitall(struct_send_reqs)
+    comm_waitall(comm, struct_recv_reqs)
+    comm_waitall(comm, struct_send_reqs)
 
     # Send row data to destination ranks
     send_reqs = MPI.Request[]
@@ -2088,7 +2104,7 @@ function Base.setindex!(A::MatrixMPI{T}, src::MatrixMPI{T}, row_idx::VectorMPI{I
                 data[k, :] .= src.A[local_src_row, 1:ncols_src]
             end
             send_bufs[r] = data
-            push!(send_reqs, MPI.Isend(data, comm; dest=r, tag=93))
+            push!(send_reqs, comm_isend(comm, data, r, 93))
         end
     end
 
@@ -2099,12 +2115,12 @@ function Base.setindex!(A::MatrixMPI{T}, src::MatrixMPI{T}, row_idx::VectorMPI{I
     for r in 0:(nranks-1)
         if recv_counts[r + 1] > 0 && r != rank
             buf = Matrix{T}(undef, recv_counts[r + 1], ncols_src)
-            push!(recv_reqs, MPI.Irecv!(buf, comm; source=r, tag=93))
+            push!(recv_reqs, comm_irecv!(comm, buf, r, 93))
             recv_bufs[r] = buf
         end
     end
 
-    MPI.Waitall(recv_reqs)
+    comm_waitall(comm, recv_reqs)
 
     # Apply local assignments
     my_A_row_start = A.row_partition[rank + 1]
@@ -2129,7 +2145,7 @@ function Base.setindex!(A::MatrixMPI{T}, src::MatrixMPI{T}, row_idx::VectorMPI{I
         end
     end
 
-    MPI.Waitall(send_reqs)
+    comm_waitall(comm, send_reqs)
 
     return src
 end
@@ -2160,10 +2176,10 @@ src = MatrixMPI(ones(3, 2))
 A[row_idx, col_idx] = src  # Adds nonzeros at specified positions
 ```
 """
-function Base.setindex!(A::SparseMatrixMPI{T}, src::MatrixMPI{T}, row_idx::VectorMPI{Int}, col_idx::VectorMPI{Int}) where T
-    comm = MPI.COMM_WORLD
-    rank = MPI.Comm_rank(comm)
-    nranks = MPI.Comm_size(comm)
+function Base.setindex!(A::SparseMatrixMPI{T,Ti,Bk}, src::MatrixMPI{T}, row_idx::VectorMPI{Int}, col_idx::VectorMPI{Int}) where {T,Ti,Bk<:HPCBackend}
+    comm = A.backend.comm
+    rank = comm_rank(comm)
+    nranks = comm_size(comm)
 
     m, n = size(A)
 
@@ -2212,7 +2228,7 @@ function Base.setindex!(A::SparseMatrixMPI{T}, src::MatrixMPI{T}, row_idx::Vecto
 
     # Exchange counts via Alltoall
     send_counts = Int32[length(send_to[r + 1]) for r in 0:(nranks-1)]
-    recv_counts = MPI.Alltoall(MPI.UBuffer(send_counts, 1), comm)
+    recv_counts = comm_alltoall(comm, MPI.UBuffer(send_counts, 1))
 
     # Send row indices to destination ranks
     struct_send_reqs = MPI.Request[]
@@ -2222,7 +2238,7 @@ function Base.setindex!(A::SparseMatrixMPI{T}, src::MatrixMPI{T}, row_idx::Vecto
         if send_counts[r + 1] > 0 && r != rank
             indices = [t[1] for t in send_to[r + 1]]
             struct_send_bufs[r] = indices
-            push!(struct_send_reqs, MPI.Isend(indices, comm; dest=r, tag=94))
+            push!(struct_send_reqs, comm_isend(comm, indices, r, 94))
         end
     end
 
@@ -2233,13 +2249,13 @@ function Base.setindex!(A::SparseMatrixMPI{T}, src::MatrixMPI{T}, row_idx::Vecto
     for r in 0:(nranks-1)
         if recv_counts[r + 1] > 0 && r != rank
             buf = Vector{Int}(undef, recv_counts[r + 1])
-            push!(struct_recv_reqs, MPI.Irecv!(buf, comm; source=r, tag=94))
+            push!(struct_recv_reqs, comm_irecv!(comm, buf, r, 94))
             struct_recv_bufs[r] = buf
         end
     end
 
-    MPI.Waitall(struct_recv_reqs)
-    MPI.Waitall(struct_send_reqs)
+    comm_waitall(comm, struct_recv_reqs)
+    comm_waitall(comm, struct_send_reqs)
 
     # Send row data to destination ranks
     send_reqs = MPI.Request[]
@@ -2253,7 +2269,7 @@ function Base.setindex!(A::SparseMatrixMPI{T}, src::MatrixMPI{T}, row_idx::Vecto
                 data[k, :] .= src.A[local_src_row, 1:ncols_src]
             end
             send_bufs[r] = data
-            push!(send_reqs, MPI.Isend(data, comm; dest=r, tag=95))
+            push!(send_reqs, comm_isend(comm, data, r, 95))
         end
     end
 
@@ -2264,12 +2280,12 @@ function Base.setindex!(A::SparseMatrixMPI{T}, src::MatrixMPI{T}, row_idx::Vecto
     for r in 0:(nranks-1)
         if recv_counts[r + 1] > 0 && r != rank
             buf = Matrix{T}(undef, recv_counts[r + 1], ncols_src)
-            push!(recv_reqs, MPI.Irecv!(buf, comm; source=r, tag=95))
+            push!(recv_reqs, comm_irecv!(comm, buf, r, 95))
             recv_bufs[r] = buf
         end
     end
 
-    MPI.Waitall(recv_reqs)
+    comm_waitall(comm, recv_reqs)
 
     # Build insertions for structural modification
     insertions = Vector{Tuple{Int,Int,T}}()
@@ -2297,7 +2313,7 @@ function Base.setindex!(A::SparseMatrixMPI{T}, src::MatrixMPI{T}, row_idx::Vecto
         end
     end
 
-    MPI.Waitall(send_reqs)
+    comm_waitall(comm, send_reqs)
 
     # Apply insertions using the helper function
     if !isempty(insertions)
@@ -2332,10 +2348,10 @@ end
 Get submatrix with rows selected by VectorMPI and columns by range.
 Returns a MatrixMPI with row partition matching row_idx.partition.
 """
-function Base.getindex(A::MatrixMPI{T}, row_idx::VectorMPI{Int}, col_rng::UnitRange{Int}) where T
-    comm = MPI.COMM_WORLD
-    rank = MPI.Comm_rank(comm)
-    nranks = MPI.Comm_size(comm)
+function Base.getindex(A::MatrixMPI{T,B}, row_idx::VectorMPI{Int}, col_rng::UnitRange{Int}) where {T,B<:HPCBackend}
+    comm = A.backend.comm
+    rank = comm_rank(comm)
+    nranks = comm_size(comm)
 
     m, n = size(A)
     ncols_result = length(col_rng)
@@ -2370,13 +2386,13 @@ function Base.getindex(A::MatrixMPI{T}, row_idx::VectorMPI{Int}, col_rng::UnitRa
 
     # Exchange request counts
     send_counts = Int32[length(requests_to[r + 1]) for r in 0:(nranks-1)]
-    recv_counts = MPI.Alltoall(MPI.UBuffer(send_counts, 1), comm)
+    recv_counts = comm_alltoall(comm, MPI.UBuffer(send_counts, 1))
 
     # Send row indices we need
     send_reqs = MPI.Request[]
     for r in 0:(nranks-1)
         if send_counts[r + 1] > 0 && r != rank
-            push!(send_reqs, MPI.Isend(requests_to[r + 1], comm; dest=r, tag=100))
+            push!(send_reqs, comm_isend(comm, requests_to[r + 1], r, 100))
         end
     end
 
@@ -2386,13 +2402,13 @@ function Base.getindex(A::MatrixMPI{T}, row_idx::VectorMPI{Int}, col_rng::UnitRa
     for r in 0:(nranks-1)
         if recv_counts[r + 1] > 0 && r != rank
             buf = Vector{Int}(undef, recv_counts[r + 1])
-            push!(recv_reqs, MPI.Irecv!(buf, comm; source=r, tag=100))
+            push!(recv_reqs, comm_irecv!(comm, buf, r, 100))
             recv_bufs[r] = buf
         end
     end
 
-    MPI.Waitall(recv_reqs)
-    MPI.Waitall(send_reqs)
+    comm_waitall(comm, recv_reqs)
+    comm_waitall(comm, send_reqs)
 
     # Send requested row data
     data_send_reqs = MPI.Request[]
@@ -2408,7 +2424,7 @@ function Base.getindex(A::MatrixMPI{T}, row_idx::VectorMPI{Int}, col_rng::UnitRa
                 data[k, :] .= A.A[local_row, col_rng]
             end
             data_send_bufs[r] = data
-            push!(data_send_reqs, MPI.Isend(data, comm; dest=r, tag=101))
+            push!(data_send_reqs, comm_isend(comm, data, r, 101))
         end
     end
 
@@ -2418,12 +2434,12 @@ function Base.getindex(A::MatrixMPI{T}, row_idx::VectorMPI{Int}, col_rng::UnitRa
     for r in 0:(nranks-1)
         if send_counts[r + 1] > 0 && r != rank
             buf = Matrix{T}(undef, send_counts[r + 1], ncols_result)
-            push!(data_recv_reqs, MPI.Irecv!(buf, comm; source=r, tag=101))
+            push!(data_recv_reqs, comm_irecv!(comm, buf, r, 101))
             data_recv_bufs[r] = buf
         end
     end
 
-    MPI.Waitall(data_recv_reqs)
+    comm_waitall(comm, data_recv_reqs)
 
     # Build result matrix
     result_local = Matrix{T}(undef, n_local_result_rows, ncols_result)
@@ -2445,9 +2461,9 @@ function Base.getindex(A::MatrixMPI{T}, row_idx::VectorMPI{Int}, col_rng::UnitRa
         end
     end
 
-    MPI.Waitall(data_send_reqs)
+    comm_waitall(comm, data_send_reqs)
 
-    return MatrixMPI_local(result_local)
+    return MatrixMPI_local(result_local, A.backend)
 end
 
 """
@@ -2465,10 +2481,10 @@ end
 Get submatrix with rows selected by range and columns by VectorMPI.
 Returns a MatrixMPI with standard row partition for the given row range size.
 """
-function Base.getindex(A::MatrixMPI{T}, row_rng::UnitRange{Int}, col_idx::VectorMPI{Int}) where T
-    comm = MPI.COMM_WORLD
-    rank = MPI.Comm_rank(comm)
-    nranks = MPI.Comm_size(comm)
+function Base.getindex(A::MatrixMPI{T,B}, row_rng::UnitRange{Int}, col_idx::VectorMPI{Int}) where {T,B<:HPCBackend}
+    comm = A.backend.comm
+    rank = comm_rank(comm)
+    nranks = comm_size(comm)
 
     m, n = size(A)
     nrows_result = length(row_rng)
@@ -2499,7 +2515,7 @@ function Base.getindex(A::MatrixMPI{T}, row_rng::UnitRange{Int}, col_idx::Vector
 
     if n_local_result_rows <= 0
         result_local = Matrix{T}(undef, 0, ncols_result)
-        return MatrixMPI_local(result_local)
+        return MatrixMPI_local(result_local, A.backend)
     end
 
     # Global rows I need from A
@@ -2520,13 +2536,13 @@ function Base.getindex(A::MatrixMPI{T}, row_rng::UnitRange{Int}, col_idx::Vector
 
     # Exchange counts
     send_counts = Int32[length(requests_to[r + 1]) for r in 0:(nranks-1)]
-    recv_counts = MPI.Alltoall(MPI.UBuffer(send_counts, 1), comm)
+    recv_counts = comm_alltoall(comm, MPI.UBuffer(send_counts, 1))
 
     # Send row indices
     send_reqs = MPI.Request[]
     for r in 0:(nranks-1)
         if send_counts[r + 1] > 0 && r != rank
-            push!(send_reqs, MPI.Isend(requests_to[r + 1], comm; dest=r, tag=102))
+            push!(send_reqs, comm_isend(comm, requests_to[r + 1], r, 102))
         end
     end
 
@@ -2536,13 +2552,13 @@ function Base.getindex(A::MatrixMPI{T}, row_rng::UnitRange{Int}, col_idx::Vector
     for r in 0:(nranks-1)
         if recv_counts[r + 1] > 0 && r != rank
             buf = Vector{Int}(undef, recv_counts[r + 1])
-            push!(recv_reqs, MPI.Irecv!(buf, comm; source=r, tag=102))
+            push!(recv_reqs, comm_irecv!(comm, buf, r, 102))
             recv_bufs[r] = buf
         end
     end
 
-    MPI.Waitall(recv_reqs)
-    MPI.Waitall(send_reqs)
+    comm_waitall(comm, recv_reqs)
+    comm_waitall(comm, send_reqs)
 
     # Send row data (only the selected columns)
     data_send_reqs = MPI.Request[]
@@ -2560,7 +2576,7 @@ function Base.getindex(A::MatrixMPI{T}, row_rng::UnitRange{Int}, col_idx::Vector
                 end
             end
             data_send_bufs[r] = data
-            push!(data_send_reqs, MPI.Isend(data, comm; dest=r, tag=103))
+            push!(data_send_reqs, comm_isend(comm, data, r, 103))
         end
     end
 
@@ -2570,12 +2586,12 @@ function Base.getindex(A::MatrixMPI{T}, row_rng::UnitRange{Int}, col_idx::Vector
     for r in 0:(nranks-1)
         if send_counts[r + 1] > 0 && r != rank
             buf = Matrix{T}(undef, send_counts[r + 1], ncols_result)
-            push!(data_recv_reqs, MPI.Irecv!(buf, comm; source=r, tag=103))
+            push!(data_recv_reqs, comm_irecv!(comm, buf, r, 103))
             data_recv_bufs[r] = buf
         end
     end
 
-    MPI.Waitall(data_recv_reqs)
+    comm_waitall(comm, data_recv_reqs)
 
     # Build result
     result_local = Matrix{T}(undef, n_local_result_rows, ncols_result)
@@ -2599,9 +2615,9 @@ function Base.getindex(A::MatrixMPI{T}, row_rng::UnitRange{Int}, col_idx::Vector
         end
     end
 
-    MPI.Waitall(data_send_reqs)
+    comm_waitall(comm, data_send_reqs)
 
-    return MatrixMPI_local(result_local)
+    return MatrixMPI_local(result_local, A.backend)
 end
 
 """
@@ -2619,10 +2635,10 @@ end
 Get column vector with rows selected by VectorMPI and single column j.
 Returns a VectorMPI with partition matching row_idx.partition.
 """
-function Base.getindex(A::MatrixMPI{T}, row_idx::VectorMPI{Int}, j::Int) where T
-    comm = MPI.COMM_WORLD
-    rank = MPI.Comm_rank(comm)
-    nranks = MPI.Comm_size(comm)
+function Base.getindex(A::MatrixMPI{T,B}, row_idx::VectorMPI{Int}, j::Int) where {T,B<:HPCBackend}
+    comm = A.backend.comm
+    rank = comm_rank(comm)
+    nranks = comm_size(comm)
 
     m, n = size(A)
 
@@ -2656,13 +2672,13 @@ function Base.getindex(A::MatrixMPI{T}, row_idx::VectorMPI{Int}, j::Int) where T
 
     # Exchange counts
     send_counts = Int32[length(requests_to[r + 1]) for r in 0:(nranks-1)]
-    recv_counts = MPI.Alltoall(MPI.UBuffer(send_counts, 1), comm)
+    recv_counts = comm_alltoall(comm, MPI.UBuffer(send_counts, 1))
 
     # Send row indices
     send_reqs = MPI.Request[]
     for r in 0:(nranks-1)
         if send_counts[r + 1] > 0 && r != rank
-            push!(send_reqs, MPI.Isend(requests_to[r + 1], comm; dest=r, tag=104))
+            push!(send_reqs, comm_isend(comm, requests_to[r + 1], r, 104))
         end
     end
 
@@ -2672,13 +2688,13 @@ function Base.getindex(A::MatrixMPI{T}, row_idx::VectorMPI{Int}, j::Int) where T
     for r in 0:(nranks-1)
         if recv_counts[r + 1] > 0 && r != rank
             buf = Vector{Int}(undef, recv_counts[r + 1])
-            push!(recv_reqs, MPI.Irecv!(buf, comm; source=r, tag=104))
+            push!(recv_reqs, comm_irecv!(comm, buf, r, 104))
             recv_bufs[r] = buf
         end
     end
 
-    MPI.Waitall(recv_reqs)
-    MPI.Waitall(send_reqs)
+    comm_waitall(comm, recv_reqs)
+    comm_waitall(comm, send_reqs)
 
     # Send values
     val_send_reqs = MPI.Request[]
@@ -2694,7 +2710,7 @@ function Base.getindex(A::MatrixMPI{T}, row_idx::VectorMPI{Int}, j::Int) where T
                 vals[k] = A.A[local_row, j]
             end
             val_send_bufs[r] = vals
-            push!(val_send_reqs, MPI.Isend(vals, comm; dest=r, tag=105))
+            push!(val_send_reqs, comm_isend(comm, vals, r, 105))
         end
     end
 
@@ -2704,12 +2720,12 @@ function Base.getindex(A::MatrixMPI{T}, row_idx::VectorMPI{Int}, j::Int) where T
     for r in 0:(nranks-1)
         if send_counts[r + 1] > 0 && r != rank
             buf = Vector{T}(undef, send_counts[r + 1])
-            push!(val_recv_reqs, MPI.Irecv!(buf, comm; source=r, tag=105))
+            push!(val_recv_reqs, comm_irecv!(comm, buf, r, 105))
             val_recv_bufs[r] = buf
         end
     end
 
-    MPI.Waitall(val_recv_reqs)
+    comm_waitall(comm, val_recv_reqs)
 
     # Build result
     result_local = Vector{T}(undef, n_local)
@@ -2731,9 +2747,9 @@ function Base.getindex(A::MatrixMPI{T}, row_idx::VectorMPI{Int}, j::Int) where T
         end
     end
 
-    MPI.Waitall(val_send_reqs)
+    comm_waitall(comm, val_send_reqs)
 
-    return VectorMPI_local(result_local)
+    return VectorMPI_local(result_local, A.backend)
 end
 
 """
@@ -2742,10 +2758,10 @@ end
 Get row vector with single row i and columns selected by VectorMPI.
 Returns a VectorMPI with partition matching col_idx.partition.
 """
-function Base.getindex(A::MatrixMPI{T}, i::Int, col_idx::VectorMPI{Int}) where T
-    comm = MPI.COMM_WORLD
-    rank = MPI.Comm_rank(comm)
-    nranks = MPI.Comm_size(comm)
+function Base.getindex(A::MatrixMPI{T,B}, i::Int, col_idx::VectorMPI{Int}) where {T,B<:HPCBackend}
+    comm = A.backend.comm
+    rank = comm_rank(comm)
+    nranks = comm_size(comm)
 
     m, n = size(A)
 
@@ -2779,7 +2795,7 @@ function Base.getindex(A::MatrixMPI{T}, i::Int, col_idx::VectorMPI{Int}) where T
         row_data = Vector{T}(undef, length(col_indices))
     end
 
-    MPI.Bcast!(row_data, owner, comm)
+    comm_bcast!(comm, row_data, owner)
 
     # Each rank extracts its local portion based on col_idx.partition
     my_start = col_idx.partition[rank + 1]
@@ -2792,7 +2808,7 @@ function Base.getindex(A::MatrixMPI{T}, i::Int, col_idx::VectorMPI{Int}) where T
         result_local = T[]
     end
 
-    return VectorMPI_local(result_local)
+    return VectorMPI_local(result_local, A.backend)
 end
 
 # SparseMatrixMPI mixed indexing methods
@@ -2803,10 +2819,10 @@ end
 Get submatrix with rows selected by VectorMPI and columns by range.
 Returns a dense MatrixMPI with row partition matching row_idx.partition.
 """
-function Base.getindex(A::SparseMatrixMPI{T}, row_idx::VectorMPI{Int}, col_rng::UnitRange{Int}) where T
-    comm = MPI.COMM_WORLD
-    rank = MPI.Comm_rank(comm)
-    nranks = MPI.Comm_size(comm)
+function Base.getindex(A::SparseMatrixMPI{T,Ti,Bk}, row_idx::VectorMPI{Int}, col_rng::UnitRange{Int}) where {T,Ti,Bk<:HPCBackend}
+    comm = A.backend.comm
+    rank = comm_rank(comm)
+    nranks = comm_size(comm)
 
     m, n = size(A)
     ncols_result = length(col_rng)
@@ -2841,13 +2857,13 @@ function Base.getindex(A::SparseMatrixMPI{T}, row_idx::VectorMPI{Int}, col_rng::
 
     # Exchange counts
     send_counts = Int32[length(requests_to[r + 1]) for r in 0:(nranks-1)]
-    recv_counts = MPI.Alltoall(MPI.UBuffer(send_counts, 1), comm)
+    recv_counts = comm_alltoall(comm, MPI.UBuffer(send_counts, 1))
 
     # Send row indices
     send_reqs = MPI.Request[]
     for r in 0:(nranks-1)
         if send_counts[r + 1] > 0 && r != rank
-            push!(send_reqs, MPI.Isend(requests_to[r + 1], comm; dest=r, tag=106))
+            push!(send_reqs, comm_isend(comm, requests_to[r + 1], r, 106))
         end
     end
 
@@ -2857,13 +2873,13 @@ function Base.getindex(A::SparseMatrixMPI{T}, row_idx::VectorMPI{Int}, col_rng::
     for r in 0:(nranks-1)
         if recv_counts[r + 1] > 0 && r != rank
             buf = Vector{Int}(undef, recv_counts[r + 1])
-            push!(recv_reqs, MPI.Irecv!(buf, comm; source=r, tag=106))
+            push!(recv_reqs, comm_irecv!(comm, buf, r, 106))
             recv_bufs[r] = buf
         end
     end
 
-    MPI.Waitall(recv_reqs)
-    MPI.Waitall(send_reqs)
+    comm_waitall(comm, recv_reqs)
+    comm_waitall(comm, send_reqs)
 
     # Send row data
     data_send_reqs = MPI.Request[]
@@ -2886,7 +2902,7 @@ function Base.getindex(A::SparseMatrixMPI{T}, row_idx::VectorMPI{Int}, col_rng::
                 end
             end
             data_send_bufs[r] = data
-            push!(data_send_reqs, MPI.Isend(data, comm; dest=r, tag=107))
+            push!(data_send_reqs, comm_isend(comm, data, r, 107))
         end
     end
 
@@ -2896,12 +2912,12 @@ function Base.getindex(A::SparseMatrixMPI{T}, row_idx::VectorMPI{Int}, col_rng::
     for r in 0:(nranks-1)
         if send_counts[r + 1] > 0 && r != rank
             buf = Matrix{T}(undef, send_counts[r + 1], ncols_result)
-            push!(data_recv_reqs, MPI.Irecv!(buf, comm; source=r, tag=107))
+            push!(data_recv_reqs, comm_irecv!(comm, buf, r, 107))
             data_recv_bufs[r] = buf
         end
     end
 
-    MPI.Waitall(data_recv_reqs)
+    comm_waitall(comm, data_recv_reqs)
 
     # Build result
     result_local = zeros(T, n_local_result_rows, ncols_result)
@@ -2928,9 +2944,9 @@ function Base.getindex(A::SparseMatrixMPI{T}, row_idx::VectorMPI{Int}, col_rng::
         end
     end
 
-    MPI.Waitall(data_send_reqs)
+    comm_waitall(comm, data_send_reqs)
 
-    return MatrixMPI_local(result_local)
+    return MatrixMPI_local(result_local, A.backend)
 end
 
 """
@@ -2948,10 +2964,10 @@ end
 Get submatrix with rows by range and columns by VectorMPI.
 Returns a dense MatrixMPI.
 """
-function Base.getindex(A::SparseMatrixMPI{T}, row_rng::UnitRange{Int}, col_idx::VectorMPI{Int}) where T
-    comm = MPI.COMM_WORLD
-    rank = MPI.Comm_rank(comm)
-    nranks = MPI.Comm_size(comm)
+function Base.getindex(A::SparseMatrixMPI{T,Ti,Bk}, row_rng::UnitRange{Int}, col_idx::VectorMPI{Int}) where {T,Ti,Bk<:HPCBackend}
+    comm = A.backend.comm
+    rank = comm_rank(comm)
+    nranks = comm_size(comm)
 
     m, n = size(A)
     nrows_result = length(row_rng)
@@ -2980,7 +2996,7 @@ function Base.getindex(A::SparseMatrixMPI{T}, row_rng::UnitRange{Int}, col_idx::
 
     if n_local_result_rows <= 0
         result_local = Matrix{T}(undef, 0, ncols_result)
-        return MatrixMPI_local(result_local)
+        return MatrixMPI_local(result_local, A.backend)
     end
 
     # Global rows I need
@@ -3001,13 +3017,13 @@ function Base.getindex(A::SparseMatrixMPI{T}, row_rng::UnitRange{Int}, col_idx::
 
     # Exchange counts
     send_counts = Int32[length(requests_to[r + 1]) for r in 0:(nranks-1)]
-    recv_counts = MPI.Alltoall(MPI.UBuffer(send_counts, 1), comm)
+    recv_counts = comm_alltoall(comm, MPI.UBuffer(send_counts, 1))
 
     # Send/receive row indices
     send_reqs = MPI.Request[]
     for r in 0:(nranks-1)
         if send_counts[r + 1] > 0 && r != rank
-            push!(send_reqs, MPI.Isend(requests_to[r + 1], comm; dest=r, tag=108))
+            push!(send_reqs, comm_isend(comm, requests_to[r + 1], r, 108))
         end
     end
 
@@ -3016,13 +3032,13 @@ function Base.getindex(A::SparseMatrixMPI{T}, row_rng::UnitRange{Int}, col_idx::
     for r in 0:(nranks-1)
         if recv_counts[r + 1] > 0 && r != rank
             buf = Vector{Int}(undef, recv_counts[r + 1])
-            push!(recv_reqs, MPI.Irecv!(buf, comm; source=r, tag=108))
+            push!(recv_reqs, comm_irecv!(comm, buf, r, 108))
             recv_bufs[r] = buf
         end
     end
 
-    MPI.Waitall(recv_reqs)
-    MPI.Waitall(send_reqs)
+    comm_waitall(comm, recv_reqs)
+    comm_waitall(comm, send_reqs)
 
     # Send row data
     data_send_reqs = MPI.Request[]
@@ -3051,7 +3067,7 @@ function Base.getindex(A::SparseMatrixMPI{T}, row_rng::UnitRange{Int}, col_idx::
                 end
             end
             data_send_bufs[r] = data
-            push!(data_send_reqs, MPI.Isend(data, comm; dest=r, tag=109))
+            push!(data_send_reqs, comm_isend(comm, data, r, 109))
         end
     end
 
@@ -3061,12 +3077,12 @@ function Base.getindex(A::SparseMatrixMPI{T}, row_rng::UnitRange{Int}, col_idx::
     for r in 0:(nranks-1)
         if send_counts[r + 1] > 0 && r != rank
             buf = Matrix{T}(undef, send_counts[r + 1], ncols_result)
-            push!(data_recv_reqs, MPI.Irecv!(buf, comm; source=r, tag=109))
+            push!(data_recv_reqs, comm_irecv!(comm, buf, r, 109))
             data_recv_bufs[r] = buf
         end
     end
 
-    MPI.Waitall(data_recv_reqs)
+    comm_waitall(comm, data_recv_reqs)
 
     # Build result
     result_local = zeros(T, n_local_result_rows, ncols_result)
@@ -3093,9 +3109,9 @@ function Base.getindex(A::SparseMatrixMPI{T}, row_rng::UnitRange{Int}, col_idx::
         end
     end
 
-    MPI.Waitall(data_send_reqs)
+    comm_waitall(comm, data_send_reqs)
 
-    return MatrixMPI_local(result_local)
+    return MatrixMPI_local(result_local, A.backend)
 end
 
 """
@@ -3113,10 +3129,10 @@ end
 Get column vector with rows by VectorMPI and single column j.
 Returns a VectorMPI.
 """
-function Base.getindex(A::SparseMatrixMPI{T}, row_idx::VectorMPI{Int}, j::Int) where T
-    comm = MPI.COMM_WORLD
-    rank = MPI.Comm_rank(comm)
-    nranks = MPI.Comm_size(comm)
+function Base.getindex(A::SparseMatrixMPI{T,Ti,Bk}, row_idx::VectorMPI{Int}, j::Int) where {T,Ti,Bk<:HPCBackend}
+    comm = A.backend.comm
+    rank = comm_rank(comm)
+    nranks = comm_size(comm)
 
     m, n = size(A)
 
@@ -3148,13 +3164,13 @@ function Base.getindex(A::SparseMatrixMPI{T}, row_idx::VectorMPI{Int}, j::Int) w
 
     # Exchange counts
     send_counts = Int32[length(requests_to[r + 1]) for r in 0:(nranks-1)]
-    recv_counts = MPI.Alltoall(MPI.UBuffer(send_counts, 1), comm)
+    recv_counts = comm_alltoall(comm, MPI.UBuffer(send_counts, 1))
 
     # Send/receive row indices
     send_reqs = MPI.Request[]
     for r in 0:(nranks-1)
         if send_counts[r + 1] > 0 && r != rank
-            push!(send_reqs, MPI.Isend(requests_to[r + 1], comm; dest=r, tag=110))
+            push!(send_reqs, comm_isend(comm, requests_to[r + 1], r, 110))
         end
     end
 
@@ -3163,13 +3179,13 @@ function Base.getindex(A::SparseMatrixMPI{T}, row_idx::VectorMPI{Int}, j::Int) w
     for r in 0:(nranks-1)
         if recv_counts[r + 1] > 0 && r != rank
             buf = Vector{Int}(undef, recv_counts[r + 1])
-            push!(recv_reqs, MPI.Irecv!(buf, comm; source=r, tag=110))
+            push!(recv_reqs, comm_irecv!(comm, buf, r, 110))
             recv_bufs[r] = buf
         end
     end
 
-    MPI.Waitall(recv_reqs)
-    MPI.Waitall(send_reqs)
+    comm_waitall(comm, recv_reqs)
+    comm_waitall(comm, send_reqs)
 
     # Send values
     val_send_reqs = MPI.Request[]
@@ -3190,7 +3206,7 @@ function Base.getindex(A::SparseMatrixMPI{T}, row_idx::VectorMPI{Int}, j::Int) w
                 end
             end
             val_send_bufs[r] = vals
-            push!(val_send_reqs, MPI.Isend(vals, comm; dest=r, tag=111))
+            push!(val_send_reqs, comm_isend(comm, vals, r, 111))
         end
     end
 
@@ -3200,12 +3216,12 @@ function Base.getindex(A::SparseMatrixMPI{T}, row_idx::VectorMPI{Int}, j::Int) w
     for r in 0:(nranks-1)
         if send_counts[r + 1] > 0 && r != rank
             buf = Vector{T}(undef, send_counts[r + 1])
-            push!(val_recv_reqs, MPI.Irecv!(buf, comm; source=r, tag=111))
+            push!(val_recv_reqs, comm_irecv!(comm, buf, r, 111))
             val_recv_bufs[r] = buf
         end
     end
 
-    MPI.Waitall(val_recv_reqs)
+    comm_waitall(comm, val_recv_reqs)
 
     # Build result
     result_local = zeros(T, n_local)
@@ -3229,9 +3245,9 @@ function Base.getindex(A::SparseMatrixMPI{T}, row_idx::VectorMPI{Int}, j::Int) w
         end
     end
 
-    MPI.Waitall(val_send_reqs)
+    comm_waitall(comm, val_send_reqs)
 
-    return VectorMPI_local(result_local)
+    return VectorMPI_local(result_local, A.backend)
 end
 
 """
@@ -3240,10 +3256,10 @@ end
 Get row vector with single row i and columns by VectorMPI.
 Returns a VectorMPI.
 """
-function Base.getindex(A::SparseMatrixMPI{T}, i::Int, col_idx::VectorMPI{Int}) where T
-    comm = MPI.COMM_WORLD
-    rank = MPI.Comm_rank(comm)
-    nranks = MPI.Comm_size(comm)
+function Base.getindex(A::SparseMatrixMPI{T,Ti,Bk}, i::Int, col_idx::VectorMPI{Int}) where {T,Ti,Bk<:HPCBackend}
+    comm = A.backend.comm
+    rank = comm_rank(comm)
+    nranks = comm_size(comm)
 
     m, n = size(A)
 
@@ -3286,7 +3302,7 @@ function Base.getindex(A::SparseMatrixMPI{T}, i::Int, col_idx::VectorMPI{Int}) w
         row_data = Vector{T}(undef, length(col_indices_result))
     end
 
-    MPI.Bcast!(row_data, owner, comm)
+    comm_bcast!(comm, row_data, owner)
 
     # Extract local portion
     my_start = col_idx.partition[rank + 1]
@@ -3299,7 +3315,7 @@ function Base.getindex(A::SparseMatrixMPI{T}, i::Int, col_idx::VectorMPI{Int}) w
         result_local = T[]
     end
 
-    return VectorMPI_local(result_local)
+    return VectorMPI_local(result_local, A.backend)
 end
 
 # ============================================================================
@@ -3312,10 +3328,10 @@ end
 Set `A[row_idx, col_rng] = src` where rows are selected by VectorMPI and columns by range.
 The `src` must have row partition matching `row_idx.partition` and column count matching `length(col_rng)`.
 """
-function Base.setindex!(A::MatrixMPI{T}, src::MatrixMPI{T}, row_idx::VectorMPI{Int}, col_rng::UnitRange{Int}) where T
-    comm = MPI.COMM_WORLD
-    rank = MPI.Comm_rank(comm)
-    nranks = MPI.Comm_size(comm)
+function Base.setindex!(A::MatrixMPI{T,B}, src::MatrixMPI{T,B}, row_idx::VectorMPI{Int}, col_rng::UnitRange{Int}) where {T,B<:HPCBackend}
+    comm = A.backend.comm
+    rank = comm_rank(comm)
+    nranks = comm_size(comm)
 
     m, n = size(A)
     ncols_src = length(col_rng)
@@ -3357,7 +3373,7 @@ function Base.setindex!(A::MatrixMPI{T}, src::MatrixMPI{T}, row_idx::VectorMPI{I
 
     # Exchange counts via Alltoall
     send_counts = Int32[length(send_to[r + 1]) for r in 0:(nranks-1)]
-    recv_counts = MPI.Alltoall(MPI.UBuffer(send_counts, 1), comm)
+    recv_counts = comm_alltoall(comm, MPI.UBuffer(send_counts, 1))
 
     # Send row indices to destination ranks
     struct_send_reqs = MPI.Request[]
@@ -3367,7 +3383,7 @@ function Base.setindex!(A::MatrixMPI{T}, src::MatrixMPI{T}, row_idx::VectorMPI{I
         if send_counts[r + 1] > 0 && r != rank
             indices = [t[1] for t in send_to[r + 1]]
             struct_send_bufs[r] = indices
-            push!(struct_send_reqs, MPI.Isend(indices, comm; dest=r, tag=110))
+            push!(struct_send_reqs, comm_isend(comm, indices, r, 110))
         end
     end
 
@@ -3378,13 +3394,13 @@ function Base.setindex!(A::MatrixMPI{T}, src::MatrixMPI{T}, row_idx::VectorMPI{I
     for r in 0:(nranks-1)
         if recv_counts[r + 1] > 0 && r != rank
             buf = Vector{Int}(undef, recv_counts[r + 1])
-            push!(struct_recv_reqs, MPI.Irecv!(buf, comm; source=r, tag=110))
+            push!(struct_recv_reqs, comm_irecv!(comm, buf, r, 110))
             struct_recv_bufs[r] = buf
         end
     end
 
-    MPI.Waitall(struct_recv_reqs)
-    MPI.Waitall(struct_send_reqs)
+    comm_waitall(comm, struct_recv_reqs)
+    comm_waitall(comm, struct_send_reqs)
 
     # Send row data to destination ranks
     data_send_reqs = MPI.Request[]
@@ -3398,7 +3414,7 @@ function Base.setindex!(A::MatrixMPI{T}, src::MatrixMPI{T}, row_idx::VectorMPI{I
                 data[k, :] .= row_data
             end
             data_send_bufs[r] = data
-            push!(data_send_reqs, MPI.Isend(data, comm; dest=r, tag=111))
+            push!(data_send_reqs, comm_isend(comm, data, r, 111))
         end
     end
 
@@ -3409,12 +3425,12 @@ function Base.setindex!(A::MatrixMPI{T}, src::MatrixMPI{T}, row_idx::VectorMPI{I
     for r in 0:(nranks-1)
         if recv_counts[r + 1] > 0 && r != rank
             buf = Matrix{T}(undef, recv_counts[r + 1], ncols_src)
-            push!(data_recv_reqs, MPI.Irecv!(buf, comm; source=r, tag=111))
+            push!(data_recv_reqs, comm_irecv!(comm, buf, r, 111))
             data_recv_bufs[r] = buf
         end
     end
 
-    MPI.Waitall(data_recv_reqs)
+    comm_waitall(comm, data_recv_reqs)
 
     # Apply local assignments (from my own send_to[rank+1])
     my_A_start = A.row_partition[rank + 1]
@@ -3435,7 +3451,7 @@ function Base.setindex!(A::MatrixMPI{T}, src::MatrixMPI{T}, row_idx::VectorMPI{I
         end
     end
 
-    MPI.Waitall(data_send_reqs)
+    comm_waitall(comm, data_send_reqs)
 
     return src
 end
@@ -3456,10 +3472,10 @@ end
 Set `A[row_rng, col_idx] = src` where rows are selected by range and columns by VectorMPI.
 The `src` must have matching dimensions.
 """
-function Base.setindex!(A::MatrixMPI{T}, src::MatrixMPI{T}, row_rng::UnitRange{Int}, col_idx::VectorMPI{Int}) where T
-    comm = MPI.COMM_WORLD
-    rank = MPI.Comm_rank(comm)
-    nranks = MPI.Comm_size(comm)
+function Base.setindex!(A::MatrixMPI{T,B}, src::MatrixMPI{T,B}, row_rng::UnitRange{Int}, col_idx::VectorMPI{Int}) where {T,B<:HPCBackend}
+    comm = A.backend.comm
+    rank = comm_rank(comm)
+    nranks = comm_size(comm)
 
     m, n = size(A)
     nrows_src = length(row_rng)
@@ -3509,7 +3525,7 @@ function Base.setindex!(A::MatrixMPI{T}, src::MatrixMPI{T}, row_rng::UnitRange{I
 
     # Exchange counts via Alltoall
     send_counts = Int32[length(send_to[r + 1]) for r in 0:(nranks-1)]
-    recv_counts = MPI.Alltoall(MPI.UBuffer(send_counts, 1), comm)
+    recv_counts = comm_alltoall(comm, MPI.UBuffer(send_counts, 1))
 
     # Send row indices to destination ranks
     struct_send_reqs = MPI.Request[]
@@ -3519,7 +3535,7 @@ function Base.setindex!(A::MatrixMPI{T}, src::MatrixMPI{T}, row_rng::UnitRange{I
         if send_counts[r + 1] > 0 && r != rank
             indices = [t[1] for t in send_to[r + 1]]
             struct_send_bufs[r] = indices
-            push!(struct_send_reqs, MPI.Isend(indices, comm; dest=r, tag=112))
+            push!(struct_send_reqs, comm_isend(comm, indices, r, 112))
         end
     end
 
@@ -3530,13 +3546,13 @@ function Base.setindex!(A::MatrixMPI{T}, src::MatrixMPI{T}, row_rng::UnitRange{I
     for r in 0:(nranks-1)
         if recv_counts[r + 1] > 0 && r != rank
             buf = Vector{Int}(undef, recv_counts[r + 1])
-            push!(struct_recv_reqs, MPI.Irecv!(buf, comm; source=r, tag=112))
+            push!(struct_recv_reqs, comm_irecv!(comm, buf, r, 112))
             struct_recv_bufs[r] = buf
         end
     end
 
-    MPI.Waitall(struct_recv_reqs)
-    MPI.Waitall(struct_send_reqs)
+    comm_waitall(comm, struct_recv_reqs)
+    comm_waitall(comm, struct_send_reqs)
 
     # Send row data to destination ranks
     data_send_reqs = MPI.Request[]
@@ -3550,7 +3566,7 @@ function Base.setindex!(A::MatrixMPI{T}, src::MatrixMPI{T}, row_rng::UnitRange{I
                 data[k, :] .= row_data
             end
             data_send_bufs[r] = data
-            push!(data_send_reqs, MPI.Isend(data, comm; dest=r, tag=113))
+            push!(data_send_reqs, comm_isend(comm, data, r, 113))
         end
     end
 
@@ -3561,12 +3577,12 @@ function Base.setindex!(A::MatrixMPI{T}, src::MatrixMPI{T}, row_rng::UnitRange{I
     for r in 0:(nranks-1)
         if recv_counts[r + 1] > 0 && r != rank
             buf = Matrix{T}(undef, recv_counts[r + 1], ncols_src)
-            push!(data_recv_reqs, MPI.Irecv!(buf, comm; source=r, tag=113))
+            push!(data_recv_reqs, comm_irecv!(comm, buf, r, 113))
             data_recv_bufs[r] = buf
         end
     end
 
-    MPI.Waitall(data_recv_reqs)
+    comm_waitall(comm, data_recv_reqs)
 
     # Apply local assignments (from my own send_to[rank+1])
     my_A_start = A.row_partition[rank + 1]
@@ -3591,7 +3607,7 @@ function Base.setindex!(A::MatrixMPI{T}, src::MatrixMPI{T}, row_rng::UnitRange{I
         end
     end
 
-    MPI.Waitall(data_send_reqs)
+    comm_waitall(comm, data_send_reqs)
 
     return src
 end
@@ -3612,10 +3628,10 @@ end
 Set `A[row_idx, j] = src` where rows are selected by VectorMPI and a single column.
 The `src` must have partition matching `row_idx.partition`.
 """
-function Base.setindex!(A::MatrixMPI{T}, src::VectorMPI{T}, row_idx::VectorMPI{Int}, j::Integer) where T
-    comm = MPI.COMM_WORLD
-    rank = MPI.Comm_rank(comm)
-    nranks = MPI.Comm_size(comm)
+function Base.setindex!(A::MatrixMPI{T,B}, src::VectorMPI{T,B}, row_idx::VectorMPI{Int}, j::Integer) where {T,B<:HPCBackend}
+    comm = A.backend.comm
+    rank = comm_rank(comm)
+    nranks = comm_size(comm)
 
     m, n = size(A)
 
@@ -3652,7 +3668,7 @@ function Base.setindex!(A::MatrixMPI{T}, src::VectorMPI{T}, row_idx::VectorMPI{I
 
     # Exchange counts via Alltoall
     send_counts = Int32[length(send_to[r + 1]) for r in 0:(nranks-1)]
-    recv_counts = MPI.Alltoall(MPI.UBuffer(send_counts, 1), comm)
+    recv_counts = comm_alltoall(comm, MPI.UBuffer(send_counts, 1))
 
     # Send row indices to destination ranks
     struct_send_reqs = MPI.Request[]
@@ -3662,7 +3678,7 @@ function Base.setindex!(A::MatrixMPI{T}, src::VectorMPI{T}, row_idx::VectorMPI{I
         if send_counts[r + 1] > 0 && r != rank
             indices = [t[1] for t in send_to[r + 1]]
             struct_send_bufs[r] = indices
-            push!(struct_send_reqs, MPI.Isend(indices, comm; dest=r, tag=114))
+            push!(struct_send_reqs, comm_isend(comm, indices, r, 114))
         end
     end
 
@@ -3673,13 +3689,13 @@ function Base.setindex!(A::MatrixMPI{T}, src::VectorMPI{T}, row_idx::VectorMPI{I
     for r in 0:(nranks-1)
         if recv_counts[r + 1] > 0 && r != rank
             buf = Vector{Int}(undef, recv_counts[r + 1])
-            push!(struct_recv_reqs, MPI.Irecv!(buf, comm; source=r, tag=114))
+            push!(struct_recv_reqs, comm_irecv!(comm, buf, r, 114))
             struct_recv_bufs[r] = buf
         end
     end
 
-    MPI.Waitall(struct_recv_reqs)
-    MPI.Waitall(struct_send_reqs)
+    comm_waitall(comm, struct_recv_reqs)
+    comm_waitall(comm, struct_send_reqs)
 
     # Send values to destination ranks
     data_send_reqs = MPI.Request[]
@@ -3689,7 +3705,7 @@ function Base.setindex!(A::MatrixMPI{T}, src::VectorMPI{T}, row_idx::VectorMPI{I
         if send_counts[r + 1] > 0 && r != rank
             values = [t[2] for t in send_to[r + 1]]
             data_send_bufs[r] = values
-            push!(data_send_reqs, MPI.Isend(values, comm; dest=r, tag=115))
+            push!(data_send_reqs, comm_isend(comm, values, r, 115))
         end
     end
 
@@ -3700,12 +3716,12 @@ function Base.setindex!(A::MatrixMPI{T}, src::VectorMPI{T}, row_idx::VectorMPI{I
     for r in 0:(nranks-1)
         if recv_counts[r + 1] > 0 && r != rank
             buf = Vector{T}(undef, recv_counts[r + 1])
-            push!(data_recv_reqs, MPI.Irecv!(buf, comm; source=r, tag=115))
+            push!(data_recv_reqs, comm_irecv!(comm, buf, r, 115))
             data_recv_bufs[r] = buf
         end
     end
 
-    MPI.Waitall(data_recv_reqs)
+    comm_waitall(comm, data_recv_reqs)
 
     # Apply local assignments (from my own send_to[rank+1])
     my_A_start = A.row_partition[rank + 1]
@@ -3726,7 +3742,7 @@ function Base.setindex!(A::MatrixMPI{T}, src::VectorMPI{T}, row_idx::VectorMPI{I
         end
     end
 
-    MPI.Waitall(data_send_reqs)
+    comm_waitall(comm, data_send_reqs)
 
     return src
 end
@@ -3737,10 +3753,10 @@ end
 Set `A[i, col_idx] = src` where a single row and columns selected by VectorMPI.
 The `src` must have partition matching `col_idx.partition`.
 """
-function Base.setindex!(A::MatrixMPI{T}, src::VectorMPI{T}, i::Integer, col_idx::VectorMPI{Int}) where T
-    comm = MPI.COMM_WORLD
-    rank = MPI.Comm_rank(comm)
-    nranks = MPI.Comm_size(comm)
+function Base.setindex!(A::MatrixMPI{T,B}, src::VectorMPI{T,B}, i::Integer, col_idx::VectorMPI{Int}) where {T,B<:HPCBackend}
+    comm = A.backend.comm
+    rank = comm_rank(comm)
+    nranks = comm_size(comm)
 
     m, n = size(A)
 
@@ -3793,10 +3809,10 @@ end
 Set `A[row_idx, col_rng] = src` where rows are selected by VectorMPI and columns by range.
 The `src` must have row partition matching `row_idx.partition` and column count matching `length(col_rng)`.
 """
-function Base.setindex!(A::SparseMatrixMPI{T}, src::MatrixMPI{T}, row_idx::VectorMPI{Int}, col_rng::UnitRange{Int}) where T
-    comm = MPI.COMM_WORLD
-    rank = MPI.Comm_rank(comm)
-    nranks = MPI.Comm_size(comm)
+function Base.setindex!(A::SparseMatrixMPI{T,Ti,Bk}, src::MatrixMPI{T}, row_idx::VectorMPI{Int}, col_rng::UnitRange{Int}) where {T,Ti,Bk<:HPCBackend}
+    comm = A.backend.comm
+    rank = comm_rank(comm)
+    nranks = comm_size(comm)
 
     m, n = size(A)
     ncols_src = length(col_rng)
@@ -3837,7 +3853,7 @@ function Base.setindex!(A::SparseMatrixMPI{T}, src::MatrixMPI{T}, row_idx::Vecto
 
     # Exchange counts via Alltoall
     send_counts = Int32[length(send_to[r + 1]) for r in 0:(nranks-1)]
-    recv_counts = MPI.Alltoall(MPI.UBuffer(send_counts, 1), comm)
+    recv_counts = comm_alltoall(comm, MPI.UBuffer(send_counts, 1))
 
     # Send row indices to destination ranks
     struct_send_reqs = MPI.Request[]
@@ -3847,7 +3863,7 @@ function Base.setindex!(A::SparseMatrixMPI{T}, src::MatrixMPI{T}, row_idx::Vecto
         if send_counts[r + 1] > 0 && r != rank
             indices = [t[1] for t in send_to[r + 1]]
             struct_send_bufs[r] = indices
-            push!(struct_send_reqs, MPI.Isend(indices, comm; dest=r, tag=120))
+            push!(struct_send_reqs, comm_isend(comm, indices, r, 120))
         end
     end
 
@@ -3858,13 +3874,13 @@ function Base.setindex!(A::SparseMatrixMPI{T}, src::MatrixMPI{T}, row_idx::Vecto
     for r in 0:(nranks-1)
         if recv_counts[r + 1] > 0 && r != rank
             buf = Vector{Int}(undef, recv_counts[r + 1])
-            push!(struct_recv_reqs, MPI.Irecv!(buf, comm; source=r, tag=120))
+            push!(struct_recv_reqs, comm_irecv!(comm, buf, r, 120))
             struct_recv_bufs[r] = buf
         end
     end
 
-    MPI.Waitall(struct_recv_reqs)
-    MPI.Waitall(struct_send_reqs)
+    comm_waitall(comm, struct_recv_reqs)
+    comm_waitall(comm, struct_send_reqs)
 
     # Send row data to destination ranks
     send_reqs = MPI.Request[]
@@ -3878,7 +3894,7 @@ function Base.setindex!(A::SparseMatrixMPI{T}, src::MatrixMPI{T}, row_idx::Vecto
                 data[k, :] .= src.A[local_src_row, 1:ncols_src]
             end
             send_bufs[r] = data
-            push!(send_reqs, MPI.Isend(data, comm; dest=r, tag=121))
+            push!(send_reqs, comm_isend(comm, data, r, 121))
         end
     end
 
@@ -3889,12 +3905,12 @@ function Base.setindex!(A::SparseMatrixMPI{T}, src::MatrixMPI{T}, row_idx::Vecto
     for r in 0:(nranks-1)
         if recv_counts[r + 1] > 0 && r != rank
             buf = Matrix{T}(undef, recv_counts[r + 1], ncols_src)
-            push!(recv_reqs, MPI.Irecv!(buf, comm; source=r, tag=121))
+            push!(recv_reqs, comm_irecv!(comm, buf, r, 121))
             recv_bufs[r] = buf
         end
     end
 
-    MPI.Waitall(recv_reqs)
+    comm_waitall(comm, recv_reqs)
 
     # Build insertions for structural modification
     insertions = Vector{Tuple{Int,Int,T}}()
@@ -3922,7 +3938,7 @@ function Base.setindex!(A::SparseMatrixMPI{T}, src::MatrixMPI{T}, row_idx::Vecto
         end
     end
 
-    MPI.Waitall(send_reqs)
+    comm_waitall(comm, send_reqs)
 
     # Apply insertions using the helper function
     if !isempty(insertions)
@@ -3962,10 +3978,10 @@ end
 
 Set `A[row_rng, col_idx] = src` where rows are selected by range and columns by VectorMPI.
 """
-function Base.setindex!(A::SparseMatrixMPI{T}, src::MatrixMPI{T}, row_rng::UnitRange{Int}, col_idx::VectorMPI{Int}) where T
-    comm = MPI.COMM_WORLD
-    rank = MPI.Comm_rank(comm)
-    nranks = MPI.Comm_size(comm)
+function Base.setindex!(A::SparseMatrixMPI{T,Ti,Bk}, src::MatrixMPI{T}, row_rng::UnitRange{Int}, col_idx::VectorMPI{Int}) where {T,Ti,Bk<:HPCBackend}
+    comm = A.backend.comm
+    rank = comm_rank(comm)
+    nranks = comm_size(comm)
 
     m, n = size(A)
     nrows_src = length(row_rng)
@@ -4011,7 +4027,7 @@ function Base.setindex!(A::SparseMatrixMPI{T}, src::MatrixMPI{T}, row_rng::UnitR
 
     # Exchange counts via Alltoall
     send_counts = Int32[length(send_to[r + 1]) for r in 0:(nranks-1)]
-    recv_counts = MPI.Alltoall(MPI.UBuffer(send_counts, 1), comm)
+    recv_counts = comm_alltoall(comm, MPI.UBuffer(send_counts, 1))
 
     # Send row indices to destination ranks
     struct_send_reqs = MPI.Request[]
@@ -4021,7 +4037,7 @@ function Base.setindex!(A::SparseMatrixMPI{T}, src::MatrixMPI{T}, row_rng::UnitR
         if send_counts[r + 1] > 0 && r != rank
             indices = [t[1] for t in send_to[r + 1]]
             struct_send_bufs[r] = indices
-            push!(struct_send_reqs, MPI.Isend(indices, comm; dest=r, tag=122))
+            push!(struct_send_reqs, comm_isend(comm, indices, r, 122))
         end
     end
 
@@ -4032,13 +4048,13 @@ function Base.setindex!(A::SparseMatrixMPI{T}, src::MatrixMPI{T}, row_rng::UnitR
     for r in 0:(nranks-1)
         if recv_counts[r + 1] > 0 && r != rank
             buf = Vector{Int}(undef, recv_counts[r + 1])
-            push!(struct_recv_reqs, MPI.Irecv!(buf, comm; source=r, tag=122))
+            push!(struct_recv_reqs, comm_irecv!(comm, buf, r, 122))
             struct_recv_bufs[r] = buf
         end
     end
 
-    MPI.Waitall(struct_recv_reqs)
-    MPI.Waitall(struct_send_reqs)
+    comm_waitall(comm, struct_recv_reqs)
+    comm_waitall(comm, struct_send_reqs)
 
     # Send row data to destination ranks
     send_reqs = MPI.Request[]
@@ -4052,7 +4068,7 @@ function Base.setindex!(A::SparseMatrixMPI{T}, src::MatrixMPI{T}, row_rng::UnitR
                 data[k, :] .= src.A[local_src_row, :]
             end
             send_bufs[r] = data
-            push!(send_reqs, MPI.Isend(data, comm; dest=r, tag=123))
+            push!(send_reqs, comm_isend(comm, data, r, 123))
         end
     end
 
@@ -4063,12 +4079,12 @@ function Base.setindex!(A::SparseMatrixMPI{T}, src::MatrixMPI{T}, row_rng::UnitR
     for r in 0:(nranks-1)
         if recv_counts[r + 1] > 0 && r != rank
             buf = Matrix{T}(undef, recv_counts[r + 1], ncols_src)
-            push!(recv_reqs, MPI.Irecv!(buf, comm; source=r, tag=123))
+            push!(recv_reqs, comm_irecv!(comm, buf, r, 123))
             recv_bufs[r] = buf
         end
     end
 
-    MPI.Waitall(recv_reqs)
+    comm_waitall(comm, recv_reqs)
 
     # Build insertions for structural modification
     insertions = Vector{Tuple{Int,Int,T}}()
@@ -4095,7 +4111,7 @@ function Base.setindex!(A::SparseMatrixMPI{T}, src::MatrixMPI{T}, row_rng::UnitR
         end
     end
 
-    MPI.Waitall(send_reqs)
+    comm_waitall(comm, send_reqs)
 
     # Apply insertions using the helper function
     if !isempty(insertions)
@@ -4136,10 +4152,10 @@ end
 Set `A[row_idx, j] = src` where rows are selected by VectorMPI and a single column.
 The `src` must have partition matching `row_idx.partition`.
 """
-function Base.setindex!(A::SparseMatrixMPI{T}, src::VectorMPI{T}, row_idx::VectorMPI{Int}, j::Integer) where T
-    comm = MPI.COMM_WORLD
-    rank = MPI.Comm_rank(comm)
-    nranks = MPI.Comm_size(comm)
+function Base.setindex!(A::SparseMatrixMPI{T,Ti,Bk}, src::VectorMPI{T}, row_idx::VectorMPI{Int}, j::Integer) where {T,Ti,Bk<:HPCBackend}
+    comm = A.backend.comm
+    rank = comm_rank(comm)
+    nranks = comm_size(comm)
 
     m, n = size(A)
 
@@ -4176,7 +4192,7 @@ function Base.setindex!(A::SparseMatrixMPI{T}, src::VectorMPI{T}, row_idx::Vecto
 
     # Exchange counts via Alltoall
     send_counts = Int32[length(send_to[r + 1]) for r in 0:(nranks-1)]
-    recv_counts = MPI.Alltoall(MPI.UBuffer(send_counts, 1), comm)
+    recv_counts = comm_alltoall(comm, MPI.UBuffer(send_counts, 1))
 
     # Send row indices to destination ranks
     struct_send_reqs = MPI.Request[]
@@ -4186,7 +4202,7 @@ function Base.setindex!(A::SparseMatrixMPI{T}, src::VectorMPI{T}, row_idx::Vecto
         if send_counts[r + 1] > 0 && r != rank
             indices = [t[1] for t in send_to[r + 1]]
             struct_send_bufs[r] = indices
-            push!(struct_send_reqs, MPI.Isend(indices, comm; dest=r, tag=124))
+            push!(struct_send_reqs, comm_isend(comm, indices, r, 124))
         end
     end
 
@@ -4197,13 +4213,13 @@ function Base.setindex!(A::SparseMatrixMPI{T}, src::VectorMPI{T}, row_idx::Vecto
     for r in 0:(nranks-1)
         if recv_counts[r + 1] > 0 && r != rank
             buf = Vector{Int}(undef, recv_counts[r + 1])
-            push!(struct_recv_reqs, MPI.Irecv!(buf, comm; source=r, tag=124))
+            push!(struct_recv_reqs, comm_irecv!(comm, buf, r, 124))
             struct_recv_bufs[r] = buf
         end
     end
 
-    MPI.Waitall(struct_recv_reqs)
-    MPI.Waitall(struct_send_reqs)
+    comm_waitall(comm, struct_recv_reqs)
+    comm_waitall(comm, struct_send_reqs)
 
     # Send values to destination ranks
     data_send_reqs = MPI.Request[]
@@ -4213,7 +4229,7 @@ function Base.setindex!(A::SparseMatrixMPI{T}, src::VectorMPI{T}, row_idx::Vecto
         if send_counts[r + 1] > 0 && r != rank
             values = [t[2] for t in send_to[r + 1]]
             data_send_bufs[r] = values
-            push!(data_send_reqs, MPI.Isend(values, comm; dest=r, tag=125))
+            push!(data_send_reqs, comm_isend(comm, values, r, 125))
         end
     end
 
@@ -4224,12 +4240,12 @@ function Base.setindex!(A::SparseMatrixMPI{T}, src::VectorMPI{T}, row_idx::Vecto
     for r in 0:(nranks-1)
         if recv_counts[r + 1] > 0 && r != rank
             buf = Vector{T}(undef, recv_counts[r + 1])
-            push!(data_recv_reqs, MPI.Irecv!(buf, comm; source=r, tag=125))
+            push!(data_recv_reqs, comm_irecv!(comm, buf, r, 125))
             data_recv_bufs[r] = buf
         end
     end
 
-    MPI.Waitall(data_recv_reqs)
+    comm_waitall(comm, data_recv_reqs)
 
     # Build insertions for structural modification
     insertions = Vector{Tuple{Int,Int,T}}()
@@ -4250,7 +4266,7 @@ function Base.setindex!(A::SparseMatrixMPI{T}, src::VectorMPI{T}, row_idx::Vecto
         end
     end
 
-    MPI.Waitall(data_send_reqs)
+    comm_waitall(comm, data_send_reqs)
 
     # Apply insertions using the helper function
     if !isempty(insertions)
@@ -4281,10 +4297,10 @@ end
 Set `A[i, col_idx] = src` where a single row and columns selected by VectorMPI.
 The `src` must have partition matching `col_idx.partition`.
 """
-function Base.setindex!(A::SparseMatrixMPI{T}, src::VectorMPI{T}, i::Integer, col_idx::VectorMPI{Int}) where T
-    comm = MPI.COMM_WORLD
-    rank = MPI.Comm_rank(comm)
-    nranks = MPI.Comm_size(comm)
+function Base.setindex!(A::SparseMatrixMPI{T,Ti,Bk}, src::VectorMPI{T}, i::Integer, col_idx::VectorMPI{Int}) where {T,Ti,Bk<:HPCBackend}
+    comm = A.backend.comm
+    rank = comm_rank(comm)
+    nranks = comm_size(comm)
 
     m, n = size(A)
 

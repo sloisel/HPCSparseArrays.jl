@@ -28,9 +28,11 @@ comm = MPI.COMM_WORLD
 
 ts = @testset QuietTestSet "Matrix Multiplication" begin
 
-for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
+for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     TOL = TestUtils.tolerance(T)
-    VT, ST, MT = TestUtils.expected_types(T, to_backend)
+    backend = get_backend()
+    cpu_backend = TestUtils.cpu_version(backend)
+    VT, ST, MT = TestUtils.expected_types(T, backend)
 
     println(io0(), "[test] Matrix multiplication ($T, $backend_name)")
 
@@ -48,15 +50,15 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
     end
     B = sparse(I_B, J_B, V_B, n, n)
 
-    Adist = to_backend(SparseMatrixMPI{T}(A))
-    Bdist = to_backend(SparseMatrixMPI{T}(B))
+    Adist = SparseMatrixMPI(A, backend)
+    Bdist = SparseMatrixMPI(B, backend)
     Cdist = assert_type(Adist * Bdist, ST)
     C_ref = A * B
-    C_ref_dist = to_backend(SparseMatrixMPI{T}(C_ref))
+    C_ref_dist = SparseMatrixMPI(C_ref, backend)
 
     # Convert to CPU for norm comparison
-    Cdist_cpu = TestUtils.to_cpu(Cdist)
-    C_ref_dist_cpu = TestUtils.to_cpu(C_ref_dist)
+    Cdist_cpu = to_backend(Cdist, cpu_backend)
+    C_ref_dist_cpu = to_backend(C_ref_dist, cpu_backend)
     err = assert_uniform(norm(Cdist_cpu - C_ref_dist_cpu, Inf), name="matmul_err")
     @test err < TOL
 
@@ -74,18 +76,18 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
     V_B2 = T <: Complex ? T.(1:length(I_B2)) .+ im .* T.(length(I_B2):-1:1) : T.(1:length(I_B2))
     B2 = sparse(I_B2, J_B2, V_B2, k, n2)
 
-    Adist2 = to_backend(SparseMatrixMPI{T}(A2))
-    Bdist2 = to_backend(SparseMatrixMPI{T}(B2))
+    Adist2 = SparseMatrixMPI(A2, backend)
+    Bdist2 = SparseMatrixMPI(B2, backend)
     Cdist2 = assert_type(Adist2 * Bdist2, ST)
     C_ref2 = A2 * B2
-    C_ref_dist2 = to_backend(SparseMatrixMPI{T}(C_ref2))
+    C_ref_dist2 = SparseMatrixMPI(C_ref2, backend)
 
-    Cdist2_cpu = TestUtils.to_cpu(Cdist2)
-    C_ref_dist2_cpu = TestUtils.to_cpu(C_ref_dist2)
+    Cdist2_cpu = to_backend(Cdist2, cpu_backend)
+    C_ref_dist2_cpu = to_backend(C_ref_dist2, cpu_backend)
     err2 = assert_uniform(norm(Cdist2_cpu - C_ref_dist2_cpu, Inf), name="nonsquare_matmul_err")
     @test err2 < TOL
 
-end  # for (T, to_backend, backend_name)
+end  # for (T, get_backend, backend_name)
 
 end  # QuietTestSet
 

@@ -28,9 +28,11 @@ comm = MPI.COMM_WORLD
 
 ts = @testset QuietTestSet "Addition" begin
 
-for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
+for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     TOL = TestUtils.tolerance(T)
-    VT, ST, MT = TestUtils.expected_types(T, to_backend)
+    backend = get_backend()
+    cpu_backend = TestUtils.cpu_version(backend)
+    VT, ST, MT = TestUtils.expected_types(T, backend)
 
     println(io0(), "[test] Matrix addition ($T, $backend_name)")
 
@@ -48,14 +50,14 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
     end
     B = sparse(I_B, J_B, V_B, n, n)
 
-    Adist = to_backend(SparseMatrixMPI{T}(A))
-    Bdist = to_backend(SparseMatrixMPI{T}(B))
+    Adist = SparseMatrixMPI(A, backend)
+    Bdist = SparseMatrixMPI(B, backend)
     Cdist = assert_type(Adist + Bdist, ST)
     C_ref = A + B
-    C_ref_dist = to_backend(SparseMatrixMPI{T}(C_ref))
+    C_ref_dist = SparseMatrixMPI(C_ref, backend)
 
-    Cdist_cpu = TestUtils.to_cpu(Cdist)
-    C_ref_dist_cpu = TestUtils.to_cpu(C_ref_dist)
+    Cdist_cpu = to_backend(Cdist, cpu_backend)
+    C_ref_dist_cpu = to_backend(C_ref_dist, cpu_backend)
     err = assert_uniform(norm(Cdist_cpu - C_ref_dist_cpu, Inf), name="add_err")
     @test err < TOL
 
@@ -80,14 +82,14 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
     end
     B2 = sparse(I_B, J_B, V_B2, n, n)
 
-    Adist2 = to_backend(SparseMatrixMPI{T}(A2))
-    Bdist2 = to_backend(SparseMatrixMPI{T}(B2))
+    Adist2 = SparseMatrixMPI(A2, backend)
+    Bdist2 = SparseMatrixMPI(B2, backend)
     Cdist2 = assert_type(Adist2 - Bdist2, ST)
     C_ref2 = A2 - B2
-    C_ref_dist2 = to_backend(SparseMatrixMPI{T}(C_ref2))
+    C_ref_dist2 = SparseMatrixMPI(C_ref2, backend)
 
-    Cdist2_cpu = TestUtils.to_cpu(Cdist2)
-    C_ref_dist2_cpu = TestUtils.to_cpu(C_ref_dist2)
+    Cdist2_cpu = to_backend(Cdist2, cpu_backend)
+    C_ref_dist2_cpu = to_backend(C_ref_dist2, cpu_backend)
     err2 = assert_uniform(norm(Cdist2_cpu - C_ref_dist2_cpu, Inf), name="sub_err")
     @test err2 < TOL
 
@@ -104,14 +106,14 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
     V_B3 = T <: Complex ? T.(9:-1:1) .+ im .* T.(1:9) : T.(9:-1:1)
     B3 = sparse(I_B3, J_B3, V_B3, n, n)
 
-    Adist3 = to_backend(SparseMatrixMPI{T}(A3))
-    Bdist3 = to_backend(SparseMatrixMPI{T}(B3))
+    Adist3 = SparseMatrixMPI(A3, backend)
+    Bdist3 = SparseMatrixMPI(B3, backend)
     Cdist3 = assert_type(Adist3 + Bdist3, ST)
     C_ref3 = A3 + B3
-    C_ref_dist3 = to_backend(SparseMatrixMPI{T}(C_ref3))
+    C_ref_dist3 = SparseMatrixMPI(C_ref3, backend)
 
-    Cdist3_cpu = TestUtils.to_cpu(Cdist3)
-    C_ref_dist3_cpu = TestUtils.to_cpu(C_ref_dist3)
+    Cdist3_cpu = to_backend(Cdist3, cpu_backend)
+    C_ref_dist3_cpu = to_backend(C_ref_dist3, cpu_backend)
     err3 = assert_uniform(norm(Cdist3_cpu - C_ref_dist3_cpu, Inf), name="diff_sparsity_err")
     @test err3 < TOL
 
@@ -120,7 +122,7 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
 
     # Test that repeating the same addition uses the cached plan
     Cdist3_repeat = assert_type(Adist3 + Bdist3, ST)
-    Cdist3_repeat_cpu = TestUtils.to_cpu(Cdist3_repeat)
+    Cdist3_repeat_cpu = to_backend(Cdist3_repeat, cpu_backend)
     err3_repeat = assert_uniform(norm(Cdist3_repeat_cpu - C_ref_dist3_cpu, Inf), name="cached_add_err")
     @test err3_repeat < TOL
 
@@ -130,18 +132,18 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
     # Test that repeating the same subtraction uses the cached plan
     Ddist = assert_type(Adist3 - Bdist3, ST)
     D_ref = A3 - B3
-    D_ref_dist = to_backend(SparseMatrixMPI{T}(D_ref))
-    D_ref_dist_cpu = TestUtils.to_cpu(D_ref_dist)
-    Ddist_cpu = TestUtils.to_cpu(Ddist)
+    D_ref_dist = SparseMatrixMPI(D_ref, backend)
+    D_ref_dist_cpu = to_backend(D_ref_dist, cpu_backend)
+    Ddist_cpu = to_backend(Ddist, cpu_backend)
     err_sub1 = assert_uniform(norm(Ddist_cpu - D_ref_dist_cpu, Inf), name="cached_sub_err1")
     @test err_sub1 < TOL
 
     Ddist_repeat = assert_type(Adist3 - Bdist3, ST)
-    Ddist_repeat_cpu = TestUtils.to_cpu(Ddist_repeat)
+    Ddist_repeat_cpu = to_backend(Ddist_repeat, cpu_backend)
     err_sub2 = assert_uniform(norm(Ddist_repeat_cpu - D_ref_dist_cpu, Inf), name="cached_sub_err2")
     @test err_sub2 < TOL
 
-end  # for (T, to_backend, backend_name)
+end  # for (T, get_backend, backend_name)
 
 end  # QuietTestSet
 

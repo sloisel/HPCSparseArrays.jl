@@ -28,9 +28,11 @@ comm = MPI.COMM_WORLD
 
 ts = @testset QuietTestSet "Lazy Transpose" begin
 
-for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
+for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     TOL = TestUtils.tolerance(T)
-    VT, ST, MT = TestUtils.expected_types(T, to_backend)
+    backend = get_backend()
+    cpu_backend = TestUtils.cpu_version(backend)
+    VT, ST, MT = TestUtils.expected_types(T, backend)
 
     println(io0(), "[test] transpose(A) * transpose(B) = transpose(B * A) ($T, $backend_name)")
 
@@ -48,8 +50,8 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
     V_D = T <: Complex ? T.(1:length(I_D)) .+ im .* T.(length(I_D):-1:1) : T.(1:length(I_D))
     D = sparse(I_D, J_D, V_D, p, m)
 
-    Cdist = assert_type(to_backend(SparseMatrixMPI{T}(C)), ST)
-    Ddist = assert_type(to_backend(SparseMatrixMPI{T}(D)), ST)
+    Cdist = assert_type(SparseMatrixMPI(C, backend), ST)
+    Ddist = assert_type(SparseMatrixMPI(D, backend), ST)
 
     # Compute transpose(C) * transpose(D) using lazy method
     result_lazy = transpose(Cdist) * transpose(Ddist)
@@ -60,10 +62,10 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
 
     # Reference: transpose(D * C)
     ref = sparse(transpose(D * C))
-    ref_dist = assert_type(to_backend(SparseMatrixMPI{T}(ref)), ST)
+    ref_dist = assert_type(SparseMatrixMPI(ref, backend), ST)
 
-    result_dist_cpu = TestUtils.to_cpu(result_dist)
-    ref_dist_cpu = TestUtils.to_cpu(ref_dist)
+    result_dist_cpu = to_backend(result_dist, cpu_backend)
+    ref_dist_cpu = to_backend(ref_dist, cpu_backend)
     err = assert_uniform(norm(result_dist_cpu - ref_dist_cpu, Inf), name="lazy_trans_trans_err")
     @test err < TOL
 
@@ -83,15 +85,15 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
     V_B = T <: Complex ? T.(1:length(I_B)) .+ im .* T.(length(I_B):-1:1) : T.(1:length(I_B))
     B = sparse(I_B, J_B, V_B, m, p)
 
-    Adist = assert_type(to_backend(SparseMatrixMPI{T}(A)), ST)
-    Bdist = assert_type(to_backend(SparseMatrixMPI{T}(B)), ST)
+    Adist = assert_type(SparseMatrixMPI(A, backend), ST)
+    Bdist = assert_type(SparseMatrixMPI(B, backend), ST)
 
     result_dist = assert_type(transpose(Adist) * Bdist, ST)
     ref = sparse(transpose(A)) * B
-    ref_dist = assert_type(to_backend(SparseMatrixMPI{T}(ref)), ST)
+    ref_dist = assert_type(SparseMatrixMPI(ref, backend), ST)
 
-    result_dist_cpu = TestUtils.to_cpu(result_dist)
-    ref_dist_cpu = TestUtils.to_cpu(ref_dist)
+    result_dist_cpu = to_backend(result_dist, cpu_backend)
+    ref_dist_cpu = to_backend(ref_dist, cpu_backend)
     err = assert_uniform(norm(result_dist_cpu - ref_dist_cpu, Inf), name="trans_left_err")
     @test err < TOL
 
@@ -111,15 +113,15 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
     V_B = T <: Complex ? T.(1:length(I_B)) .+ im .* T.(length(I_B):-1:1) : T.(1:length(I_B))
     B = sparse(I_B, J_B, V_B, p, n)
 
-    Adist = assert_type(to_backend(SparseMatrixMPI{T}(A)), ST)
-    Bdist = assert_type(to_backend(SparseMatrixMPI{T}(B)), ST)
+    Adist = assert_type(SparseMatrixMPI(A, backend), ST)
+    Bdist = assert_type(SparseMatrixMPI(B, backend), ST)
 
     result_dist = assert_type(Adist * transpose(Bdist), ST)
     ref = A * sparse(transpose(B))
-    ref_dist = assert_type(to_backend(SparseMatrixMPI{T}(ref)), ST)
+    ref_dist = assert_type(SparseMatrixMPI(ref, backend), ST)
 
-    result_dist_cpu = TestUtils.to_cpu(result_dist)
-    ref_dist_cpu = TestUtils.to_cpu(ref_dist)
+    result_dist_cpu = to_backend(result_dist, cpu_backend)
+    ref_dist_cpu = to_backend(ref_dist, cpu_backend)
     err = assert_uniform(norm(result_dist_cpu - ref_dist_cpu, Inf), name="trans_right_err")
     @test err < TOL
 
@@ -133,7 +135,7 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
         V_A = T.(1:length(I_A)) .+ im .* T.(length(I_A):-1:1)
         A = sparse(I_A, J_A, V_A, m, n)
 
-        Adist = assert_type(to_backend(SparseMatrixMPI{T}(A)), ST)
+        Adist = assert_type(SparseMatrixMPI(A, backend), ST)
 
         # A' = conj(A)^T
         Aadj = Adist'
@@ -143,10 +145,10 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
         plan = LinearAlgebraMPI.TransposePlan(Aadj.parent)
         result_dist = assert_type(LinearAlgebraMPI.execute_plan!(plan, Aadj.parent), ST)
         ref = sparse(A')
-        ref_dist = assert_type(to_backend(SparseMatrixMPI{T}(ref)), ST)
+        ref_dist = assert_type(SparseMatrixMPI(ref, backend), ST)
 
-        result_dist_cpu = TestUtils.to_cpu(result_dist)
-        ref_dist_cpu = TestUtils.to_cpu(ref_dist)
+        result_dist_cpu = to_backend(result_dist, cpu_backend)
+        ref_dist_cpu = to_backend(ref_dist, cpu_backend)
         err = assert_uniform(norm(result_dist_cpu - ref_dist_cpu, Inf), name="adjoint_err")
         @test err < TOL
 
@@ -159,13 +161,13 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
         V_A = T.(1:length(I_A)) .+ im .* T.(length(I_A):-1:1)
         A = sparse(I_A, J_A, V_A, m, n)
 
-        Adist = assert_type(to_backend(SparseMatrixMPI{T}(A)), ST)
+        Adist = assert_type(SparseMatrixMPI(A, backend), ST)
         result_dist = assert_type(conj(Adist), ST)
         ref = conj(A)
-        ref_dist = assert_type(to_backend(SparseMatrixMPI{T}(ref)), ST)
+        ref_dist = assert_type(SparseMatrixMPI(ref, backend), ST)
 
-        result_dist_cpu = TestUtils.to_cpu(result_dist)
-        ref_dist_cpu = TestUtils.to_cpu(ref_dist)
+        result_dist_cpu = to_backend(result_dist, cpu_backend)
+        ref_dist_cpu = to_backend(ref_dist, cpu_backend)
         err = assert_uniform(norm(result_dist_cpu - ref_dist_cpu, Inf), name="conj_err")
         @test err < TOL
     end
@@ -179,20 +181,20 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
     V_A = T <: Complex ? T.(1:length(I_A)) .+ im .* T.(length(I_A):-1:1) : T.(1:length(I_A))
     A = sparse(I_A, J_A, V_A, m, n)
 
-    Adist = assert_type(to_backend(SparseMatrixMPI{T}(A)), ST)
+    Adist = assert_type(SparseMatrixMPI(A, backend), ST)
 
     # Test a * A
     a = T <: Complex ? T(2.5 + 0.5im) : T(2.5)
     result_dist = assert_type(a * Adist, ST)
-    ref_dist = assert_type(to_backend(SparseMatrixMPI{T}(a * A)), ST)
-    result_dist_cpu = TestUtils.to_cpu(result_dist)
-    ref_dist_cpu = TestUtils.to_cpu(ref_dist)
+    ref_dist = assert_type(SparseMatrixMPI(a * A, backend), ST)
+    result_dist_cpu = to_backend(result_dist, cpu_backend)
+    ref_dist_cpu = to_backend(ref_dist, cpu_backend)
     err1 = assert_uniform(norm(result_dist_cpu - ref_dist_cpu, Inf), name="scalar_mul_aA_err")
     @test err1 < TOL
 
     # Test A * a
     result_dist = assert_type(Adist * a, ST)
-    result_dist_cpu = TestUtils.to_cpu(result_dist)
+    result_dist_cpu = to_backend(result_dist, cpu_backend)
     err2 = assert_uniform(norm(result_dist_cpu - ref_dist_cpu, Inf), name="scalar_mul_Aa_err")
     @test err2 < TOL
 
@@ -202,16 +204,16 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
     plan = LinearAlgebraMPI.TransposePlan(result_lazy.parent)
     result_dist = assert_type(LinearAlgebraMPI.execute_plan!(plan, result_lazy.parent), ST)
     ref = sparse(transpose(a * A))
-    ref_dist = assert_type(to_backend(SparseMatrixMPI{T}(ref)), ST)
-    result_dist_cpu = TestUtils.to_cpu(result_dist)
-    ref_dist_cpu = TestUtils.to_cpu(ref_dist)
+    ref_dist = assert_type(SparseMatrixMPI(ref, backend), ST)
+    result_dist_cpu = to_backend(result_dist, cpu_backend)
+    ref_dist_cpu = to_backend(ref_dist, cpu_backend)
     err3 = assert_uniform(norm(result_dist_cpu - ref_dist_cpu, Inf), name="scalar_mul_aAt_err")
     @test err3 < TOL
 
     # Test transpose(A) * a
     result_lazy = At * a
     result_dist = assert_type(LinearAlgebraMPI.execute_plan!(plan, result_lazy.parent), ST)
-    result_dist_cpu = TestUtils.to_cpu(result_dist)
+    result_dist_cpu = to_backend(result_dist, cpu_backend)
     err4 = assert_uniform(norm(result_dist_cpu - ref_dist_cpu, Inf), name="scalar_mul_Ata_err")
     @test err4 < TOL
 
@@ -224,8 +226,8 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
     V_A = T <: Complex ? T.(1:length(I_A)) .+ im .* T.(length(I_A):-1:1) : T.(1:length(I_A))
     A = sparse(I_A, J_A, V_A, m, n)
 
-    Adist = assert_type(to_backend(SparseMatrixMPI{T}(A)), ST)
-    Adist_cpu = TestUtils.to_cpu(Adist)
+    Adist = assert_type(SparseMatrixMPI(A, backend), ST)
+    Adist_cpu = to_backend(Adist, cpu_backend)
 
     err1 = assert_uniform(abs(norm(Adist_cpu) - norm(A)), name="norm_2_err")
     err2 = assert_uniform(abs(norm(Adist_cpu, 1) - norm(A, 1)), name="norm_1_err")
@@ -246,8 +248,8 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
     V_A = T <: Complex ? T.(1:length(I_A)) .+ im .* T.(length(I_A):-1:1) : T.(1:length(I_A))
     A = sparse(I_A, J_A, V_A, m, n)
 
-    Adist = assert_type(to_backend(SparseMatrixMPI{T}(A)), ST)
-    Adist_cpu = TestUtils.to_cpu(Adist)
+    Adist = assert_type(SparseMatrixMPI(A, backend), ST)
+    Adist_cpu = to_backend(Adist, cpu_backend)
 
     err1 = assert_uniform(abs(opnorm(Adist_cpu, 1) - opnorm(A, 1)), name="opnorm_1_err")
     err2 = assert_uniform(abs(opnorm(Adist_cpu, Inf) - opnorm(A, Inf)), name="opnorm_inf_err")
@@ -255,7 +257,7 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
     @test err1 < TOL
     @test err2 < TOL
 
-end  # for (T, to_backend, backend_name)
+end  # for (T, get_backend, backend_name)
 
 end  # QuietTestSet
 

@@ -37,21 +37,41 @@ end
 # Import LinearAlgebraMPI after GPU checks
 using LinearAlgebraMPI
 
-# Backend configurations: (ScalarType, to_backend_fn, backend_name)
+# ============================================================================
+# Backend configurations for parameterized testing
+# ============================================================================
+
+# Create backends (must be done after MPI is initialized in tests)
+function get_cpu_backend()
+    LinearAlgebraMPI.backend_cpu_mpi(MPI.COMM_WORLD)
+end
+
+function get_metal_backend()
+    @assert METAL_AVAILABLE "Metal is not available"
+    LinearAlgebraMPI.backend_metal_mpi(MPI.COMM_WORLD)
+end
+
+function get_cuda_backend()
+    @assert CUDA_AVAILABLE "CUDA is not available"
+    LinearAlgebraMPI.backend_cuda_mpi(MPI.COMM_WORLD)
+end
+
+# Backend configurations: (ScalarType, backend_getter, backend_name)
+# The backend_getter is a function that returns the backend (deferred to after MPI.Init)
 const CPU_CONFIGS = [
-    (Float64, identity, "CPU"),
-    (ComplexF64, identity, "CPU")
+    (Float64, get_cpu_backend, "CPU"),
+    (ComplexF64, get_cpu_backend, "CPU")
 ]
 
 const GPU_CONFIGS = begin
     configs = Tuple{Type, Function, String}[]
     if METAL_AVAILABLE
-        push!(configs, (Float32, LinearAlgebraMPI.mtl, "Metal"))
+        push!(configs, (Float32, get_metal_backend, "Metal"))
         # ComplexF32 skipped - Julia's complex ops use Float64 internally, unsupported on Metal
     end
     if CUDA_AVAILABLE
-        push!(configs, (Float32, LinearAlgebraMPI.cu, "CUDA"))
-        push!(configs, (Float64, LinearAlgebraMPI.cu, "CUDA"))  # CUDA supports Float64
+        push!(configs, (Float32, get_cuda_backend, "CUDA"))
+        push!(configs, (Float64, get_cuda_backend, "CUDA"))  # CUDA supports Float64
     end
     configs
 end
@@ -171,49 +191,32 @@ function assert_uniform(x; atol=0, rtol=0, name="value")
 end
 
 """
-    to_cpu(x)
+    cpu_version(backend::HPCBackend) -> HPCBackend
 
-Convert to CPU if on GPU, otherwise return as-is.
-Works for both CPU and GPU arrays.
+Create a CPU version of the given backend, preserving comm but using MUMPS solver.
+Use with `to_backend(x, cpu_version(x.backend))` to convert GPU data to CPU for comparison.
+
+Note: Always uses SolverMUMPS since GPU solvers (cuDSS) don't work on CPU.
+The solver choice only matters for lu()/ldlt(), not for data comparison.
 """
-to_cpu(x) = x
-
-# For VectorMPI: return as-is if already CPU, convert if GPU
-to_cpu(x::VectorMPI{T, Vector{T}}) where T = x
-to_cpu(x::SparseMatrixMPI{T, Ti, Vector{T}}) where {T, Ti} = x
-to_cpu(x::MatrixMPI{T, Matrix{T}}) where T = x
-
-# GPU versions (only available when GPU backend is loaded)
-if METAL_AVAILABLE
-    to_cpu(x::VectorMPI{T, <:Metal.MtlVector}) where T = LinearAlgebraMPI.cpu(x)
-    to_cpu(x::SparseMatrixMPI{T, Ti, <:Metal.MtlVector}) where {T, Ti} = LinearAlgebraMPI.cpu(x)
-    to_cpu(x::MatrixMPI{T, <:Metal.MtlMatrix}) where T = LinearAlgebraMPI.cpu(x)
-end
-
-if CUDA_AVAILABLE
-    to_cpu(x::VectorMPI{T, <:CUDA.CuVector}) where T = LinearAlgebraMPI.cpu(x)
-    to_cpu(x::SparseMatrixMPI{T, Ti, <:CUDA.CuVector}) where {T, Ti} = LinearAlgebraMPI.cpu(x)
-    to_cpu(x::MatrixMPI{T, <:CUDA.CuMatrix}) where T = LinearAlgebraMPI.cpu(x)
+function cpu_version(backend::LinearAlgebraMPI.HPCBackend)
+    LinearAlgebraMPI.HPCBackend(
+        LinearAlgebraMPI.DeviceCPU(), backend.comm, LinearAlgebraMPI.SolverMUMPS()
+    )
 end
 
 """
     local_values(v::VectorMPI)
 
 Get local values as a CPU array for comparison.
-Works for both CPU and GPU vectors.
+Works for both CPU and GPU vectors by checking the backend device type.
 """
-function local_values(v::VectorMPI{T, Vector{T}}) where T
-    return v.v
-end
-
-if METAL_AVAILABLE
-    function local_values(v::VectorMPI{T, <:Metal.MtlVector}) where T
-        return Array(v.v)
-    end
-end
-
-if CUDA_AVAILABLE
-    function local_values(v::VectorMPI{T, <:CUDA.CuVector}) where T
+function local_values(v::VectorMPI)
+    # Check if data is on GPU by looking at backend device type
+    if v.backend.device isa LinearAlgebraMPI.DeviceCPU
+        return v.v
+    else
+        # GPU case: convert to Array
         return Array(v.v)
     end
 end
@@ -260,43 +263,28 @@ function assert_type(x, ::Type{T}) where T
 end
 
 """
-    expected_types(T, to_backend)
+    expected_types(T, backend)
 
 Returns (VectorType, SparseType, DenseType) for type assertions in tests.
 Returns fully concrete types for exact matching.
 
 Example:
-    for (T, to_backend, backend_name) in ALL_CONFIGS
-        VT, ST, MT = expected_types(T, to_backend)
+    for (T, get_backend, backend_name) in ALL_CONFIGS
+        backend = get_backend()
+        VT, ST, MT = expected_types(T, backend)
         result = assert_type(A * x, VT)  # Assert exact type match
     end
 """
-function expected_types(::Type{T}, ::typeof(identity)) where T
-    (VectorMPI{T, Vector{T}},
-     SparseMatrixMPI{T, Int, Vector{T}},
-     MatrixMPI{T, Matrix{T}})
-end
-
-if METAL_AVAILABLE
-    # Return fully concrete types using the detected storage type
-    function expected_types(::Type{T}, ::typeof(LinearAlgebraMPI.mtl)) where T
-        (VectorMPI{T, Metal.MtlVector{T, _MTL_STORAGE}},
-         SparseMatrixMPI{T, Int, Metal.MtlVector{T, _MTL_STORAGE}},
-         MatrixMPI{T, Metal.MtlMatrix{T, _MTL_STORAGE}})
-    end
-end
-
-if CUDA_AVAILABLE
-    # Return fully concrete types using the detected storage type
-    function expected_types(::Type{T}, ::typeof(LinearAlgebraMPI.cu)) where T
-        (VectorMPI{T, CUDA.CuVector{T, _CUDA_STORAGE}},
-         SparseMatrixMPI{T, Int, CUDA.CuVector{T, _CUDA_STORAGE}},
-         MatrixMPI{T, CUDA.CuMatrix{T, _CUDA_STORAGE}})
-    end
+function expected_types(::Type{T}, backend::LinearAlgebraMPI.HPCBackend) where T
+    BK = typeof(backend)
+    (VectorMPI{T, BK},
+     SparseMatrixMPI{T, Int, BK},
+     MatrixMPI{T, BK})
 end
 
 export METAL_AVAILABLE, CUDA_AVAILABLE, CPU_CONFIGS, GPU_CONFIGS, ALL_CONFIGS, CPU_ONLY_CONFIGS
 export tridiagonal_matrix, dense_matrix, test_vector, test_vector_pair
-export tolerance, to_cpu, local_values, expected_types, assert_type, assert_uniform
+export tolerance, cpu_version, local_values, expected_types, assert_type, assert_uniform
+export get_cpu_backend, get_metal_backend, get_cuda_backend
 
 end # module

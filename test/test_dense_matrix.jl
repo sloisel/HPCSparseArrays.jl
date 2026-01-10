@@ -46,16 +46,18 @@ end
 
 ts = @testset QuietTestSet "Dense Matrix" begin
 
-for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
+for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     TOL = TestUtils.tolerance(T)
-    VT, ST, MT = TestUtils.expected_types(T, to_backend)
+    backend = get_backend()
+    cpu_backend = TestUtils.cpu_version(backend)
+    VT, ST, MT = TestUtils.expected_types(T, backend)
 
     println(io0(), "[test] MatrixMPI construction ($T, $backend_name)")
 
     m, n = 8, 6
     A = TestUtils.dense_matrix(T, m, n)
 
-    Adist = to_backend(MatrixMPI(A))
+    Adist = MatrixMPI(A, backend)
 
     @test assert_uniform(size(Adist, 1), name="size1") == m
     @test assert_uniform(size(Adist, 2), name="size2") == n
@@ -76,8 +78,8 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
     A = TestUtils.dense_matrix(T, m, n)
     x_global = TestUtils.test_vector(T, n)
 
-    Adist = to_backend(MatrixMPI(A))
-    xdist = to_backend(VectorMPI(x_global))
+    Adist = MatrixMPI(A, backend)
+    xdist = VectorMPI(x_global, backend)
 
     ydist = assert_type(Adist * xdist, VT)
     y_ref = A * x_global
@@ -97,9 +99,9 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
     A = TestUtils.dense_matrix(T, m, n)
     x_global = TestUtils.test_vector(T, n)
 
-    Adist = to_backend(MatrixMPI(A))
-    xdist = to_backend(VectorMPI(x_global))
-    ydist = to_backend(VectorMPI(zeros(T, m)))
+    Adist = MatrixMPI(A, backend)
+    xdist = VectorMPI(x_global, backend)
+    ydist = VectorMPI(zeros(T, m), backend)
 
     LinearAlgebra.mul!(ydist, Adist, xdist)
     y_ref = A * x_global
@@ -119,8 +121,8 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
     A = TestUtils.dense_matrix(T, m, n)
     x_global = TestUtils.test_vector(T, m)
 
-    Adist = to_backend(MatrixMPI(A))
-    xdist = to_backend(VectorMPI(x_global))
+    Adist = MatrixMPI(A, backend)
+    xdist = VectorMPI(x_global, backend)
 
     # transpose(A) * x
     ydist = assert_type(transpose(Adist) * xdist, VT)
@@ -143,8 +145,8 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
         A = TestUtils.dense_matrix(T, m, n)
         x_global = TestUtils.test_vector(T, m)
 
-        Adist = to_backend(MatrixMPI(A))
-        xdist = to_backend(VectorMPI(x_global))
+        Adist = MatrixMPI(A, backend)
+        xdist = VectorMPI(x_global, backend)
 
         # adjoint(A) * x
         ydist = assert_type(adjoint(Adist) * xdist, VT)
@@ -166,8 +168,8 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
     A = TestUtils.dense_matrix(T, m, n)
     x_global = TestUtils.test_vector(T, m)
 
-    Adist = to_backend(MatrixMPI(A))
-    xdist = to_backend(VectorMPI(x_global))
+    Adist = MatrixMPI(A, backend)
+    xdist = VectorMPI(x_global, backend)
 
     # transpose(v) * A
     yt = transpose(xdist) * Adist
@@ -188,8 +190,8 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
     A = TestUtils.dense_matrix(T, m, n)
     x_global = TestUtils.test_vector(T, m)
 
-    Adist = to_backend(MatrixMPI(A))
-    xdist = to_backend(VectorMPI(x_global))
+    Adist = MatrixMPI(A, backend)
+    xdist = VectorMPI(x_global, backend)
 
     # v' * A
     yt = xdist' * Adist
@@ -209,7 +211,7 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
     m, n = 8, 6
     A = TestUtils.dense_matrix(T, m, n)
 
-    Adist = to_backend(MatrixMPI(A))
+    Adist = MatrixMPI(A, backend)
     At_dist = assert_type(copy(transpose(Adist)), MT)
 
     At_ref = transpose(A)
@@ -230,7 +232,7 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
         m, n = 8, 6
         A = TestUtils.dense_matrix(T, m, n)
 
-        Adist = to_backend(MatrixMPI(A))
+        Adist = MatrixMPI(A, backend)
         Ah_dist = assert_type(copy(adjoint(Adist)), MT)
 
         Ah_ref = adjoint(A)
@@ -252,7 +254,7 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
     A = TestUtils.dense_matrix(T, m, n)
     a = T <: Complex ? T(3.5 + 0.5im) : T(3.5)
 
-    Adist = to_backend(MatrixMPI(A))
+    Adist = MatrixMPI(A, backend)
 
     my_start = Adist.row_partition[rank+1]
     my_end = Adist.row_partition[rank+2] - 1
@@ -285,7 +287,7 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
         m, n = 8, 6
         A = TestUtils.dense_matrix(T, m, n)
 
-        Adist = to_backend(MatrixMPI(A))
+        Adist = MatrixMPI(A, backend)
         Aconj_dist = assert_type(conj(Adist), MT)
 
         Aconj_ref = conj.(A)
@@ -304,8 +306,8 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
     m, n = 8, 6
     A = TestUtils.dense_matrix(real(T), m, n)  # Use real type for norm tests
 
-    Adist = to_backend(MatrixMPI(A))
-    Adist_cpu = TestUtils.to_cpu(Adist)
+    Adist = MatrixMPI(A, backend)
+    Adist_cpu = to_backend(Adist, cpu_backend)
 
     # Frobenius norm (2-norm)
     norm2 = assert_uniform(norm(Adist_cpu), name="norm2")
@@ -328,8 +330,8 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
     m, n = 8, 6
     A = TestUtils.dense_matrix(real(T), m, n)
 
-    Adist = to_backend(MatrixMPI(A))
-    Adist_cpu = TestUtils.to_cpu(Adist)
+    Adist = MatrixMPI(A, backend)
+    Adist_cpu = to_backend(Adist, cpu_backend)
 
     # 1-norm (max column sum)
     opnorm1 = assert_uniform(opnorm(Adist_cpu, 1), name="opnorm1")
@@ -348,8 +350,8 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
     A = TestUtils.dense_matrix(T, n, n)
     x_global = TestUtils.test_vector(T, n)
 
-    Adist = to_backend(MatrixMPI(A))
-    xdist = to_backend(VectorMPI(x_global))
+    Adist = MatrixMPI(A, backend)
+    xdist = VectorMPI(x_global, backend)
 
     # A * x
     ydist = assert_type(Adist * xdist, VT)
@@ -371,19 +373,20 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
     err_t = maximum(abs.(local_yt .- y_ref_t[my_start:my_end]))
     @test err_t < TOL
 
-end  # for (T, to_backend, backend_name)
+end  # for (T, get_backend, backend_name)
 
 
 # mapslices tests
-for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
+for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     TOL = TestUtils.tolerance(T)
+    backend = get_backend()
 
     println(io0(), "[test] mapslices dims=2 row-wise ($T, $backend_name)")
 
     m, n = 8, 5
     A = TestUtils.dense_matrix(real(T), m, n)
 
-    Adist = MatrixMPI(A)
+    Adist = MatrixMPI(A, backend)
 
     # Function that transforms each row: 5 elements -> 3 elements
     f_row = x -> [norm(x), maximum(x), sum(x)]
@@ -403,7 +406,7 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
     m, n = 8, 5
     A = TestUtils.dense_matrix(real(T), m, n)
 
-    Adist = MatrixMPI(A)
+    Adist = MatrixMPI(A, backend)
 
     # Function that transforms each column: 8 elements -> 2 elements
     f_col = x -> [norm(x), maximum(x)]
@@ -423,7 +426,7 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
     m, n = 8, 5
     A = TestUtils.dense_matrix(real(T), m, n)
 
-    Adist = MatrixMPI(A)
+    Adist = MatrixMPI(A, backend)
 
     f_partition = x -> [norm(x), maximum(x)]
     Bdist = mapslices(f_partition, Adist; dims=2)

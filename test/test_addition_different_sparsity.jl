@@ -30,8 +30,9 @@ nranks = MPI.Comm_size(comm)
 
 ts = @testset QuietTestSet "Addition Different Sparsity" begin
 
-for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
+for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     TOL = TestUtils.tolerance(T)
+    backend = get_backend()
 
     println(io0(), "[test] Matrix addition with different sparsity patterns ($T, $backend_name)")
 
@@ -53,8 +54,8 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
         2 => T.(0.5*ones(n-2))  # Different off-diagonal than A
     )
 
-    A_mpi = to_backend(SparseMatrixMPI{T}(A_native))
-    B_mpi = to_backend(SparseMatrixMPI{T}(B_native))
+    A_mpi = SparseMatrixMPI(A_native, backend)
+    B_mpi = SparseMatrixMPI(B_native, backend)
 
     # Test A + B
     C_mpi = A_mpi + B_mpi
@@ -71,12 +72,12 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
     dx[end, end] = zero(T)  # Boundary
     id = spdiagm(n, n, 0 => T.(ones(n)))  # Identity matrix
 
-    D_dx = to_backend(SparseMatrixMPI{T}(dx))
-    D_id = to_backend(SparseMatrixMPI{T}(id))
+    D_dx = SparseMatrixMPI(dx, backend)
+    D_id = SparseMatrixMPI(id, backend)
 
     # Create a diagonal weight matrix
     w = T.(ones(n) * 0.5)
-    W = to_backend(SparseMatrixMPI{T}(spdiagm(n, n, 0 => w)))
+    W = SparseMatrixMPI(spdiagm(n, n, 0 => w), backend)
 
     # Compute products with different structure
     M1 = D_id' * W * D_dx
@@ -97,9 +98,9 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
     println(io0(), "[test] Hessian-style accumulation ($T, $backend_name)")
 
     # Recreate matrices for this test
-    D_dx2 = to_backend(SparseMatrixMPI{T}(dx))
-    D_id2 = to_backend(SparseMatrixMPI{T}(id))
-    W2 = to_backend(SparseMatrixMPI{T}(spdiagm(n, n, 0 => w)))
+    D_dx2 = SparseMatrixMPI(dx, backend)
+    D_id2 = SparseMatrixMPI(id, backend)
+    W2 = SparseMatrixMPI(spdiagm(n, n, 0 => w), backend)
 
     # Start with one product
     H = D_dx2' * W2 * D_dx2
@@ -127,9 +128,9 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
     println(io0(), "[test] Exact bug-triggering pattern ($T, $backend_name)")
 
     # Create fresh diagonal matrices each time
-    foo1 = to_backend(SparseMatrixMPI{T}(spdiagm(n, n, 0 => T.(0.3 * ones(n)))))
-    foo2 = to_backend(SparseMatrixMPI{T}(spdiagm(n, n, 0 => T.(0.7 * ones(n)))))
-    D_dx3 = to_backend(SparseMatrixMPI{T}(dx))
+    foo1 = SparseMatrixMPI(spdiagm(n, n, 0 => T.(0.3 * ones(n))), backend)
+    foo2 = SparseMatrixMPI(spdiagm(n, n, 0 => T.(0.7 * ones(n))), backend)
+    D_dx3 = SparseMatrixMPI(dx, backend)
 
     # Compute products: these have DIFFERENT sparsity patterns
     prod1 = foo1 * D_dx3
@@ -146,7 +147,7 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
 
     @test norm(sum_native - sum_expected) < TOL
 
-end  # for (T, to_backend, backend_name)
+end  # for (T, get_backend, backend_name)
 
 end  # QuietTestSet
 

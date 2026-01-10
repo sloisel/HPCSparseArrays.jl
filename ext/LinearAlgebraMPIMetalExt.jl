@@ -10,194 +10,61 @@ using LinearAlgebraMPI
 using Metal
 using Adapt
 
-# Re-export for convenience
-const MtlVectorMPI{T} = LinearAlgebraMPI.VectorMPI{T,MtlVector{T}}
+# Import HPCBackend types for type-based dispatch
+using LinearAlgebraMPI: HPCBackend, DeviceCPU, DeviceMetal, DeviceCUDA,
+                        CommSerial, CommMPI, AbstractComm, AbstractDevice,
+                        SolverMUMPS
+
+# Backend type aliases for Metal
+const MtlBackend{C,S} = LinearAlgebraMPI.HPCBackend{LinearAlgebraMPI.DeviceMetal, C, S}
+const CPUBackend{C,S} = LinearAlgebraMPI.HPCBackend{LinearAlgebraMPI.DeviceCPU, C, S}
 
 """
-    mtl(v::LinearAlgebraMPI.VectorMPI)
+    backend_metal_mpi(comm::MPI.Comm) -> HPCBackend
 
-Convert a CPU VectorMPI to a Metal GPU VectorMPI.
+Create a Metal GPU backend with MPI communication and MUMPS solver.
+Metal doesn't have a native sparse direct solver, so MUMPS is used (data staged via CPU).
 """
-function LinearAlgebraMPI.mtl(v::LinearAlgebraMPI.VectorMPI{T,Vector{T}}) where T
-    return adapt(MtlArray, v)
+function LinearAlgebraMPI.backend_metal_mpi(comm)
+    return LinearAlgebraMPI.HPCBackend(DeviceMetal(), CommMPI(comm), SolverMUMPS())
 end
 
-# No-op for already-GPU vectors
-function LinearAlgebraMPI.mtl(v::LinearAlgebraMPI.VectorMPI{T,<:MtlVector}) where T
-    return v
-end
+# ============================================================================
+# _convert_array methods for Metal
+# ============================================================================
 
-"""
-    cpu(v::LinearAlgebraMPI.VectorMPI{T,<:MtlVector})
+# CPU → Metal: copy to GPU
+LinearAlgebraMPI._convert_array(v::Vector, ::LinearAlgebraMPI.DeviceMetal) = MtlVector(v)
+LinearAlgebraMPI._convert_array(A::Matrix, ::LinearAlgebraMPI.DeviceMetal) = MtlMatrix(A)
 
-Convert a Metal GPU VectorMPI to a CPU VectorMPI.
-"""
-function LinearAlgebraMPI.cpu(v::LinearAlgebraMPI.VectorMPI{T,<:MtlVector}) where T
-    return adapt(Array, v)
-end
-
-# Note: Metal.jl already provides adapt_storage methods for MtlArray
-# so we don't need to define them here
-
-# Type alias for Metal SparseMatrixMPI
-const MtlSparseMatrixMPI{T,Ti} = LinearAlgebraMPI.SparseMatrixMPI{T,Ti,MtlVector{T}}
-
-"""
-    mtl(A::LinearAlgebraMPI.SparseMatrixMPI)
-
-Convert a CPU SparseMatrixMPI to a Metal GPU SparseMatrixMPI.
-The `nzval` and target structure arrays are moved to GPU.
-The CPU structure arrays (`rowptr`, `colval`, partitions) remain on CPU for MPI.
-"""
-function LinearAlgebraMPI.mtl(A::LinearAlgebraMPI.SparseMatrixMPI{T,Ti,Vector{T}}) where {T,Ti}
-    nzval_gpu = MtlVector(A.nzval)
-    # Convert structure arrays to GPU (used by unified SpMV kernel)
-    rowptr_target = MtlVector(A.rowptr)
-    colval_target = MtlVector(A.colval)
-    # Use typeof() to get the concrete GPU type (e.g., MtlVector{T, PrivateStorage})
-    AV = typeof(nzval_gpu)
-    return LinearAlgebraMPI.SparseMatrixMPI{T,Ti,AV}(
-        A.structural_hash,
-        A.row_partition,
-        A.col_partition,
-        A.col_indices,
-        A.rowptr,
-        A.colval,
-        nzval_gpu,
-        A.nrows_local,
-        A.ncols_compressed,
-        nothing,  # Invalidate cached_transpose (would need to convert too)
-        A.cached_symmetric,
-        rowptr_target,
-        colval_target
-    )
-end
-
-# No-op for already-GPU sparse matrices
-function LinearAlgebraMPI.mtl(A::LinearAlgebraMPI.SparseMatrixMPI{T,Ti,<:MtlVector}) where {T,Ti}
-    return A
-end
-
-"""
-    cpu(A::LinearAlgebraMPI.SparseMatrixMPI{T,Ti,<:MtlVector})
-
-Convert a Metal GPU SparseMatrixMPI to a CPU SparseMatrixMPI.
-"""
-function LinearAlgebraMPI.cpu(A::LinearAlgebraMPI.SparseMatrixMPI{T,Ti,<:MtlVector}) where {T,Ti}
-    nzval_cpu = Array(A.nzval)
-    # For CPU, rowptr_target and colval_target are the same as rowptr and colval
-    return LinearAlgebraMPI.SparseMatrixMPI{T,Ti,Vector{T}}(
-        A.structural_hash,
-        A.row_partition,
-        A.col_partition,
-        A.col_indices,
-        A.rowptr,
-        A.colval,
-        nzval_cpu,
-        A.nrows_local,
-        A.ncols_compressed,
-        nothing,  # Invalidate cached_transpose
-        A.cached_symmetric,
-        A.rowptr,  # rowptr_target (same as rowptr for CPU)
-        A.colval   # colval_target (same as colval for CPU)
-    )
-end
-
-# Type alias for Metal MatrixMPI
-const MtlMatrixMPI{T} = LinearAlgebraMPI.MatrixMPI{T,MtlMatrix{T}}
-
-"""
-    mtl(A::LinearAlgebraMPI.MatrixMPI)
-
-Convert a CPU MatrixMPI to a Metal GPU MatrixMPI.
-"""
-function LinearAlgebraMPI.mtl(A::LinearAlgebraMPI.MatrixMPI{T,Matrix{T}}) where T
-    A_gpu = MtlMatrix(A.A)
-    # Use typeof() to get the concrete GPU type (e.g., MtlMatrix{T, PrivateStorage})
-    AM = typeof(A_gpu)
-    return LinearAlgebraMPI.MatrixMPI{T,AM}(
-        A.structural_hash,
-        A.row_partition,
-        A.col_partition,
-        A_gpu
-    )
-end
-
-# No-op for already-GPU matrices
-function LinearAlgebraMPI.mtl(A::LinearAlgebraMPI.MatrixMPI{T,<:MtlMatrix}) where T
-    return A
-end
-
-"""
-    cpu(A::LinearAlgebraMPI.MatrixMPI{T,<:MtlMatrix})
-
-Convert a Metal GPU MatrixMPI to a CPU MatrixMPI.
-"""
-function LinearAlgebraMPI.cpu(A::LinearAlgebraMPI.MatrixMPI{T,<:MtlMatrix}) where T
-    A_cpu = Array(A.A)
-    return LinearAlgebraMPI.MatrixMPI{T,Matrix{T}}(
-        A.structural_hash,
-        A.row_partition,
-        A.col_partition,
-        A_cpu
-    )
-end
+# Metal → Metal: identity (no copy)
+LinearAlgebraMPI._convert_array(v::MtlVector, ::LinearAlgebraMPI.DeviceMetal) = v
+LinearAlgebraMPI._convert_array(A::MtlMatrix, ::LinearAlgebraMPI.DeviceMetal) = A
 
 # ============================================================================
 # MUMPS Factorization Support
 # ============================================================================
 
 """
-    _array_to_backend(v::Vector{T}, ::Type{<:MtlVector}) where T
+    _array_to_device(v::Vector{T}, ::LinearAlgebraMPI.DeviceMetal) where T
 
 Convert a CPU vector to a Metal GPU vector.
 Used by MUMPS factorization for round-trip GPU conversion during solve.
 """
-function LinearAlgebraMPI._array_to_backend(v::Vector{T}, ::Type{<:MtlVector}) where T
+function LinearAlgebraMPI._array_to_device(v::Vector{T}, ::LinearAlgebraMPI.DeviceMetal) where T
     return MtlVector(v)
 end
 
 """
-    _convert_vector_to_backend(v::LinearAlgebraMPI.VectorMPI{T,<:Vector}, ::Type{<:MtlVector}) where T
+    _convert_vector_to_device(v::LinearAlgebraMPI.VectorMPI, ::LinearAlgebraMPI.DeviceMetal)
 
 Convert a CPU VectorMPI to GPU (Metal) backend.
-WARNING: This function exists ONLY for MUMPS, which is a CPU-only solver.
-MUMPS requires GPU→CPU→GPU cycling. Do NOT use this for general operations.
+Used by MUMPS factorization for GPU reconstruction after solve.
 """
-function LinearAlgebraMPI._convert_vector_to_backend(v::LinearAlgebraMPI.VectorMPI{T,<:Vector}, ::Type{<:MtlVector}) where T
-    return LinearAlgebraMPI.mtl(v)
-end
-
-# ============================================================================
-# Backend Conversion for Distributed Types
-# ============================================================================
-
-"""
-    _to_same_backend(cpu::VectorMPI{T,Vector{T}}, ::VectorMPI{S,<:MtlVector}) where {T,S}
-
-Convert a CPU VectorMPI to Metal GPU backend to match the template.
-"""
-function LinearAlgebraMPI._to_same_backend(cpu::LinearAlgebraMPI.VectorMPI{T,Vector{T}}, ::LinearAlgebraMPI.VectorMPI{S,<:MtlVector}) where {T,S}
-    return LinearAlgebraMPI.mtl(cpu)
-end
-
-"""
-    _to_same_backend(cpu::MatrixMPI{T,Matrix{T}}, ::MatrixMPI{S,<:MtlMatrix}) where {T,S}
-
-Convert a CPU MatrixMPI to Metal GPU backend to match the template.
-"""
-function LinearAlgebraMPI._to_same_backend(cpu::LinearAlgebraMPI.MatrixMPI{T,Matrix{T}}, ::LinearAlgebraMPI.MatrixMPI{S,<:MtlMatrix}) where {T,S}
-    return LinearAlgebraMPI.mtl(cpu)
-end
-
-"""
-    _to_same_backend(cpu::VectorMPI{T,Vector{T}}, ::MatrixMPI{S,<:MtlMatrix}) where {T,S}
-
-Convert a CPU VectorMPI to Metal GPU backend using a MatrixMPI template.
-Used by vertex_indices when the input is a MatrixMPI.
-"""
-function LinearAlgebraMPI._to_same_backend(cpu::LinearAlgebraMPI.VectorMPI{T,Vector{T}}, ::LinearAlgebraMPI.MatrixMPI{S,<:MtlMatrix}) where {T,S}
-    return LinearAlgebraMPI.mtl(cpu)
+function LinearAlgebraMPI._convert_vector_to_device(v::LinearAlgebraMPI.VectorMPI, device::LinearAlgebraMPI.DeviceMetal)
+    # Create Metal backend preserving comm and solver
+    metal_backend = LinearAlgebraMPI.HPCBackend(device, v.backend.comm, v.backend.solver)
+    return LinearAlgebraMPI.to_backend(v, metal_backend)
 end
 
 # ============================================================================
@@ -205,44 +72,32 @@ end
 # ============================================================================
 
 """
-    _zeros_like(::Type{<:MtlVector{T}}, dims...) where T
+    _zeros_device(::LinearAlgebraMPI.DeviceMetal, ::Type{T}, dims...) where T
 
-Create a zero MtlVector of the specified dimensions.
-Used by Base.zeros(VectorMPI{T,MtlVector{T}}, n).
-Accepts concrete types like MtlVector{T, PrivateStorage}.
+Create a zero MtlVector/MtlMatrix of the specified dimensions on Metal device.
+Used by Base.zeros(VectorMPI, backend, n) etc.
 """
-LinearAlgebraMPI._zeros_like(::Type{<:MtlVector{T}}, dims...) where T = Metal.zeros(T, dims...)
-
-"""
-    _zeros_like(::Type{<:MtlMatrix{T}}, dims...) where T
-
-Create a zero MtlMatrix of the specified dimensions.
-Used by Base.zeros(MatrixMPI{T,MtlMatrix{T}}, m, n).
-Accepts concrete types like MtlMatrix{T, PrivateStorage}.
-"""
-LinearAlgebraMPI._zeros_like(::Type{<:MtlMatrix{T}}, dims...) where T = Metal.zeros(T, dims...)
+LinearAlgebraMPI._zeros_device(::LinearAlgebraMPI.DeviceMetal, ::Type{T}, dims...) where T = Metal.zeros(T, dims...)
 
 # ============================================================================
 # MatrixPlan Index Array Support
 # ============================================================================
 
 """
-    _index_array_type(::Type{<:MtlVector{T}}, ::Type{Ti}) where {T,Ti}
+    _index_array_type(::LinearAlgebraMPI.DeviceMetal, ::Type{Ti}) where Ti
 
-Map MtlVector{T} value array type to MtlVector{Ti} index array type.
+Map DeviceMetal to MtlVector{Ti} index array type.
 Used by MatrixPlan to store symbolic index arrays on GPU.
-Accepts concrete types like MtlVector{T, PrivateStorage}.
 """
-LinearAlgebraMPI._index_array_type(::Type{<:MtlVector{T}}, ::Type{Ti}) where {T,Ti} = MtlVector{Ti}
+LinearAlgebraMPI._index_array_type(::LinearAlgebraMPI.DeviceMetal, ::Type{Ti}) where Ti = MtlVector{Ti}
 
 """
-    _to_target_backend(v::Vector{Ti}, ::Type{<:MtlVector}) where Ti
+    _to_target_device(v::Vector{Ti}, ::LinearAlgebraMPI.DeviceMetal) where Ti
 
 Convert a CPU index vector to Metal GPU.
 Used by SparseMatrixMPI constructors to create GPU structure arrays.
-Accepts concrete types like MtlVector{T, PrivateStorage}.
 """
-LinearAlgebraMPI._to_target_backend(v::Vector{Ti}, ::Type{<:MtlVector}) where Ti = MtlVector(v)
+LinearAlgebraMPI._to_target_device(v::Vector{Ti}, ::LinearAlgebraMPI.DeviceMetal) where Ti = MtlVector(v)
 
 # ============================================================================
 # GPU map_rows_gpu implementation via Metal kernels

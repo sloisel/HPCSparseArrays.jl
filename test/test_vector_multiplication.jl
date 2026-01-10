@@ -30,9 +30,11 @@ nranks = MPI.Comm_size(comm)
 
 ts = @testset QuietTestSet "Matrix-Vector Multiplication" begin
 
-for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
+for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     TOL = TestUtils.tolerance(T)
-    VT, ST, MT = TestUtils.expected_types(T, to_backend)
+    backend = get_backend()
+    cpu_backend = TestUtils.cpu_version(backend)
+    VT, ST, MT = TestUtils.expected_types(T, backend)
 
     println(io0(), "[test] Matrix-vector multiplication ($T, $backend_name)")
 
@@ -44,8 +46,8 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
     x_global = TestUtils.test_vector(T, n)
 
     # Create distributed versions
-    Adist = to_backend(SparseMatrixMPI{T}(A))
-    xdist = to_backend(VectorMPI(x_global))
+    Adist = SparseMatrixMPI(A, backend)
+    xdist = VectorMPI(x_global, backend)
 
     # Compute distributed product
     ydist = assert_type(Adist * xdist, VT)
@@ -69,11 +71,11 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
     A = TestUtils.tridiagonal_matrix(T, n)
     x_global = TestUtils.test_vector(T, n)
 
-    Adist = to_backend(SparseMatrixMPI{T}(A))
-    xdist = to_backend(VectorMPI(x_global))
+    Adist = SparseMatrixMPI(A, backend)
+    xdist = VectorMPI(x_global, backend)
 
     # Create output vector with matching partition
-    ydist = to_backend(VectorMPI(zeros(T, n)))
+    ydist = VectorMPI(zeros(T, n), backend)
 
     # In-place multiplication
     LinearAlgebra.mul!(ydist, Adist, xdist)
@@ -101,8 +103,8 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
 
     x_global = TestUtils.test_vector(T, k)
 
-    Adist = to_backend(SparseMatrixMPI{T}(A))
-    xdist = to_backend(VectorMPI(x_global))
+    Adist = SparseMatrixMPI(A, backend)
+    xdist = VectorMPI(x_global, backend)
 
     ydist = assert_type(Adist * xdist, VT)
     y_ref = A * x_global
@@ -124,8 +126,8 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
         A = TestUtils.tridiagonal_matrix(T, n)
         x_global = TestUtils.test_vector(T, n)
 
-        Adist = to_backend(SparseMatrixMPI{T}(A))
-        xdist = to_backend(VectorMPI(x_global))
+        Adist = SparseMatrixMPI(A, backend)
+        xdist = VectorMPI(x_global, backend)
 
         # Test conj(v)
         xconj = assert_type(conj(xdist), VT)
@@ -162,10 +164,10 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
 
     n = 10
     x_global = TestUtils.test_vector(T, n)
-    xdist = to_backend(VectorMPI(x_global))
+    xdist = VectorMPI(x_global, backend)
 
     # For GPU, norm requires CPU conversion
-    xdist_cpu = TestUtils.to_cpu(xdist)
+    xdist_cpu = to_backend(xdist, cpu_backend)
 
     # 2-norm
     norm2 = assert_uniform(norm(xdist_cpu), name="norm2")
@@ -198,8 +200,8 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
     n = 8
     # Use real values for reductions (prod can overflow with complex)
     x_global_real = real(T).(collect(1.0:n))
-    xdist = to_backend(VectorMPI(x_global_real))
-    xdist_cpu = TestUtils.to_cpu(xdist)
+    xdist = VectorMPI(x_global_real, backend)
+    xdist_cpu = to_backend(xdist, cpu_backend)
 
     # sum
     s = assert_uniform(sum(xdist_cpu), name="sum")
@@ -227,8 +229,8 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
     n = 8
     u_global, v_global = TestUtils.test_vector_pair(T, n)
 
-    udist = to_backend(VectorMPI(u_global))
-    vdist = to_backend(VectorMPI(v_global))
+    udist = VectorMPI(u_global, backend)
+    vdist = VectorMPI(v_global, backend)
 
     my_start = udist.partition[rank+1]
     my_end = udist.partition[rank+2] - 1
@@ -259,7 +261,7 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
 
     n = 8
     v_global = TestUtils.test_vector(T, n)
-    vdist = to_backend(VectorMPI(v_global))
+    vdist = VectorMPI(v_global, backend)
     a = T <: Complex ? T(3.5 + 0.5im) : T(3.5)
 
     my_start = vdist.partition[rank+1]
@@ -305,7 +307,7 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
     err_vtdiv = maximum(abs.(local_wt .- w_ref[my_start:my_end]))
     @test err_vtdiv < TOL
 
-end  # for (T, to_backend, backend_name)
+end  # for (T, get_backend, backend_name)
 
 
 # Tests that don't need to be parameterized (type-agnostic)
@@ -322,13 +324,14 @@ else
     # Use Float64 for this test (partition logic is type-independent)
     T = Float64
     TOL = TestUtils.tolerance(T)
+    backend = backend_cpu_mpi(comm)
 
     # Use a size that works well with nranks
     n = 3 * nranks
     u_global, v_global = TestUtils.test_vector_pair(T, n)
 
     # Create u with default partition
-    udist = VectorMPI(u_global)
+    udist = VectorMPI(u_global, backend)
 
     # Create v with a different (custom) partition
     custom_partition = Vector{Int}(undef, nranks + 1)
@@ -344,7 +347,7 @@ else
 
     v_hash = LinearAlgebraMPI.compute_partition_hash(custom_partition)
     local_v_range = custom_partition[rank+1]:(custom_partition[rank+2]-1)
-    vdist = VectorMPI{T}(v_hash, copy(custom_partition), v_global[local_v_range])
+    vdist = VectorMPI{T}(v_hash, copy(custom_partition), v_global[local_v_range], backend)
 
     # Verify partitions are different
     @test udist.partition != vdist.partition
@@ -385,7 +388,7 @@ println(io0(), "[test] Vector size and eltype")
 
 n = 8
 v_global = collect(1.0:n)
-vdist = VectorMPI(v_global)
+vdist = VectorMPI(v_global, backend_cpu_mpi(comm))
 
 @test assert_uniform(length(vdist), name="length") == n
 @test assert_uniform(size(vdist, 1), name="size1") == n

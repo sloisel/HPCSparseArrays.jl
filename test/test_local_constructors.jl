@@ -29,9 +29,10 @@ nranks = MPI.Comm_size(comm)
 
 ts = @testset QuietTestSet "Local Constructors" begin
 
-for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
+for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     TOL = TestUtils.tolerance(T)
-    VT, ST, MT = TestUtils.expected_types(T, to_backend)
+    backend = get_backend()
+    VT, ST, MT = TestUtils.expected_types(T, backend)
 
     println(io0(), "[test] VectorMPI_local basic ($T, $backend_name)")
 
@@ -42,7 +43,7 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
     global_end = sum(local_sizes[1:rank+1])
     v_local = T.(collect(global_start:global_end))
 
-    v_mpi = assert_type(to_backend(VectorMPI_local(v_local)), VT)
+    v_mpi = assert_type(VectorMPI_local(v_local, backend), VT)
     v_global = Vector(v_mpi)
 
     # All ranks should have the same global vector
@@ -54,11 +55,11 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
 
     # Test that VectorMPI_local produces same result as VectorMPI for default partition
     v_original = T.([1.5, -2.3, 3.7, 4.1, -5.9, 6.2, 7.8, -8.4])
-    v_from_global = assert_type(to_backend(VectorMPI(v_original)), VT)
+    v_from_global = assert_type(VectorMPI(v_original, backend), VT)
 
     # Extract local part (need CPU array for VectorMPI_local)
     v_local_extract = Array(v_from_global.v)
-    v_from_local = assert_type(to_backend(VectorMPI_local(v_local_extract)), VT)
+    v_from_local = assert_type(VectorMPI_local(v_local_extract, backend), VT)
     v_back = Vector(v_from_local)
 
     @test norm(v_back - v_original) < TOL
@@ -77,7 +78,7 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
 
     # Create deterministic local matrix based on global row indices
     M_local = T.([Float64(i + j*0.1) for i in row_start:row_end, j in 1:n_cols])
-    M_mpi = assert_type(to_backend(MatrixMPI_local(M_local)), MT)
+    M_mpi = assert_type(MatrixMPI_local(M_local, backend), MT)
 
     # Verify size
     @test size(M_mpi) == (m_global, n_cols)
@@ -96,11 +97,11 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
                      7.7 8.8 9.9;
                      10.0 11.1 12.2;
                      13.3 14.4 15.5])
-    M_from_global = assert_type(to_backend(MatrixMPI(M_original)), MT)
+    M_from_global = assert_type(MatrixMPI(M_original, backend), MT)
 
     # Extract local part (need CPU array for MatrixMPI_local)
     M_local_extract = Array(M_from_global.A)
-    M_from_local = assert_type(to_backend(MatrixMPI_local(M_local_extract)), MT)
+    M_from_local = assert_type(MatrixMPI_local(M_local_extract, backend), MT)
     M_back = Matrix(M_from_local)
 
     @test norm(M_back - M_original) < TOL
@@ -142,7 +143,7 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
     local_csc = sparse(J_local, I_local, V_local, n_sparse, local_sparse_nrows)
     local_transpose = transpose(local_csc)
 
-    S_mpi = assert_type(to_backend(SparseMatrixMPI_local(local_transpose)), ST)
+    S_mpi = assert_type(SparseMatrixMPI_local(local_transpose, backend), ST)
     @test size(S_mpi) == (m_sparse, n_sparse)
 
 
@@ -155,7 +156,7 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
     V_orig = T.([1.1, 2.2, 3.3, 4.4, 5.5, 6.6, 7.7, 8.8, 9.9, 10.0, 11.1, 12.2])
     S_original = sparse(I_orig, J_orig, V_orig, 12, 10)
 
-    S_from_global = assert_type(to_backend(SparseMatrixMPI{T}(S_original)), ST)
+    S_from_global = assert_type(SparseMatrixMPI(S_original, backend), ST)
 
     # Extract local part - using explicit CSR arrays (nzval needs CPU conversion)
     col_indices = S_from_global.col_indices
@@ -171,7 +172,7 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
     )
 
     # Rebuild from local
-    S_from_local = assert_type(to_backend(SparseMatrixMPI_local(transpose(AT_uncompressed))), ST)
+    S_from_local = assert_type(SparseMatrixMPI_local(transpose(AT_uncompressed), backend), ST)
     S_back = SparseMatrixCSC(S_from_local)
 
     @test norm(S_back - S_original, Inf) < TOL
@@ -189,14 +190,14 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
     op_row_end = sum(op_row_sizes[1:rank+1])
 
     A_local_op = T.([Float64(i + j*0.1) for i in op_row_start:op_row_end, j in 1:n_op])
-    A_mpi_op = assert_type(to_backend(MatrixMPI_local(A_local_op)), MT)
+    A_mpi_op = assert_type(MatrixMPI_local(A_local_op, backend), MT)
 
     # Create vector partition that matches columns
     v_op_sizes = [div(n_op, nranks) + (r <= mod(n_op, nranks) ? 1 : 0) for r in 1:nranks]
     v_op_start = sum(v_op_sizes[1:rank]) + 1
     v_op_end = sum(v_op_sizes[1:rank+1])
     v_local_op = T.(collect(v_op_start:v_op_end))
-    v_mpi_op = assert_type(to_backend(VectorMPI_local(v_local_op)), VT)
+    v_mpi_op = assert_type(VectorMPI_local(v_local_op, backend), VT)
 
     # Compute A * v
     y_mpi = assert_type(A_mpi_op * v_mpi_op, VT)
@@ -218,9 +219,9 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
     V_sp = T.([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 0.5, 0.5, 0.5, 0.5, 0.5])
     S_sp_global = sparse(I_sp, J_sp, V_sp, 10, 8)
 
-    S_sp_mpi = assert_type(to_backend(SparseMatrixMPI{T}(S_sp_global)), ST)
+    S_sp_mpi = assert_type(SparseMatrixMPI(S_sp_global, backend), ST)
     v_sp_global = T.(1:8)
-    v_sp_mpi = assert_type(to_backend(VectorMPI(v_sp_global)), VT)
+    v_sp_mpi = assert_type(VectorMPI(v_sp_global, backend), VT)
 
     # Compute result
     y_sp = assert_type(S_sp_mpi * v_sp_mpi, VT)
@@ -229,7 +230,7 @@ for (T, to_backend, backend_name) in TestUtils.ALL_CONFIGS
 
     @test norm(y_sp_result - y_sp_expected) < TOL
 
-end  # for (T, to_backend, backend_name)
+end  # for (T, get_backend, backend_name)
 
 end  # QuietTestSet
 

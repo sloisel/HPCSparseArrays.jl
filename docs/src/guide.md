@@ -380,24 +380,31 @@ using LinearAlgebraMPI
 MPI.Init()
 ```
 
-### Converting Between CPU and GPU
+### Converting Between Backends
+
+Use `to_backend(obj, backend)` to convert between CPU and GPU:
 
 ```julia
+# Define backends
+cpu_backend = HPCBackend(DeviceCPU(), CommMPI(), SolverMUMPS())
+metal_backend = HPCBackend(DeviceMetal(), CommMPI(), SolverMUMPS())
+cuda_backend = HPCBackend(DeviceCUDA(), CommMPI(), SolverMUMPS())
+
 # Create CPU vector
-x_cpu = VectorMPI(rand(1000))
+x_cpu = VectorMPI(rand(Float32, 1000), cpu_backend)
 
 # Convert to GPU (Metal)
-x_gpu = mtl(x_cpu)  # Returns VectorMPI{T, MtlVector{T}}
+x_gpu = to_backend(x_cpu, metal_backend)  # Returns VectorMPI with MtlVector storage
 
 # Convert to GPU (CUDA)
-x_gpu = cu(x_cpu)   # Returns VectorMPI{T, CuVector{T}}
+x_gpu = to_backend(x_cpu, cuda_backend)   # Returns VectorMPI with CuVector storage
 
 # GPU operations work transparently
 y_gpu = x_gpu + x_gpu  # Native GPU addition
-z_gpu = 2.0 * x_gpu    # Native GPU scalar multiply
+z_gpu = 2.0f0 * x_gpu  # Native GPU scalar multiply
 
 # Convert back to CPU
-y_cpu = cpu(y_gpu)
+y_cpu = to_backend(y_gpu, cpu_backend)
 ```
 
 ### How It Works
@@ -428,8 +435,9 @@ This is handled transparently - you just use the same operations.
 Sparse matrices (`SparseMatrixMPI`) remain on CPU. When multiplying with GPU vectors:
 
 ```julia
-A = SparseMatrixMPI{Float64}(sprand(100, 100, 0.1))
-x_gpu = cu(VectorMPI(rand(100)))
+cuda_backend = HPCBackend(DeviceCUDA(), CommMPI(), SolverMUMPS())
+A = SparseMatrixMPI(sprand(100, 100, 0.1), cuda_backend)
+x_gpu = VectorMPI(rand(100), cuda_backend)
 
 # Sparse multiply: x gathered via CPU, multiply on CPU, result copied to GPU
 y_gpu = A * x_gpu  # Returns VectorMPI with CuVector storage

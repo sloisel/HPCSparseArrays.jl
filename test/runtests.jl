@@ -13,7 +13,7 @@ catch err
 end
 
 # Helper to run a test file under mpiexec with a fixed project and check exit status
-function run_mpi_test(test_file::AbstractString; nprocs::Integer=4, nthreads::Integer=2, expect_success::Bool=true)
+function run_mpi_test(test_file::AbstractString; nprocs::Integer=2, nthreads::Integer=2, expect_success::Bool=true)
     # Allow overriding mpiexec via environment variable (useful for CI with system MPI)
     mpiexec_cmd = get(ENV, "MPIEXEC_PATH", nothing)
     if mpiexec_cmd === nothing

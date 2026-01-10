@@ -13,7 +13,7 @@ MPI = "0.20"
 MPIPreferences = "0.1.11"
 MUMPS = "1.5"
 Metal = "1.9.1"
-NCCL = "0.1"
+NCCL_jll = "2"
 PrecompileTools = "1"
 StaticArrays = "1"
 julia = "1.10"
@@ -31,7 +31,7 @@ SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
 StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
 
 [extensions]
-LinearAlgebraMPICUDAExt = ["CUDA", "NCCL", "CUDSS_jll"]
+LinearAlgebraMPICUDAExt = ["CUDA", "NCCL_jll", "CUDSS_jll"]
 LinearAlgebraMPIMetalExt = "Metal"
 
 [extras]
@@ -39,7 +39,7 @@ BenchmarkTools = "6e4b80f9-dd63-53aa-95a3-0cdb28fa8baf"
 CUDA = "052768ef-5323-5732-b1bb-66c8b64840ba"
 CUDSS_jll = "4889d778-9329-5762-9fec-0578a5d30366"
 Metal = "dde4c033-4e86-420c-a63e-0dd931031962"
-NCCL = "3fe64909-d7a1-4096-9b7d-7a0f12cf0f6b"
+NCCL_jll = "4d6d38e4-5b87-5e63-912a-873ff2d649b7"
 Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
@@ -50,10 +50,10 @@ binary = "MPItrampoline_jll"
 preloads = []
 
 [targets]
-test = ["CUDA", "CUDSS_jll", "NCCL", "Random", "Test"]
+test = ["CUDA", "CUDSS_jll", "NCCL_jll", "Random", "Test"]
 
 [weakdeps]
 CUDA = "052768ef-5323-5732-b1bb-66c8b64840ba"
 CUDSS_jll = "4889d778-9329-5762-9fec-0578a5d30366"
 Metal = "dde4c033-4e86-420c-a63e-0dd931031962"
-NCCL = "3fe64909-d7a1-4096-9b7d-7a0f12cf0f6b"
+NCCL_jll = "4d6d38e4-5b87-5e63-912a-873ff2d649b7"
