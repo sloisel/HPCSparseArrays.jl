@@ -1,4 +1,4 @@
-# Tests for extended SparseMatrixMPI API
+# Tests for extended HPCSparseMatrix API
 # This file is executed under mpiexec by runtests.jl
 # Parameterized over scalar types and backends (CPU and GPU)
 
@@ -13,7 +13,7 @@ end
 using MPI
 MPI.Init()
 
-using LinearAlgebraMPI
+using HPCLinearAlgebra
 using SparseArrays
 using LinearAlgebra
 using Test
@@ -44,7 +44,7 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
                       T.([1.0, 2.0, 3.0, 4.0, 5.0, -1.0, -2.0, -3.0, -4.0, -5.0, 6.0, 7.0, 8.0, 9.0, 10.0]),
                       n, n)
     ref_nnz = nnz(A_global)
-    Adist = SparseMatrixMPI(A_global, backend)
+    Adist = HPCSparseMatrix(A_global, backend)
 
     dist_nnz = assert_uniform(nnz(Adist), name="nnz")
     dist_issparse = assert_uniform(issparse(Adist), name="issparse")
@@ -61,7 +61,7 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     @test b_size == size(A_global)
 
     # Recreate Adist for subsequent tests (copy may have different structure)
-    Adist = SparseMatrixMPI(A_global, backend)
+    Adist = HPCSparseMatrix(A_global, backend)
 
 
     println(io0(), "[test] Element-wise operations ($T, $backend_name)")
@@ -141,7 +141,7 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     A_with_zeros = copy(A_global)
     A_with_zeros[1, 1] = zero(T)
     ref_nnz_zeros = nnz(A_with_zeros)
-    Adist_zeros = SparseMatrixMPI(A_with_zeros, backend)
+    Adist_zeros = HPCSparseMatrix(A_with_zeros, backend)
     B = assert_type(dropzeros(Adist_zeros), ST)
     b_nnz = nnz(B)
     @test b_nnz <= ref_nnz_zeros
@@ -192,10 +192,10 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     @test u1_nnz == nnz(ref_U1)
 
 
-    println(io0(), "[test] VectorMPI extensions ($T, $backend_name)")
+    println(io0(), "[test] HPCVector extensions ($T, $backend_name)")
 
     v_global = T.(collect(1.0:Float64(n)))
-    v = VectorMPI(v_global, backend)
+    v = HPCVector(v_global, backend)
 
     # abs and abs2 return real types
     VT_real, _, _ = TestUtils.expected_types(RT, backend)
@@ -218,7 +218,7 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     println(io0(), "[test] spdiagm ($T, $backend_name)")
 
     v_global = T.(collect(1.0:5.0))
-    v_spd = VectorMPI(v_global, backend)
+    v_spd = HPCVector(v_global, backend)
     A_spd = assert_type(spdiagm(v_spd), ST)
     ref_A = spdiagm(v_global)
     a_nnz = nnz(A_spd)
@@ -230,8 +230,8 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
 
     v1_global = T.(collect(1.0:4.0))
     v2_global = T.(collect(10.0:12.0))
-    v1 = VectorMPI(v1_global, backend)
-    v2 = VectorMPI(v2_global, backend)
+    v1 = HPCVector(v1_global, backend)
+    v2 = HPCVector(v2_global, backend)
     B_spd = assert_type(spdiagm(0 => v1, 1 => v2), ST)
     ref_B = spdiagm(0 => v1_global, 1 => v2_global)
     b_nnz = nnz(B_spd)
@@ -254,12 +254,12 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     @test d_sum ≈ sum(ref_D) atol=TOL
 
 
-    println(io0(), "[test] VectorMPI broadcasting ($T, $backend_name)")
+    println(io0(), "[test] HPCVector broadcasting ($T, $backend_name)")
 
     v_global = T.(collect(1.0:10.0))
     w_global = T.(collect(11.0:20.0))
-    v = VectorMPI(v_global, backend)
-    w = VectorMPI(w_global, backend)
+    v = HPCVector(v_global, backend)
+    w = HPCVector(w_global, backend)
 
     vw_add = assert_type(v .+ w, VT)
     vw_add_sum = sum(vw_add)
@@ -292,36 +292,36 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     compound_sum = sum(compound)
     @test compound_sum ≈ sum(v_global .* T(2.0) .+ w_global .^ 2) atol=TOL
 
-    dest = VectorMPI(zeros(T, 10), backend)
+    dest = HPCVector(zeros(T, 10), backend)
     dest .= v .+ w
     dest_sum = sum(dest)
     @test dest_sum ≈ sum(v_global .+ w_global) atol=TOL
 
-    dest2 = VectorMPI(zeros(T, 10), backend)
+    dest2 = HPCVector(zeros(T, 10), backend)
     dest2 .= v .* T(2.0) .+ w .^ 2
     dest2_sum = sum(dest2)
     @test dest2_sum ≈ sum(v_global .* T(2.0) .+ w_global .^ 2) atol=TOL
 
-    dest3 = VectorMPI(zeros(T, 10), backend)
+    dest3 = HPCVector(zeros(T, 10), backend)
     dest3 .= v .* T(3.0) .+ T(10.0)
     dest3_sum = sum(dest3)
     @test dest3_sum ≈ sum(v_global .* T(3.0) .+ T(10.0)) atol=TOL
 
     if !(T <: Complex)
-        v_int = VectorMPI(T.(collect(1:10)), backend)
+        v_int = HPCVector(T.(collect(1:10)), backend)
         v_sqrt = assert_type(sqrt.(v_int), VT)
         v_sqrt_sum = sum(v_sqrt)
         @test v_sqrt_sum ≈ sum(sqrt.(T.(collect(1:10)))) atol=TOL
     end
 
 
-    println(io0(), "[test] VectorMPI broadcasting with different partitions ($T, $backend_name)")
+    println(io0(), "[test] HPCVector broadcasting with different partitions ($T, $backend_name)")
 
     n_part = 12
     v_global_part = T.(collect(1.0:Float64(n_part)))
     w_global_part = T.(collect(101.0:Float64(100+n_part)))
 
-    v_part = VectorMPI(v_global_part, backend)
+    v_part = HPCVector(v_global_part, backend)
 
     function make_uneven_partition(n::Int, nranks::Int)
         partition = Vector{Int}(undef, nranks + 1)
@@ -345,10 +345,10 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     w_custom_local_start = custom_partition[rank+1]
     w_custom_local_end = custom_partition[rank+2] - 1
     w_local_part_cpu = w_global_part[w_custom_local_start:w_custom_local_end]
-    w_local_part = LinearAlgebraMPI._convert_array(w_local_part_cpu, backend.device)
-    w_hash = LinearAlgebraMPI.compute_partition_hash(custom_partition)
-    # Create VectorMPI with custom partition
-    w_part = VectorMPI(w_hash, custom_partition, w_local_part, backend)
+    w_local_part = HPCLinearAlgebra._convert_array(w_local_part_cpu, backend.device)
+    w_hash = HPCLinearAlgebra.compute_partition_hash(custom_partition)
+    # Create HPCVector with custom partition
+    w_part = HPCVector(w_hash, custom_partition, w_local_part, backend)
 
     w_sum_part = sum(w_part)
     @test w_sum_part ≈ sum(w_global_part) atol=TOL
@@ -374,13 +374,13 @@ println(io0(), "[test] Complex element-wise operations (ComplexF64)")
 T_cpx = ComplexF64
 TOL_cpx = TestUtils.tolerance(T_cpx)
 n_cpx = 20
-backend_cpx = backend_cpu_mpi(comm)
+backend_cpx = BACKEND_CPU_MPI
 
 A_complex = sparse([1, 2, 3, 4, 5, 1, 2, 3],
                    [1, 2, 3, 4, 5, 6, 7, 8],
                    T_cpx[1+2im, 3-1im, 2+1im, -1+3im, 4-2im, 1-1im, 2+2im, 3+1im],
                    n_cpx, n_cpx)
-Adist_complex = SparseMatrixMPI(A_complex, backend_cpx)
+Adist_complex = HPCSparseMatrix(A_complex, backend_cpx)
 
 B_real = real(Adist_complex)
 br_sum = sum(B_real)
@@ -391,7 +391,7 @@ bi_sum = sum(B_imag)
 @test bi_sum ≈ sum(imag.(A_complex)) atol=TOL_cpx
 
 v_complex_global = vcat(T_cpx[1+2im, 3-1im, 2+1im, -1+3im], zeros(T_cpx, n_cpx - 4))
-v_complex = VectorMPI(v_complex_global, backend_cpx)
+v_complex = HPCVector(v_complex_global, backend_cpx)
 vr_sum = sum(real(v_complex))
 @test vr_sum ≈ sum(real.(v_complex_global)) atol=TOL_cpx
 vi_sum = sum(imag(v_complex))

@@ -14,7 +14,7 @@ using Test
 using MPI
 using SparseArrays
 using LinearAlgebra: Transpose, norm, opnorm
-using LinearAlgebraMPI
+using HPCLinearAlgebra
 
 MPI.Init()
 
@@ -50,19 +50,19 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     V_D = T <: Complex ? T.(1:length(I_D)) .+ im .* T.(length(I_D):-1:1) : T.(1:length(I_D))
     D = sparse(I_D, J_D, V_D, p, m)
 
-    Cdist = assert_type(SparseMatrixMPI(C, backend), ST)
-    Ddist = assert_type(SparseMatrixMPI(D, backend), ST)
+    Cdist = assert_type(HPCSparseMatrix(C, backend), ST)
+    Ddist = assert_type(HPCSparseMatrix(D, backend), ST)
 
     # Compute transpose(C) * transpose(D) using lazy method
     result_lazy = transpose(Cdist) * transpose(Ddist)
 
     # Materialize the result (internal API)
-    plan = LinearAlgebraMPI.TransposePlan(result_lazy.parent)
-    result_dist = assert_type(LinearAlgebraMPI.execute_plan!(plan, result_lazy.parent), ST)
+    plan = HPCLinearAlgebra.TransposePlan(result_lazy.parent)
+    result_dist = assert_type(HPCLinearAlgebra.execute_plan!(plan, result_lazy.parent), ST)
 
     # Reference: transpose(D * C)
     ref = sparse(transpose(D * C))
-    ref_dist = assert_type(SparseMatrixMPI(ref, backend), ST)
+    ref_dist = assert_type(HPCSparseMatrix(ref, backend), ST)
 
     result_dist_cpu = to_backend(result_dist, cpu_backend)
     ref_dist_cpu = to_backend(ref_dist, cpu_backend)
@@ -85,12 +85,12 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     V_B = T <: Complex ? T.(1:length(I_B)) .+ im .* T.(length(I_B):-1:1) : T.(1:length(I_B))
     B = sparse(I_B, J_B, V_B, m, p)
 
-    Adist = assert_type(SparseMatrixMPI(A, backend), ST)
-    Bdist = assert_type(SparseMatrixMPI(B, backend), ST)
+    Adist = assert_type(HPCSparseMatrix(A, backend), ST)
+    Bdist = assert_type(HPCSparseMatrix(B, backend), ST)
 
     result_dist = assert_type(transpose(Adist) * Bdist, ST)
     ref = sparse(transpose(A)) * B
-    ref_dist = assert_type(SparseMatrixMPI(ref, backend), ST)
+    ref_dist = assert_type(HPCSparseMatrix(ref, backend), ST)
 
     result_dist_cpu = to_backend(result_dist, cpu_backend)
     ref_dist_cpu = to_backend(ref_dist, cpu_backend)
@@ -113,12 +113,12 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     V_B = T <: Complex ? T.(1:length(I_B)) .+ im .* T.(length(I_B):-1:1) : T.(1:length(I_B))
     B = sparse(I_B, J_B, V_B, p, n)
 
-    Adist = assert_type(SparseMatrixMPI(A, backend), ST)
-    Bdist = assert_type(SparseMatrixMPI(B, backend), ST)
+    Adist = assert_type(HPCSparseMatrix(A, backend), ST)
+    Bdist = assert_type(HPCSparseMatrix(B, backend), ST)
 
     result_dist = assert_type(Adist * transpose(Bdist), ST)
     ref = A * sparse(transpose(B))
-    ref_dist = assert_type(SparseMatrixMPI(ref, backend), ST)
+    ref_dist = assert_type(HPCSparseMatrix(ref, backend), ST)
 
     result_dist_cpu = to_backend(result_dist, cpu_backend)
     ref_dist_cpu = to_backend(ref_dist, cpu_backend)
@@ -135,17 +135,17 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
         V_A = T.(1:length(I_A)) .+ im .* T.(length(I_A):-1:1)
         A = sparse(I_A, J_A, V_A, m, n)
 
-        Adist = assert_type(SparseMatrixMPI(A, backend), ST)
+        Adist = assert_type(HPCSparseMatrix(A, backend), ST)
 
         # A' = conj(A)^T
         Aadj = Adist'
         @test Aadj isa Transpose
 
         # Materialize and compare (internal API)
-        plan = LinearAlgebraMPI.TransposePlan(Aadj.parent)
-        result_dist = assert_type(LinearAlgebraMPI.execute_plan!(plan, Aadj.parent), ST)
+        plan = HPCLinearAlgebra.TransposePlan(Aadj.parent)
+        result_dist = assert_type(HPCLinearAlgebra.execute_plan!(plan, Aadj.parent), ST)
         ref = sparse(A')
-        ref_dist = assert_type(SparseMatrixMPI(ref, backend), ST)
+        ref_dist = assert_type(HPCSparseMatrix(ref, backend), ST)
 
         result_dist_cpu = to_backend(result_dist, cpu_backend)
         ref_dist_cpu = to_backend(ref_dist, cpu_backend)
@@ -161,10 +161,10 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
         V_A = T.(1:length(I_A)) .+ im .* T.(length(I_A):-1:1)
         A = sparse(I_A, J_A, V_A, m, n)
 
-        Adist = assert_type(SparseMatrixMPI(A, backend), ST)
+        Adist = assert_type(HPCSparseMatrix(A, backend), ST)
         result_dist = assert_type(conj(Adist), ST)
         ref = conj(A)
-        ref_dist = assert_type(SparseMatrixMPI(ref, backend), ST)
+        ref_dist = assert_type(HPCSparseMatrix(ref, backend), ST)
 
         result_dist_cpu = to_backend(result_dist, cpu_backend)
         ref_dist_cpu = to_backend(ref_dist, cpu_backend)
@@ -181,12 +181,12 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     V_A = T <: Complex ? T.(1:length(I_A)) .+ im .* T.(length(I_A):-1:1) : T.(1:length(I_A))
     A = sparse(I_A, J_A, V_A, m, n)
 
-    Adist = assert_type(SparseMatrixMPI(A, backend), ST)
+    Adist = assert_type(HPCSparseMatrix(A, backend), ST)
 
     # Test a * A
     a = T <: Complex ? T(2.5 + 0.5im) : T(2.5)
     result_dist = assert_type(a * Adist, ST)
-    ref_dist = assert_type(SparseMatrixMPI(a * A, backend), ST)
+    ref_dist = assert_type(HPCSparseMatrix(a * A, backend), ST)
     result_dist_cpu = to_backend(result_dist, cpu_backend)
     ref_dist_cpu = to_backend(ref_dist, cpu_backend)
     err1 = assert_uniform(norm(result_dist_cpu - ref_dist_cpu, Inf), name="scalar_mul_aA_err")
@@ -201,10 +201,10 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     # Test a * transpose(A) (internal API)
     At = transpose(Adist)
     result_lazy = a * At
-    plan = LinearAlgebraMPI.TransposePlan(result_lazy.parent)
-    result_dist = assert_type(LinearAlgebraMPI.execute_plan!(plan, result_lazy.parent), ST)
+    plan = HPCLinearAlgebra.TransposePlan(result_lazy.parent)
+    result_dist = assert_type(HPCLinearAlgebra.execute_plan!(plan, result_lazy.parent), ST)
     ref = sparse(transpose(a * A))
-    ref_dist = assert_type(SparseMatrixMPI(ref, backend), ST)
+    ref_dist = assert_type(HPCSparseMatrix(ref, backend), ST)
     result_dist_cpu = to_backend(result_dist, cpu_backend)
     ref_dist_cpu = to_backend(ref_dist, cpu_backend)
     err3 = assert_uniform(norm(result_dist_cpu - ref_dist_cpu, Inf), name="scalar_mul_aAt_err")
@@ -212,7 +212,7 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
 
     # Test transpose(A) * a
     result_lazy = At * a
-    result_dist = assert_type(LinearAlgebraMPI.execute_plan!(plan, result_lazy.parent), ST)
+    result_dist = assert_type(HPCLinearAlgebra.execute_plan!(plan, result_lazy.parent), ST)
     result_dist_cpu = to_backend(result_dist, cpu_backend)
     err4 = assert_uniform(norm(result_dist_cpu - ref_dist_cpu, Inf), name="scalar_mul_Ata_err")
     @test err4 < TOL
@@ -226,7 +226,7 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     V_A = T <: Complex ? T.(1:length(I_A)) .+ im .* T.(length(I_A):-1:1) : T.(1:length(I_A))
     A = sparse(I_A, J_A, V_A, m, n)
 
-    Adist = assert_type(SparseMatrixMPI(A, backend), ST)
+    Adist = assert_type(HPCSparseMatrix(A, backend), ST)
     Adist_cpu = to_backend(Adist, cpu_backend)
 
     err1 = assert_uniform(abs(norm(Adist_cpu) - norm(A)), name="norm_2_err")
@@ -248,7 +248,7 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     V_A = T <: Complex ? T.(1:length(I_A)) .+ im .* T.(length(I_A):-1:1) : T.(1:length(I_A))
     A = sparse(I_A, J_A, V_A, m, n)
 
-    Adist = assert_type(SparseMatrixMPI(A, backend), ST)
+    Adist = assert_type(HPCSparseMatrix(A, backend), ST)
     Adist_cpu = to_backend(Adist, cpu_backend)
 
     err1 = assert_uniform(abs(opnorm(Adist_cpu, 1) - opnorm(A, 1)), name="opnorm_1_err")

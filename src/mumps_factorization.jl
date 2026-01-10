@@ -36,7 +36,7 @@ import MUMPS: invoke_mumps_unsafe!
 # Global counter for unique MUMPS object IDs
 const _mumps_count = Ref{Int}(0)
 
-# Registry mapping ID -> MUMPSFactorizationMPI (prevents GC until removed from registry)
+# Registry mapping ID -> MUMPSFactorization (prevents GC until removed from registry)
 const _mumps_registry = Dict{Int, Any}()
 
 # List of MUMPS IDs queued for destruction by this rank's GC
@@ -105,7 +105,7 @@ _mumps_internal_type(::Type{T}) where T<:Real = Float64
 _mumps_internal_type(::Type{T}) where T<:Complex = ComplexF64
 
 """
-    MUMPSFactorizationMPI{Tin, Bin, Tinternal}
+    MUMPSFactorization{Tin, Bin, Tinternal}
 
 Distributed MUMPS factorization result. Can be reused for multiple solves.
 
@@ -120,7 +120,7 @@ with automatic conversion to/from MUMPS-compatible types during factorization an
 Note: The MUMPS object is shared with the analysis cache. The factorization
 does not own the MUMPS object and should not finalize it directly.
 """
-mutable struct MUMPSFactorizationMPI{Tin, Bin<:HPCBackend, Tinternal}
+mutable struct MUMPSFactorization{Tin, Bin<:HPCBackend, Tinternal}
     id::Int  # Unique ID for finalization tracking
     mumps::Any  # Mumps{Tinternal,R} - shared with cache, do not finalize
     irn_loc::Vector{MUMPS_INT}
@@ -135,20 +135,20 @@ mutable struct MUMPSFactorizationMPI{Tin, Bin<:HPCBackend, Tinternal}
     backend::Bin  # Original backend for comm access during solve
 end
 
-Base.size(F::MUMPSFactorizationMPI) = (F.n, F.n)
-Base.eltype(::MUMPSFactorizationMPI{Tin}) where Tin = Tin
+Base.size(F::MUMPSFactorization) = (F.n, F.n)
+Base.eltype(::MUMPSFactorization{Tin}) where Tin = Tin
 
 # ============================================================================
 # Automatic Finalization Functions
 # ============================================================================
 
 """
-    _queue_for_destruction(F::MUMPSFactorizationMPI)
+    _queue_for_destruction(F::MUMPSFactorization)
 
 Julia finalizer callback. Queues the factorization ID for later synchronized
 destruction. Does NOT call MPI (unsafe from GC thread).
 """
-function _queue_for_destruction(F::MUMPSFactorizationMPI)
+function _queue_for_destruction(F::MUMPSFactorization)
     lock(_destroy_list_lock) do
         push!(_destroy_list, F.id)
     end
@@ -206,11 +206,11 @@ function _process_finalizers(comm::AbstractComm)
 end
 
 # ============================================================================
-# Extract COO from SparseMatrixMPI
+# Extract COO from HPCSparseMatrix
 # ============================================================================
 
 """
-    extract_local_coo(A::SparseMatrixMPI{T,Ti,B}; symmetric::Bool=false) where {T,Ti,B}
+    extract_local_coo(A::HPCSparseMatrix{T,Ti,B}; symmetric::Bool=false) where {T,Ti,B}
 
 Extract local COO entries from a distributed sparse matrix for MUMPS input.
 Returns (irn_loc, jcn_loc, a_loc, nzval_perm) with 1-based global indices.
@@ -220,7 +220,7 @@ value updates: a_loc .= AT.nzval[nzval_perm]
 
 For symmetric matrices, only lower triangular entries (row >= col) are extracted.
 """
-function extract_local_coo(A::SparseMatrixMPI{T,Ti,B}; symmetric::Bool=false) where {T,Ti,B}
+function extract_local_coo(A::HPCSparseMatrix{T,Ti,B}; symmetric::Bool=false) where {T,Ti,B}
     comm = A.backend.comm
     rank = comm_rank(comm)
 
@@ -262,12 +262,12 @@ end
 # ============================================================================
 
 """
-    _get_or_create_analysis_plan(A::SparseMatrixMPI{T,Ti,B}, symmetric::Bool) where {T,Ti,B}
+    _get_or_create_analysis_plan(A::HPCSparseMatrix{T,Ti,B}, symmetric::Bool) where {T,Ti,B}
 
 Get a cached analysis plan or create a new one. Returns the plan with
 values updated from matrix A.
 """
-function _get_or_create_analysis_plan(A::SparseMatrixMPI{T,Ti,B}, symmetric::Bool) where {T,Ti,B}
+function _get_or_create_analysis_plan(A::HPCSparseMatrix{T,Ti,B}, symmetric::Bool) where {T,Ti,B}
     # Note: MUMPS uses its own MPI communicator, but we use A's backend for consistency
 
     # Ensure structural hash is computed
@@ -340,25 +340,25 @@ function _get_or_create_analysis_plan(A::SparseMatrixMPI{T,Ti,B}, symmetric::Boo
 end
 
 """
-    _update_values!(plan::MUMPSAnalysisPlan{T}, A::SparseMatrixMPI{T}, symmetric::Bool) where T
+    _update_values!(plan::MUMPSAnalysisPlan{T}, A::HPCSparseMatrix{T}, symmetric::Bool) where T
 
 Update the values in a cached analysis plan from a new matrix with the same structure.
 Uses cached nzval_perm for fast vectorized copy.
 """
-function _update_values!(plan::MUMPSAnalysisPlan{T}, A::SparseMatrixMPI{T}, symmetric::Bool) where T
+function _update_values!(plan::MUMPSAnalysisPlan{T}, A::HPCSparseMatrix{T}, symmetric::Bool) where T
     # Fast vectorized copy using cached permutation
     nzval_cpu = _ensure_cpu(A.nzval)
     plan.a_loc .= nzval_cpu[plan.nzval_perm]
 end
 
 """
-    _convert_to_mumps_compatible(A::SparseMatrixMPI{T,Ti,B}) where {T,Ti,B}
+    _convert_to_mumps_compatible(A::HPCSparseMatrix{T,Ti,B}) where {T,Ti,B}
 
-Convert a SparseMatrixMPI to CPU with MUMPS-compatible element type.
+Convert a HPCSparseMatrix to CPU with MUMPS-compatible element type.
 Returns the converted matrix with element type Float64 or ComplexF64.
 The backend's comm is preserved (creates a CPU backend with same comm).
 """
-function _convert_to_mumps_compatible(A::SparseMatrixMPI{T,Ti,B}) where {T,Ti,B}
+function _convert_to_mumps_compatible(A::HPCSparseMatrix{T,Ti,B}) where {T,Ti,B}
     Tinternal = _mumps_internal_type(T)
 
     # If already compatible (CPU + correct type), just return as-is
@@ -373,12 +373,12 @@ function _convert_to_mumps_compatible(A::SparseMatrixMPI{T,Ti,B}) where {T,Ti,B}
     # Create CPU backend with same comm (MUMPS is CPU-only)
     cpu_backend = HPCBackend(DeviceCPU(), A.backend.comm, A.backend.solver)
 
-    # Create new SparseMatrixMPI with converted type (CPU Vector)
+    # Create new HPCSparseMatrix with converted type (CPU Vector)
     # Structural arrays (rowptr, colval, col_indices) stay the same
     new_rowptr = copy(A.rowptr)
     new_colval = copy(A.colval)
     # For CPU, rowptr_target and colval_target are the same as rowptr and colval
-    return SparseMatrixMPI{Tinternal,Ti,typeof(cpu_backend)}(
+    return HPCSparseMatrix{Tinternal,Ti,typeof(cpu_backend)}(
         A.structural_hash,
         copy(A.row_partition),
         copy(A.col_partition),
@@ -397,7 +397,7 @@ function _convert_to_mumps_compatible(A::SparseMatrixMPI{T,Ti,B}) where {T,Ti,B}
 end
 
 """
-    _create_mumps_factorization(A::SparseMatrixMPI{T, Ti, B}, symmetric::Bool) where {T, Ti, B}
+    _create_mumps_factorization(A::HPCSparseMatrix{T, Ti, B}, symmetric::Bool) where {T, Ti, B}
 
 Create and compute a MUMPS factorization of the distributed matrix A.
 Uses cached symbolic analysis when available for the same sparsity structure.
@@ -405,7 +405,7 @@ Uses cached symbolic analysis when available for the same sparsity structure.
 Automatically converts the matrix to CPU Float64/ComplexF64 internally if needed,
 storing the original backend for later reconstruction during solve.
 """
-function _create_mumps_factorization(A::SparseMatrixMPI{T, Ti, B}, symmetric::Bool) where {T, Ti, B}
+function _create_mumps_factorization(A::HPCSparseMatrix{T, Ti, B}, symmetric::Bool) where {T, Ti, B}
     comm = A.backend.comm
     rank = comm_rank(comm)
 
@@ -438,7 +438,7 @@ function _create_mumps_factorization(A::SparseMatrixMPI{T, Ti, B}, symmetric::Bo
     # Store original backend for comm access during solve
     # Note: We copy the value array since the plan's array is reused.
     # The MUMPS object is shared with the cache (owns_mumps=false).
-    F = MUMPSFactorizationMPI{T, B, Tinternal}(
+    F = MUMPSFactorization{T, B, Tinternal}(
         id, plan.mumps, plan.irn_loc, plan.jcn_loc, copy(plan.a_loc),
         plan.n, symmetric, copy(plan.row_partition), copy(A.col_partition),
         rhs_buffer, false, A.backend
@@ -469,23 +469,23 @@ end
 # ============================================================================
 
 """
-    LinearAlgebra.lu(A::SparseMatrixMPI{T,Ti,B}) where {T,Ti,B}
+    LinearAlgebra.lu(A::HPCSparseMatrix{T,Ti,B}) where {T,Ti,B}
 
 Compute LU factorization of a distributed sparse matrix using MUMPS.
-Returns a `MUMPSFactorizationMPI` for use with `\\` or `solve`.
+Returns a `MUMPSFactorization` for use with `\\` or `solve`.
 """
-function LinearAlgebra.lu(A::SparseMatrixMPI{T,Ti,B}) where {T,Ti,B}
+function LinearAlgebra.lu(A::HPCSparseMatrix{T,Ti,B}) where {T,Ti,B}
     return _create_mumps_factorization(A, false)
 end
 
 """
-    LinearAlgebra.ldlt(A::SparseMatrixMPI{T,Ti,B}) where {T,Ti,B}
+    LinearAlgebra.ldlt(A::HPCSparseMatrix{T,Ti,B}) where {T,Ti,B}
 
 Compute LDLT factorization of a distributed symmetric sparse matrix using MUMPS.
 The matrix must be symmetric; only the lower triangular part is used.
-Returns a `MUMPSFactorizationMPI` for use with `\\` or `solve`.
+Returns a `MUMPSFactorization` for use with `\\` or `solve`.
 """
-function LinearAlgebra.ldlt(A::SparseMatrixMPI{T,Ti,B}) where {T,Ti,B}
+function LinearAlgebra.ldlt(A::HPCSparseMatrix{T,Ti,B}) where {T,Ti,B}
     return _create_mumps_factorization(A, true)
 end
 
@@ -496,20 +496,20 @@ end
 # Helper to create output vector with original type/backend
 function _create_output_vector(::Type{Tin}, backend::B, n::Int, partition) where {Tin, B<:HPCBackend}
     v_cpu = zeros(Tin, n)
-    v_dist = VectorMPI(v_cpu, backend; partition=partition)
+    v_dist = HPCVector(v_cpu, backend; partition=partition)
     # Convert to original device if needed (extensions handle GPU conversion)
     return _convert_vector_to_device(v_dist, backend.device)
 end
 
-# Convert VectorMPI to match a device type.
+# Convert HPCVector to match a device type.
 # WARNING: This function exists ONLY for MUMPS, which is a CPU-only solver.
 # MUMPS requires GPU→CPU→GPU cycling. Do NOT use this for general operations.
 # The base module only defines the identity case (CPU device).
 # Extensions define CPU→GPU conversions (e.g., Vector → MtlVector).
-_convert_vector_to_device(v::VectorMPI, ::DeviceCPU) = v
+_convert_vector_to_device(v::HPCVector, ::DeviceCPU) = v
 
 """
-    solve(F::MUMPSFactorizationMPI{Tin, Bin, Tinternal}, b::VectorMPI) where {Tin, Bin, Tinternal}
+    solve(F::MUMPSFactorization{Tin, Bin, Tinternal}, b::HPCVector) where {Tin, Bin, Tinternal}
 
 Solve the linear system A*x = b using the precomputed MUMPS factorization.
 
@@ -517,7 +517,7 @@ The input vector b can have any compatible element type and backend.
 The result is returned with the same element type and backend as the
 original matrix used for factorization.
 """
-function solve(F::MUMPSFactorizationMPI{Tin, Bin, Tinternal}, b::VectorMPI) where {Tin, Bin, Tinternal}
+function solve(F::MUMPSFactorization{Tin, Bin, Tinternal}, b::HPCVector) where {Tin, Bin, Tinternal}
     # Create output vector with original type/backend
     x = _create_output_vector(Tin, F.backend, F.n, b.partition)
     solve!(x, F, b)
@@ -525,14 +525,14 @@ function solve(F::MUMPSFactorizationMPI{Tin, Bin, Tinternal}, b::VectorMPI) wher
 end
 
 """
-    solve!(x::VectorMPI, F::MUMPSFactorizationMPI{Tin, Bin, Tinternal}, b::VectorMPI) where {Tin, Bin, Tinternal}
+    solve!(x::HPCVector, F::MUMPSFactorization{Tin, Bin, Tinternal}, b::HPCVector) where {Tin, Bin, Tinternal}
 
 Solve A*x = b in-place using MUMPS factorization.
 
 Automatically converts inputs to CPU Float64/ComplexF64 for MUMPS,
 then converts results back to the element type and backend of x.
 """
-function solve!(x::VectorMPI, F::MUMPSFactorizationMPI{Tin, Bin, Tinternal}, b::VectorMPI) where {Tin, Bin, Tinternal}
+function solve!(x::HPCVector, F::MUMPSFactorization{Tin, Bin, Tinternal}, b::HPCVector) where {Tin, Bin, Tinternal}
     comm = F.backend.comm
     rank = comm_rank(comm)
     nranks = comm_size(comm)
@@ -586,8 +586,8 @@ end
 _get_mpi_comm(c::CommMPI) = c.comm
 _get_mpi_comm(::CommSerial) = error("Gatherv/Scatterv not supported for CommSerial in MUMPS solve")
 
-# Helper to copy values into a VectorMPI (handles GPU arrays)
-function _copy_to_vector!(x::VectorMPI{T,B}, values::Vector) where {T,B}
+# Helper to copy values into a HPCVector (handles GPU arrays)
+function _copy_to_vector!(x::HPCVector{T,B}, values::Vector) where {T,B}
     if x.backend.device isa DeviceCPU
         x.v .= values
     else
@@ -611,11 +611,11 @@ end
 _array_to_device(v::Vector{T}, ::DeviceCPU) where T = v
 
 """
-    Base.:\\(F::MUMPSFactorizationMPI, b::VectorMPI)
+    Base.:\\(F::MUMPSFactorization, b::HPCVector)
 
 Solve A*x = b using the backslash operator.
 """
-function Base.:\(F::MUMPSFactorizationMPI, b::VectorMPI)
+function Base.:\(F::MUMPSFactorization, b::HPCVector)
     return solve(F, b)
 end
 
@@ -624,7 +624,7 @@ end
 # ============================================================================
 
 """
-    finalize!(F::MUMPSFactorizationMPI)
+    finalize!(F::MUMPSFactorization)
 
 Release MUMPS resources. Must be called on all ranks together.
 
@@ -632,7 +632,7 @@ Note: If the MUMPS object is shared with the analysis cache (owns_mumps=false),
 this only removes the factorization from the registry. The MUMPS object itself
 is finalized when `clear_mumps_analysis_cache!()` is called.
 """
-function finalize!(F::MUMPSFactorizationMPI)
+function finalize!(F::MUMPSFactorization)
     # Check if already finalized (removed from registry)
     if !haskey(_mumps_registry, F.id)
         return F  # Already finalized, no-op

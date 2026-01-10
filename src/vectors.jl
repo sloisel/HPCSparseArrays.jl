@@ -1,10 +1,10 @@
-# VectorMPI type and vector operations
+# HPCVector type and vector operations
 
 using Adapt
 using KernelAbstractions
 
 """
-    VectorMPI{T, B<:HPCBackend}
+    HPCVector{T, B<:HPCBackend}
 
 A distributed dense vector partitioned across MPI ranks.
 
@@ -18,45 +18,45 @@ A distributed dense vector partitioned across MPI ranks.
 - `v::AbstractVector{T}`: Local vector elements owned by this rank
 - `backend::B`: The HPC backend configuration
 """
-struct VectorMPI{T, B<:HPCBackend} <: AbstractVector{T}
+struct HPCVector{T, B<:HPCBackend} <: AbstractVector{T}
     structural_hash::Blake3Hash
     partition::Vector{Int}
     v::AbstractVector{T}
     backend::B
     # Inner constructor that takes all arguments
-    function VectorMPI{T,B}(hash::Blake3Hash, partition::Vector{Int}, v::AbstractVector{T}, backend::B) where {T, B<:HPCBackend}
+    function HPCVector{T,B}(hash::Blake3Hash, partition::Vector{Int}, v::AbstractVector{T}, backend::B) where {T, B<:HPCBackend}
         new{T,B}(hash, partition, v, backend)
     end
 end
 
 # Type aliases for common backend configurations
-const VectorMPI_CPU{T} = VectorMPI{T, HPCBackend{DeviceCPU, CommMPI, SolverMUMPS}}
-const VectorMPI_CPU_Serial{T} = VectorMPI{T, HPCBackend{DeviceCPU, CommSerial, SolverMUMPS}}
+const HPCVector_CPU{T} = HPCVector{T, HPCBackend{DeviceCPU, CommMPI, SolverMUMPS}}
+const HPCVector_CPU_Serial{T} = HPCVector{T, HPCBackend{DeviceCPU, CommSerial, SolverMUMPS}}
 
 # Convenience constructor that infers B from the backend type
-function VectorMPI{T}(hash::Blake3Hash, partition::Vector{Int}, v::AbstractVector{T}, backend::B) where {T, B<:HPCBackend}
-    VectorMPI{T,B}(hash, partition, v, backend)
+function HPCVector{T}(hash::Blake3Hash, partition::Vector{Int}, v::AbstractVector{T}, backend::B) where {T, B<:HPCBackend}
+    HPCVector{T,B}(hash, partition, v, backend)
 end
 
 # Constructor that infers T from the vector
-function VectorMPI(hash::Blake3Hash, partition::Vector{Int}, v::AbstractVector{T}, backend::B) where {T, B<:HPCBackend}
-    VectorMPI{T,B}(hash, partition, v, backend)
+function HPCVector(hash::Blake3Hash, partition::Vector{Int}, v::AbstractVector{T}, backend::B) where {T, B<:HPCBackend}
+    HPCVector{T,B}(hash, partition, v, backend)
 end
 
-# Get the KernelAbstractions backend for a VectorMPI (for GPU kernels)
-function get_backend(v::VectorMPI)
+# Get the KernelAbstractions backend for a HPCVector (for GPU kernels)
+function get_backend(v::HPCVector)
     return KernelAbstractions.get_backend(v.v)
 end
 
-# Get the HPCBackend for a VectorMPI
-get_hpc_backend(v::VectorMPI) = v.backend
+# Get the HPCBackend for a HPCVector
+get_hpc_backend(v::HPCVector) = v.backend
 
 """
-    VectorMPI_local(v_local::AbstractVector{T}, backend::HPCBackend) where T
+    HPCVector_local(v_local::AbstractVector{T}, backend::HPCBackend) where T
 
-Create a VectorMPI from a local vector on each rank.
+Create a HPCVector from a local vector on each rank.
 
-Unlike `VectorMPI(v_global, backend)` which takes a global vector and partitions it,
+Unlike `HPCVector(v_global, backend)` which takes a global vector and partitions it,
 this constructor takes only the local portion of the vector that each rank owns.
 The partition is computed by gathering the local sizes from all ranks.
 
@@ -68,12 +68,12 @@ The partition is computed by gathering the local sizes from all ranks.
 ```julia
 backend = backend_cpu_mpi(MPI.COMM_WORLD)
 # Rank 0 has [1.0, 2.0], Rank 1 has [3.0, 4.0, 5.0]
-v = VectorMPI_local([1.0, 2.0], backend)  # on rank 0
-v = VectorMPI_local([3.0, 4.0, 5.0], backend)  # on rank 1
+v = HPCVector_local([1.0, 2.0], backend)  # on rank 0
+v = HPCVector_local([3.0, 4.0, 5.0], backend)  # on rank 1
 # Result: distributed vector [1.0, 2.0, 3.0, 4.0, 5.0] with partition [1, 3, 6]
 ```
 """
-function VectorMPI_local(v_local::AbstractVector{T}, backend::B) where {T, B<:HPCBackend}
+function HPCVector_local(v_local::AbstractVector{T}, backend::B) where {T, B<:HPCBackend}
     nranks = comm_size(backend.comm)
 
     # Gather local sizes from all ranks
@@ -90,13 +90,13 @@ function VectorMPI_local(v_local::AbstractVector{T}, backend::B) where {T, B<:HP
     hash = compute_partition_hash(partition)
     # Convert to target device (handles CPU→GPU, GPU→CPU, and same-device cases)
     local_v = _convert_array(v_local, backend.device)
-    return VectorMPI{T,B}(hash, partition, local_v, backend)
+    return HPCVector{T,B}(hash, partition, local_v, backend)
 end
 
 """
-    VectorMPI(v_global::Vector{T}, backend::HPCBackend; partition=uniform_partition(...)) where T
+    HPCVector(v_global::Vector{T}, backend::HPCBackend; partition=uniform_partition(...)) where T
 
-Create a VectorMPI from a global vector, partitioning it across MPI ranks.
+Create a HPCVector from a global vector, partitioning it across MPI ranks.
 
 Each rank extracts only its local portion from `v_global`, so:
 
@@ -113,10 +113,10 @@ Each rank extracts only its local portion from `v_global`, so:
 
 Use `uniform_partition(n, nranks)` to compute custom partitions.
 
-To create a GPU-backed VectorMPI, use `adapt(ka_backend, v)` after creation,
-or use `VectorMPI_local` with a GPU array.
+To create a GPU-backed HPCVector, use `adapt(ka_backend, v)` after creation,
+or use `HPCVector_local` with a GPU array.
 """
-function VectorMPI(v_global::Vector{T}, backend::B;
+function HPCVector(v_global::Vector{T}, backend::B;
                    partition::Vector{Int}=uniform_partition(length(v_global), comm_size(backend.comm))) where {T, B<:HPCBackend}
     rank = comm_rank(backend.comm)
     local_range = partition[rank + 1]:(partition[rank + 2] - 1)
@@ -125,14 +125,14 @@ function VectorMPI(v_global::Vector{T}, backend::B;
     local_v = _convert_array(local_v_cpu, backend.device)
 
     hash = compute_partition_hash(partition)
-    return VectorMPI{T,B}(hash, partition, local_v, backend)
+    return HPCVector{T,B}(hash, partition, local_v, backend)
 end
 
-# Adapt.jl support for converting VectorMPI between KernelAbstractions backends (GPU/CPU)
+# Adapt.jl support for converting HPCVector between KernelAbstractions backends (GPU/CPU)
 # Note: This adapts the array storage but preserves the HPCBackend
-function Adapt.adapt_structure(to, v::VectorMPI{T,B}) where {T,B}
+function Adapt.adapt_structure(to, v::HPCVector{T,B}) where {T,B}
     new_v = adapt(to, v.v)
-    return VectorMPI{T,B}(v.structural_hash, v.partition, new_v, v.backend)
+    return HPCVector{T,B}(v.structural_hash, v.partition, new_v, v.backend)
 end
 
 # Helper to create output vector with same storage type as reference
@@ -209,7 +209,7 @@ A communication plan for gathering vector elements needed for A * x.
 
 # Type Parameters
 - `T`: Element type
-- `AV<:AbstractVector{T}`: Storage type for gathered buffer (matches input VectorMPI)
+- `AV<:AbstractVector{T}`: Storage type for gathered buffer (matches input HPCVector)
 
 # Fields
 - `send_rank_ids::Vector{Int}`: Ranks we send elements to (0-indexed)
@@ -253,7 +253,7 @@ end
 const VectorPlan_CPU{T} = VectorPlan{T,Vector{T}}
 
 """
-    VectorPlan(target_partition::Vector{Int}, source::VectorMPI{T,AV}) where {T,AV}
+    VectorPlan(target_partition::Vector{Int}, source::HPCVector{T,AV}) where {T,AV}
 
 Create a communication plan to gather elements from `source` according to `target_partition`.
 This allows binary operations between vectors with different partitions.
@@ -263,7 +263,7 @@ After executing, `plan.gathered` contains `source[target_partition[rank+1]:targe
 The gathered buffer will have the same storage type as the source vector (CPU or GPU).
 MPI communication always uses CPU staging buffers.
 """
-function VectorPlan(target_partition::Vector{Int}, source::VectorMPI{T,B}) where {T,B<:HPCBackend}
+function VectorPlan(target_partition::Vector{Int}, source::HPCVector{T,B}) where {T,B<:HPCBackend}
     # Get actual array type from the vector for VectorPlan type parameter
     AV = typeof(source.v)
     comm = source.backend.comm
@@ -378,7 +378,7 @@ function VectorPlan(target_partition::Vector{Int}, source::VectorMPI{T,B}) where
 end
 
 """
-    execute_plan!(plan::VectorPlan{T,AV}, x::VectorMPI{T,B}) where {T,AV,B}
+    execute_plan!(plan::VectorPlan{T,AV}, x::HPCVector{T,B}) where {T,AV,B}
 
 Execute a vector communication plan to gather elements from x.
 Returns plan.gathered containing x[A.col_indices] for the associated matrix A.
@@ -389,7 +389,7 @@ buffers, with automatic staging for GPU arrays.
 GPU optimization: When no MPI communication is needed (all data is local),
 uses a GPU gather kernel to avoid copying entire arrays to CPU.
 """
-function execute_plan!(plan::VectorPlan{T,AV}, x::VectorMPI{T,B}) where {T,AV,B}
+function execute_plan!(plan::VectorPlan{T,AV}, x::HPCVector{T,B}) where {T,AV,B}
     comm = x.backend.comm
 
     # Check if we can use GPU-optimized path (no MPI communication needed)
@@ -462,13 +462,13 @@ end
 
 
 # ============================================================================
-# VectorRepartitionPlan: Repartition a VectorMPI to a new partition
+# VectorRepartitionPlan: Repartition a HPCVector to a new partition
 # ============================================================================
 
 """
     VectorRepartitionPlan{T}
 
-Communication plan for repartitioning a VectorMPI to a new partition.
+Communication plan for repartitioning a HPCVector to a new partition.
 
 # Fields
 - `send_rank_ids::Vector{Int}`: Ranks we send elements to (0-indexed)
@@ -504,7 +504,7 @@ mutable struct VectorRepartitionPlan{T}
 end
 
 """
-    VectorRepartitionPlan(x::VectorMPI{T,B}, p::Vector{Int}) where {T,B}
+    VectorRepartitionPlan(x::HPCVector{T,B}, p::Vector{Int}) where {T,B}
 
 Create a communication plan to repartition `x` to have partition `p`.
 
@@ -514,7 +514,7 @@ The plan computes:
 3. Pre-allocates all buffers for allocation-free execution
 4. Computes the result partition hash eagerly
 """
-function VectorRepartitionPlan(x::VectorMPI{T,B}, p::Vector{Int}) where {T,B}
+function VectorRepartitionPlan(x::HPCVector{T,B}, p::Vector{Int}) where {T,B}
     comm = x.backend.comm
     rank = comm_rank(comm)
     nranks = comm_size(comm)
@@ -617,12 +617,12 @@ function VectorRepartitionPlan(x::VectorMPI{T,B}, p::Vector{Int}) where {T,B}
 end
 
 """
-    execute_plan!(plan::VectorRepartitionPlan{T}, x::VectorMPI{T,B}) where {T,B}
+    execute_plan!(plan::VectorRepartitionPlan{T}, x::HPCVector{T,B}) where {T,B}
 
 Execute a vector repartition plan to redistribute elements from x to a new partition.
-Returns a new VectorMPI with the target partition, preserving the array type (CPU/GPU) and backend.
+Returns a new HPCVector with the target partition, preserving the array type (CPU/GPU) and backend.
 """
-function execute_plan!(plan::VectorRepartitionPlan{T}, x::VectorMPI{T,B}) where {T,B}
+function execute_plan!(plan::VectorRepartitionPlan{T}, x::HPCVector{T,B}) where {T,B}
     comm = x.backend.comm
 
     # Get CPU version of input for MPI operations
@@ -670,16 +670,16 @@ function execute_plan!(plan::VectorRepartitionPlan{T}, x::VectorMPI{T,B}) where 
     # Copy result back to target array type using dispatch (no type checks)
     result_v = _values_to_backend(result_cpu, x.v)
 
-    return VectorMPI{T,B}(plan.result_partition_hash, plan.result_partition, result_v, x.backend)
+    return HPCVector{T,B}(plan.result_partition_hash, plan.result_partition, result_v, x.backend)
 end
 
 """
-    get_repartition_plan(x::VectorMPI{T}, p::Vector{Int}) where T
+    get_repartition_plan(x::HPCVector{T}, p::Vector{Int}) where T
 
 Get a memoized VectorRepartitionPlan for repartitioning `x` to partition `p`.
 The plan is cached based on the structural hash of x and the target partition hash.
 """
-function get_repartition_plan(x::VectorMPI{T}, p::Vector{Int}) where T
+function get_repartition_plan(x::HPCVector{T}, p::Vector{Int}) where T
     target_hash = compute_partition_hash(p)
     key = (x.structural_hash, target_hash, T)
     if haskey(_repartition_plan_cache, key)
@@ -691,23 +691,23 @@ function get_repartition_plan(x::VectorMPI{T}, p::Vector{Int}) where T
 end
 
 """
-    repartition(x::VectorMPI{T}, p::Vector{Int}) where T
+    repartition(x::HPCVector{T}, p::Vector{Int}) where T
 
-Redistribute a VectorMPI to a new partition `p`.
+Redistribute a HPCVector to a new partition `p`.
 
 The partition `p` must be a valid partition vector of length `nranks + 1` with
 `p[1] == 1` and `p[end] == length(x) + 1`.
 
-Returns a new VectorMPI with the same data but `partition == p`.
+Returns a new HPCVector with the same data but `partition == p`.
 
 # Example
 ```julia
-v = VectorMPI([1.0, 2.0, 3.0, 4.0])  # uniform partition
+v = HPCVector([1.0, 2.0, 3.0, 4.0])  # uniform partition
 new_partition = [1, 2, 5]  # rank 0 gets 1 element, rank 1 gets 3
 v_repart = repartition(v, new_partition)
 ```
 """
-function repartition(x::VectorMPI{T}, p::Vector{Int}) where T
+function repartition(x::HPCVector{T}, p::Vector{Int}) where T
     # Fast path: partition unchanged (identity check first, then element-wise)
     if x.partition === p || x.partition == p
         return x
@@ -720,40 +720,40 @@ end
 # Vector operations: conj, transpose, adjoint
 
 """
-    Base.conj(v::VectorMPI{T,B}) where {T,B}
+    Base.conj(v::HPCVector{T,B}) where {T,B}
 
-Return a new VectorMPI with conjugated values.
+Return a new HPCVector with conjugated values.
 """
-function Base.conj(v::VectorMPI{T,B}) where {T,B}
-    return VectorMPI{T,B}(v.structural_hash, v.partition, conj.(v.v), v.backend)
+function Base.conj(v::HPCVector{T,B}) where {T,B}
+    return HPCVector{T,B}(v.structural_hash, v.partition, conj.(v.v), v.backend)
 end
 
 """
-    Base.transpose(v::VectorMPI{T}) where T
+    Base.transpose(v::HPCVector{T}) where T
 
 Return a lazy transpose wrapper around v.
 """
-Base.transpose(v::VectorMPI{T}) where T = Transpose(v)
+Base.transpose(v::HPCVector{T}) where T = Transpose(v)
 
 """
-    Base.adjoint(v::VectorMPI{T}) where T
+    Base.adjoint(v::HPCVector{T}) where T
 
 Return transpose(conj(v)), i.e., the conjugate transpose.
 The conj(v) is materialized.
 """
-Base.adjoint(v::VectorMPI{T}) where T = transpose(conj(v))
+Base.adjoint(v::HPCVector{T}) where T = transpose(conj(v))
 
 # Vector norms and reductions
 
 """
-    LinearAlgebra.norm(v::VectorMPI{T,B}, p::Real=2) where {T,B}
+    LinearAlgebra.norm(v::HPCVector{T,B}, p::Real=2) where {T,B}
 
 Compute the p-norm of the distributed vector v.
 - `p=2` (default): Euclidean norm (sqrt of sum of squared absolute values)
 - `p=1`: Sum of absolute values
 - `p=Inf`: Maximum absolute value
 """
-function LinearAlgebra.norm(v::VectorMPI{T,B}, p::Real=2) where {T,B}
+function LinearAlgebra.norm(v::HPCVector{T,B}, p::Real=2) where {T,B}
     comm = v.backend.comm
 
     if p == 2
@@ -778,7 +778,7 @@ function LinearAlgebra.norm(v::VectorMPI{T,B}, p::Real=2) where {T,B}
 end
 
 """
-    LinearAlgebra.dot(x::VectorMPI{T,B}, y::VectorMPI{T,B}) where {T,B}
+    LinearAlgebra.dot(x::HPCVector{T,B}, y::HPCVector{T,B}) where {T,B}
 
 Compute the dot product of two distributed vectors.
 
@@ -788,12 +788,12 @@ the second vector is redistributed to match the first vector's partition.
 # Example
 ```julia
 backend = backend_cpu_mpi(MPI.COMM_WORLD)
-x = VectorMPI(rand(10), backend)
-y = VectorMPI(rand(10), backend)
+x = HPCVector(rand(10), backend)
+y = HPCVector(rand(10), backend)
 d = dot(x, y)
 ```
 """
-function LinearAlgebra.dot(x::VectorMPI{T,B}, y::VectorMPI{T,B}) where {T,B}
+function LinearAlgebra.dot(x::HPCVector{T,B}, y::HPCVector{T,B}) where {T,B}
     assert_backends_compatible(x.backend, y.backend)
     comm = x.backend.comm
 
@@ -810,33 +810,33 @@ function LinearAlgebra.dot(x::VectorMPI{T,B}, y::VectorMPI{T,B}) where {T,B}
 end
 
 """
-    Base.maximum(v::VectorMPI{T,B}) where {T,B}
+    Base.maximum(v::HPCVector{T,B}) where {T,B}
 
 Compute the maximum element of the distributed vector.
 """
-function Base.maximum(v::VectorMPI{T,B}) where {T,B}
+function Base.maximum(v::HPCVector{T,B}) where {T,B}
     comm = v.backend.comm
     local_max = isempty(v.v) ? typemin(real(T)) : maximum(real, v.v)
     return comm_allreduce(comm, local_max, max)
 end
 
 """
-    Base.minimum(v::VectorMPI{T,B}) where {T,B}
+    Base.minimum(v::HPCVector{T,B}) where {T,B}
 
 Compute the minimum element of the distributed vector.
 """
-function Base.minimum(v::VectorMPI{T,B}) where {T,B}
+function Base.minimum(v::HPCVector{T,B}) where {T,B}
     comm = v.backend.comm
     local_min = isempty(v.v) ? typemax(real(T)) : minimum(real, v.v)
     return comm_allreduce(comm, local_min, min)
 end
 
 """
-    Base.sum(v::VectorMPI{T,B}) where {T,B}
+    Base.sum(v::HPCVector{T,B}) where {T,B}
 
 Compute the sum of all elements in the distributed vector.
 """
-function Base.sum(v::VectorMPI{T,B}) where {T,B}
+function Base.sum(v::HPCVector{T,B}) where {T,B}
     comm = v.backend.comm
     # Use native sum without init for better performance; handle empty with ternary
     local_sum = isempty(v.v) ? zero(T) : sum(v.v)
@@ -844,11 +844,11 @@ function Base.sum(v::VectorMPI{T,B}) where {T,B}
 end
 
 """
-    Base.prod(v::VectorMPI{T,B}) where {T,B}
+    Base.prod(v::HPCVector{T,B}) where {T,B}
 
 Compute the product of all elements in the distributed vector.
 """
-function Base.prod(v::VectorMPI{T,B}) where {T,B}
+function Base.prod(v::HPCVector{T,B}) where {T,B}
     comm = v.backend.comm
     # Use native prod without init for better performance; handle empty with ternary
     local_prod = isempty(v.v) ? one(T) : prod(v.v)
@@ -858,253 +858,253 @@ end
 # Vector addition and subtraction
 
 """
-    Base.:+(u::VectorMPI{T}, v::VectorMPI{T}) where T
+    Base.:+(u::HPCVector{T}, v::HPCVector{T}) where T
 
 Add two distributed vectors. If partitions differ, v is aligned to u's partition.
 The result has u's partition. Both vectors must have the same backend.
 """
-function Base.:+(u::VectorMPI{T,B}, v::VectorMPI{T,B}) where {T,B}
+function Base.:+(u::HPCVector{T,B}, v::HPCVector{T,B}) where {T,B}
     assert_backends_compatible(u.backend, v.backend)
     if u.structural_hash == v.structural_hash
-        return VectorMPI{T,B}(u.structural_hash, u.partition, u.v .+ v.v, u.backend)
+        return HPCVector{T,B}(u.structural_hash, u.partition, u.v .+ v.v, u.backend)
     else
         # Align v to u's partition using repartition
         v_aligned = repartition(v, u.partition)
-        return VectorMPI{T,B}(u.structural_hash, u.partition, u.v .+ v_aligned.v, u.backend)
+        return HPCVector{T,B}(u.structural_hash, u.partition, u.v .+ v_aligned.v, u.backend)
     end
 end
 
 """
-    Base.:-(u::VectorMPI{T}, v::VectorMPI{T}) where T
+    Base.:-(u::HPCVector{T}, v::HPCVector{T}) where T
 
 Subtract two distributed vectors. If partitions differ, v is aligned to u's partition.
 The result has u's partition. Both vectors must have the same backend.
 """
-function Base.:-(u::VectorMPI{T,B}, v::VectorMPI{T,B}) where {T,B}
+function Base.:-(u::HPCVector{T,B}, v::HPCVector{T,B}) where {T,B}
     assert_backends_compatible(u.backend, v.backend)
     if u.structural_hash == v.structural_hash
-        return VectorMPI{T,B}(u.structural_hash, u.partition, u.v .- v.v, u.backend)
+        return HPCVector{T,B}(u.structural_hash, u.partition, u.v .- v.v, u.backend)
     else
         # Align v to u's partition using repartition
         v_aligned = repartition(v, u.partition)
-        return VectorMPI{T,B}(u.structural_hash, u.partition, u.v .- v_aligned.v, u.backend)
+        return HPCVector{T,B}(u.structural_hash, u.partition, u.v .- v_aligned.v, u.backend)
     end
 end
 
 """
-    Base.:-(v::VectorMPI{T,B}) where {T,B}
+    Base.:-(v::HPCVector{T,B}) where {T,B}
 
 Negate a distributed vector.
 """
-function Base.:-(v::VectorMPI{T,B}) where {T,B}
-    return VectorMPI{T,B}(v.structural_hash, v.partition, .-v.v, v.backend)
+function Base.:-(v::HPCVector{T,B}) where {T,B}
+    return HPCVector{T,B}(v.structural_hash, v.partition, .-v.v, v.backend)
 end
 
 # Mixed transpose addition/subtraction
 # transpose(u) +/- transpose(v) works, aligning v to u's partition if needed
 
 """
-    Base.:+(ut::Transpose{<:Any, VectorMPI{T}}, vt::Transpose{<:Any, VectorMPI{T}}) where T
+    Base.:+(ut::Transpose{<:Any, HPCVector{T}}, vt::Transpose{<:Any, HPCVector{T}}) where T
 
 Add two transposed vectors. If partitions differ, vt is aligned to ut's partition.
-Returns a transposed VectorMPI.
+Returns a transposed HPCVector.
 """
-function Base.:+(ut::Transpose{<:Any, VectorMPI{T}}, vt::Transpose{<:Any, VectorMPI{T}}) where T
+function Base.:+(ut::Transpose{<:Any, HPCVector{T}}, vt::Transpose{<:Any, HPCVector{T}}) where T
     return transpose(ut.parent + vt.parent)
 end
 
 """
-    Base.:-(ut::Transpose{<:Any, VectorMPI{T}}, vt::Transpose{<:Any, VectorMPI{T}}) where T
+    Base.:-(ut::Transpose{<:Any, HPCVector{T}}, vt::Transpose{<:Any, HPCVector{T}}) where T
 
 Subtract two transposed vectors. If partitions differ, vt is aligned to ut's partition.
-Returns a transposed VectorMPI.
+Returns a transposed HPCVector.
 """
-function Base.:-(ut::Transpose{<:Any, VectorMPI{T}}, vt::Transpose{<:Any, VectorMPI{T}}) where T
+function Base.:-(ut::Transpose{<:Any, HPCVector{T}}, vt::Transpose{<:Any, HPCVector{T}}) where T
     return transpose(ut.parent - vt.parent)
 end
 
 """
-    Base.:-(vt::Transpose{<:Any, VectorMPI{T}}) where T
+    Base.:-(vt::Transpose{<:Any, HPCVector{T}}) where T
 
-Negate a transposed vector. Returns a transposed VectorMPI.
+Negate a transposed vector. Returns a transposed HPCVector.
 """
-function Base.:-(vt::Transpose{<:Any, VectorMPI{T}}) where T
+function Base.:-(vt::Transpose{<:Any, HPCVector{T}}) where T
     return transpose(-vt.parent)
 end
 
-# Scalar multiplication for VectorMPI
+# Scalar multiplication for HPCVector
 
 """
-    Base.:*(a::Number, v::VectorMPI{T,B}) where {T,B}
+    Base.:*(a::Number, v::HPCVector{T,B}) where {T,B}
 
 Scalar times vector.
 """
-function Base.:*(a::Number, v::VectorMPI{T,B}) where {T,B}
+function Base.:*(a::Number, v::HPCVector{T,B}) where {T,B}
     RT = promote_type(typeof(a), T)
-    return VectorMPI{RT,B}(v.structural_hash, v.partition, RT.(a .* v.v), v.backend)
+    return HPCVector{RT,B}(v.structural_hash, v.partition, RT.(a .* v.v), v.backend)
 end
 
 """
-    Base.:*(v::VectorMPI{T,B}, a::Number) where {T,B}
+    Base.:*(v::HPCVector{T,B}, a::Number) where {T,B}
 
 Vector times scalar.
 """
-Base.:*(v::VectorMPI{T,B}, a::Number) where {T,B} = a * v
+Base.:*(v::HPCVector{T,B}, a::Number) where {T,B} = a * v
 
 """
-    Base.:/(v::VectorMPI{T,B}, a::Number) where {T,B}
+    Base.:/(v::HPCVector{T,B}, a::Number) where {T,B}
 
 Vector divided by scalar.
 """
-function Base.:/(v::VectorMPI{T,B}, a::Number) where {T,B}
+function Base.:/(v::HPCVector{T,B}, a::Number) where {T,B}
     RT = promote_type(typeof(a), T)
-    return VectorMPI{RT,B}(v.structural_hash, v.partition, RT.(v.v ./ a), v.backend)
+    return HPCVector{RT,B}(v.structural_hash, v.partition, RT.(v.v ./ a), v.backend)
 end
 
-# Scalar multiplication for transposed VectorMPI
+# Scalar multiplication for transposed HPCVector
 
 """
-    Base.:*(a::Number, vt::Transpose{<:Any, VectorMPI{T}}) where T
+    Base.:*(a::Number, vt::Transpose{<:Any, HPCVector{T}}) where T
 
 Scalar times transposed vector.
 """
-Base.:*(a::Number, vt::Transpose{<:Any, VectorMPI{T}}) where T = transpose(a * vt.parent)
+Base.:*(a::Number, vt::Transpose{<:Any, HPCVector{T}}) where T = transpose(a * vt.parent)
 
 """
-    Base.:*(vt::Transpose{<:Any, VectorMPI{T}}, a::Number) where T
+    Base.:*(vt::Transpose{<:Any, HPCVector{T}}, a::Number) where T
 
 Transposed vector times scalar.
 """
-Base.:*(vt::Transpose{<:Any, VectorMPI{T}}, a::Number) where T = transpose(vt.parent * a)
+Base.:*(vt::Transpose{<:Any, HPCVector{T}}, a::Number) where T = transpose(vt.parent * a)
 
 """
-    Base.:/(vt::Transpose{<:Any, VectorMPI{T}}, a::Number) where T
+    Base.:/(vt::Transpose{<:Any, HPCVector{T}}, a::Number) where T
 
 Transposed vector divided by scalar.
 """
-Base.:/(vt::Transpose{<:Any, VectorMPI{T}}, a::Number) where T = transpose(vt.parent / a)
+Base.:/(vt::Transpose{<:Any, HPCVector{T}}, a::Number) where T = transpose(vt.parent / a)
 
 # Vector size and eltype
 
 """
-    Base.length(v::VectorMPI)
+    Base.length(v::HPCVector)
 
 Return the total length of the distributed vector.
 """
-Base.length(v::VectorMPI) = v.partition[end] - 1
+Base.length(v::HPCVector) = v.partition[end] - 1
 
 """
-    Base.size(v::VectorMPI)
+    Base.size(v::HPCVector)
 
 Return the size of the distributed vector as a tuple.
 """
-Base.size(v::VectorMPI) = (length(v),)
+Base.size(v::HPCVector) = (length(v),)
 
-Base.size(v::VectorMPI, d::Integer) = d == 1 ? length(v) : 1
+Base.size(v::HPCVector, d::Integer) = d == 1 ? length(v) : 1
 
-Base.eltype(::VectorMPI{T}) where T = T
-Base.eltype(::Type{VectorMPI{T}}) where T = T
+Base.eltype(::HPCVector{T}) where T = T
+Base.eltype(::Type{HPCVector{T}}) where T = T
 
 # ============================================================================
-# Extended VectorMPI API - Element-wise Operations
+# Extended HPCVector API - Element-wise Operations
 # ============================================================================
 
 """
-    Base.abs(v::VectorMPI{T,B}) where {T,B}
+    Base.abs(v::HPCVector{T,B}) where {T,B}
 
-Return a new VectorMPI with absolute values of all elements.
+Return a new HPCVector with absolute values of all elements.
 """
-function Base.abs(v::VectorMPI{T,B}) where {T,B}
+function Base.abs(v::HPCVector{T,B}) where {T,B}
     RT = real(T)
-    return VectorMPI{RT,B}(v.structural_hash, v.partition, abs.(v.v), v.backend)
+    return HPCVector{RT,B}(v.structural_hash, v.partition, abs.(v.v), v.backend)
 end
 
 """
-    Base.abs2(v::VectorMPI{T,B}) where {T,B}
+    Base.abs2(v::HPCVector{T,B}) where {T,B}
 
-Return a new VectorMPI with squared absolute values of all elements.
+Return a new HPCVector with squared absolute values of all elements.
 """
-function Base.abs2(v::VectorMPI{T,B}) where {T,B}
+function Base.abs2(v::HPCVector{T,B}) where {T,B}
     RT = real(T)
-    return VectorMPI{RT,B}(v.structural_hash, v.partition, abs2.(v.v), v.backend)
+    return HPCVector{RT,B}(v.structural_hash, v.partition, abs2.(v.v), v.backend)
 end
 
 """
-    Base.real(v::VectorMPI{T,B}) where {T,B}
+    Base.real(v::HPCVector{T,B}) where {T,B}
 
-Return a new VectorMPI containing the real parts of all elements.
+Return a new HPCVector containing the real parts of all elements.
 """
-function Base.real(v::VectorMPI{T,B}) where {T,B}
+function Base.real(v::HPCVector{T,B}) where {T,B}
     RT = real(T)
-    return VectorMPI{RT,B}(v.structural_hash, v.partition, real.(v.v), v.backend)
+    return HPCVector{RT,B}(v.structural_hash, v.partition, real.(v.v), v.backend)
 end
 
 """
-    Base.imag(v::VectorMPI{T,B}) where {T,B}
+    Base.imag(v::HPCVector{T,B}) where {T,B}
 
-Return a new VectorMPI containing the imaginary parts of all elements.
+Return a new HPCVector containing the imaginary parts of all elements.
 """
-function Base.imag(v::VectorMPI{T,B}) where {T,B}
+function Base.imag(v::HPCVector{T,B}) where {T,B}
     RT = real(T)
-    return VectorMPI{RT,B}(v.structural_hash, v.partition, imag.(v.v), v.backend)
+    return HPCVector{RT,B}(v.structural_hash, v.partition, imag.(v.v), v.backend)
 end
 
 """
-    Base.copy(v::VectorMPI{T,B}) where {T,B}
+    Base.copy(v::HPCVector{T,B}) where {T,B}
 
 Create a deep copy of the distributed vector.
 """
-function Base.copy(v::VectorMPI{T,B}) where {T,B}
-    return VectorMPI{T,B}(v.structural_hash, copy(v.partition), copy(v.v), v.backend)
+function Base.copy(v::HPCVector{T,B}) where {T,B}
+    return HPCVector{T,B}(v.structural_hash, copy(v.partition), copy(v.v), v.backend)
 end
 
 """
-    mean(v::VectorMPI{T}) where T
+    mean(v::HPCVector{T}) where T
 
 Compute the mean of all elements in the distributed vector.
 """
-function mean(v::VectorMPI{T}) where T
+function mean(v::HPCVector{T}) where T
     return sum(v) / length(v)
 end
 
 # ============================================================================
-# Broadcasting Support for VectorMPI
+# Broadcasting Support for HPCVector
 # ============================================================================
 
 import Base.Broadcast: BroadcastStyle, Broadcasted, DefaultArrayStyle, AbstractArrayStyle
 import Base.Broadcast: broadcasted, materialize, instantiate, broadcastable
 
 """
-    VectorMPIStyle <: AbstractArrayStyle{1}
+    HPCVectorStyle <: AbstractArrayStyle{1}
 
-Custom broadcast style for VectorMPI that ensures broadcast operations
-return VectorMPI results and handle distributed data correctly.
+Custom broadcast style for HPCVector that ensures broadcast operations
+return HPCVector results and handle distributed data correctly.
 """
-struct VectorMPIStyle <: AbstractArrayStyle{1} end
+struct HPCVectorStyle <: AbstractArrayStyle{1} end
 
-# VectorMPI uses VectorMPIStyle
-Base.BroadcastStyle(::Type{<:VectorMPI}) = VectorMPIStyle()
+# HPCVector uses HPCVectorStyle
+Base.BroadcastStyle(::Type{<:HPCVector}) = HPCVectorStyle()
 
-# VectorMPI is its own broadcastable representation (don't try to iterate)
-Base.Broadcast.broadcastable(v::VectorMPI) = v
+# HPCVector is its own broadcastable representation (don't try to iterate)
+Base.Broadcast.broadcastable(v::HPCVector) = v
 
-# Define axes for VectorMPI (needed for broadcast)
-Base.axes(v::VectorMPI) = (Base.OneTo(length(v)),)
+# Define axes for HPCVector (needed for broadcast)
+Base.axes(v::HPCVector) = (Base.OneTo(length(v)),)
 
-# VectorMPIStyle wins over DefaultArrayStyle for scalars and regular arrays
-Base.BroadcastStyle(::VectorMPIStyle, ::DefaultArrayStyle{0}) = VectorMPIStyle()
-Base.BroadcastStyle(::VectorMPIStyle, ::DefaultArrayStyle{N}) where N = VectorMPIStyle()
+# HPCVectorStyle wins over DefaultArrayStyle for scalars and regular arrays
+Base.BroadcastStyle(::HPCVectorStyle, ::DefaultArrayStyle{0}) = HPCVectorStyle()
+Base.BroadcastStyle(::HPCVectorStyle, ::DefaultArrayStyle{N}) where N = HPCVectorStyle()
 
-# Two VectorMPI => VectorMPIStyle
-Base.BroadcastStyle(::VectorMPIStyle, ::VectorMPIStyle) = VectorMPIStyle()
+# Two HPCVector => HPCVectorStyle
+Base.BroadcastStyle(::HPCVectorStyle, ::HPCVectorStyle) = HPCVectorStyle()
 
 """
     _find_vectormpi(args...)
 
-Find the first VectorMPI in a tuple of broadcast arguments.
+Find the first HPCVector in a tuple of broadcast arguments.
 Recursively searches through nested Broadcasted objects.
 """
-_find_vectormpi(v::VectorMPI, args...) = v
+_find_vectormpi(v::HPCVector, args...) = v
 function _find_vectormpi(bc::Broadcasted, args...)
     # Search in nested Broadcasted
     result = _find_vectormpi(bc.args...)
@@ -1119,23 +1119,23 @@ _find_vectormpi() = nothing
 """
     _find_all_vectormpi(args...)
 
-Find all VectorMPI arguments and return them as a tuple.
+Find all HPCVector arguments and return them as a tuple.
 """
 _find_all_vectormpi(args::Tuple) = _find_all_vectormpi_impl(args...)
 _find_all_vectormpi_impl() = ()
-_find_all_vectormpi_impl(v::VectorMPI, args...) = (v, _find_all_vectormpi_impl(args...)...)
+_find_all_vectormpi_impl(v::HPCVector, args...) = (v, _find_all_vectormpi_impl(args...)...)
 _find_all_vectormpi_impl(::Any, args...) = _find_all_vectormpi_impl(args...)
 
 """
     _prepare_broadcast_arg(arg, ref_partition, comm)
 
 Prepare a broadcast argument for local computation.
-- VectorMPI with same partition: return local vector
-- VectorMPI with different partition: align to ref_partition
+- HPCVector with same partition: return local vector
+- HPCVector with different partition: align to ref_partition
 - Nested Broadcasted: recursively prepare and materialize
 - Scalar or other: return as-is
 """
-function _prepare_broadcast_arg(v::VectorMPI, ref_partition, backend)
+function _prepare_broadcast_arg(v::HPCVector, ref_partition, backend)
     # Use identity check first (fast), then element-wise comparison
     if v.partition === ref_partition || v.partition == ref_partition
         return v.v
@@ -1146,7 +1146,7 @@ function _prepare_broadcast_arg(v::VectorMPI, ref_partition, backend)
 end
 
 # Handle nested Broadcasted objects by recursively preparing their arguments
-function _prepare_broadcast_arg(bc::Broadcasted{VectorMPIStyle}, ref_partition, backend)
+function _prepare_broadcast_arg(bc::Broadcasted{HPCVectorStyle}, ref_partition, backend)
     # Recursively prepare nested arguments
     prepared_args = map(arg -> _prepare_broadcast_arg(arg, ref_partition, backend), bc.args)
     # Return a new Broadcasted with prepared (local) arguments
@@ -1167,40 +1167,40 @@ _prepare_broadcast_arg(r::Base.RefValue, ref_partition, backend) = r
 _prepare_broadcast_arg(x, ref_partition, backend) = x
 
 """
-    Base.similar(bc::Broadcasted{VectorMPIStyle}, ::Type{ElType}) where ElType
+    Base.similar(bc::Broadcasted{HPCVectorStyle}, ::Type{ElType}) where ElType
 
-Allocate output array for VectorMPI broadcast.
-Preserves the storage type (CPU/GPU) of the first VectorMPI in the broadcast.
+Allocate output array for HPCVector broadcast.
+Preserves the storage type (CPU/GPU) of the first HPCVector in the broadcast.
 """
-function Base.similar(bc::Broadcasted{VectorMPIStyle}, ::Type{ElType}) where ElType
-    # Find a VectorMPI to get partition info, array type, and backend
+function Base.similar(bc::Broadcasted{HPCVectorStyle}, ::Type{ElType}) where ElType
+    # Find a HPCVector to get partition info, array type, and backend
     v = _find_vectormpi(bc.args...)
     if v === nothing
-        error("No VectorMPI found in broadcast arguments")
+        error("No HPCVector found in broadcast arguments")
     end
     # Create output with same partition, storage type, and backend
     # similar() preserves the array type (CPU Vector or GPU MtlVector)
     new_v = similar(v.v, ElType, length(v.v))
     B = typeof(v.backend)
-    return VectorMPI{ElType,B}(v.structural_hash, v.partition, new_v, v.backend)
+    return HPCVector{ElType,B}(v.structural_hash, v.partition, new_v, v.backend)
 end
 
 """
-    Base.copyto!(dest::VectorMPI, bc::Broadcasted{VectorMPIStyle})
+    Base.copyto!(dest::HPCVector, bc::Broadcasted{HPCVectorStyle})
 
 Execute the broadcast operation and store results in dest.
 """
-function Base.copyto!(dest::VectorMPI, bc::Broadcasted{VectorMPIStyle})
+function Base.copyto!(dest::HPCVector, bc::Broadcasted{HPCVectorStyle})
     # Use backend from destination for communication
     backend = dest.backend
 
-    # Find all VectorMPI arguments
+    # Find all HPCVector arguments
     all_vmpi = _find_all_vectormpi(bc.args)
 
     # Use the destination's partition as reference
     ref_partition = dest.partition
 
-    # Prepare all arguments (align VectorMPI to ref_partition, pass others through)
+    # Prepare all arguments (align HPCVector to ref_partition, pass others through)
     prepared_args = map(arg -> _prepare_broadcast_arg(arg, ref_partition, backend), bc.args)
 
     # Perform local broadcast
@@ -1210,7 +1210,7 @@ function Base.copyto!(dest::VectorMPI, bc::Broadcasted{VectorMPIStyle})
     return dest
 end
 
-# Convenience: allow broadcast assignment to existing VectorMPI
-function Base.materialize!(dest::VectorMPI, bc::Broadcasted{VectorMPIStyle})
+# Convenience: allow broadcast assignment to existing HPCVector
+function Base.materialize!(dest::HPCVector, bc::Broadcasted{HPCVectorStyle})
     return copyto!(dest, instantiate(bc))
 end

@@ -1,6 +1,6 @@
 #!/usr/bin/env julia
 #
-# Benchmark LinearAlgebraMPI types vs native Julia types (single rank)
+# Benchmark HPCLinearAlgebra types vs native Julia types (single rank)
 #
 # This script identifies performance bottlenecks in the distributed code path
 # by comparing against native Julia operations with 1 MPI rank.
@@ -17,7 +17,7 @@ using Printf
 using Dates
 using Random
 using BenchmarkTools
-using LinearAlgebraMPI
+using HPCLinearAlgebra
 
 const comm = MPI.COMM_WORLD
 const rank = MPI.Comm_rank(comm)
@@ -127,8 +127,8 @@ function benchmark_vector_ops(n, ::Type{T}) where T
     w_native = generate_vector(n, T)
 
     # Create MPI versions
-    v_mpi = VectorMPI(v_native)
-    w_mpi = VectorMPI(w_native)
+    v_mpi = HPCVector(v_native)
+    w_mpi = HPCVector(w_native)
 
     results = Dict{String, Tuple{Float64, Float64}}()
 
@@ -178,8 +178,8 @@ function benchmark_sparse_matvec(n, ::Type{T}) where T
     x_native = generate_vector(n, T)
 
     # Create MPI versions
-    A_mpi = SparseMatrixMPI{T}(A_native)
-    x_mpi = VectorMPI(x_native)
+    A_mpi = HPCSparseMatrix{T}(A_native)
+    x_mpi = HPCVector(x_native)
 
     results = Dict{String, Tuple{Float64, Float64}}()
 
@@ -206,8 +206,8 @@ function benchmark_dense_matvec(n, ::Type{T}) where T
     x_native = generate_vector(n, T)
 
     # Create MPI versions
-    A_mpi = MatrixMPI(A_native)
-    x_mpi = VectorMPI(x_native)
+    A_mpi = HPCMatrix(A_native)
+    x_mpi = HPCVector(x_native)
 
     results = Dict{String, Tuple{Float64, Float64}}()
 
@@ -234,8 +234,8 @@ function benchmark_sparse_matmat(n, ::Type{T}) where T
     B_native = generate_sparse(n, T)
 
     # Create MPI versions
-    A_mpi = SparseMatrixMPI{T}(A_native)
-    B_mpi = SparseMatrixMPI{T}(B_native)
+    A_mpi = HPCSparseMatrix{T}(A_native)
+    B_mpi = HPCSparseMatrix{T}(B_native)
 
     results = Dict{String, Tuple{Float64, Float64}}()
 
@@ -256,7 +256,7 @@ end
 
 function run_benchmarks()
     println("=" ^ 75)
-    println("LinearAlgebraMPI Single-Rank Performance Benchmark")
+    println("HPCLinearAlgebra Single-Rank Performance Benchmark")
     println("=" ^ 75)
     println("Date: $(Dates.now())")
     println("MPI ranks: $nranks")

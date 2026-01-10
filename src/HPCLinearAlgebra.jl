@@ -1,4 +1,4 @@
-module LinearAlgebraMPI
+module HPCLinearAlgebra
 
 using MPI
 using Blake3Hash
@@ -9,12 +9,12 @@ import SparseArrays: nnz, issparse, dropzeros, spdiagm, blockdiag
 import LinearAlgebra
 import LinearAlgebra: tr, diag, triu, tril, Transpose, Adjoint, norm, opnorm, mul!, ldlt, BLAS, issymmetric, UniformScaling, dot, Symmetric
 
-export SparseMatrixMPI, MatrixMPI, VectorMPI, clear_plan_cache!, uniform_partition, repartition
-export VectorMPI_CPU, MatrixMPI_CPU, SparseMatrixMPI_CPU  # Type aliases for CPU-backed types
+export HPCSparseMatrix, HPCMatrix, HPCVector, clear_plan_cache!, uniform_partition, repartition
+export HPCVector_CPU, HPCMatrix_CPU, HPCSparseMatrix_CPU  # Type aliases for CPU-backed types
 export SparseMatrixCSR  # Type alias for Transpose{SparseMatrixCSC} (CSR storage format)
 export map_rows, map_rows_gpu, vertex_indices  # Row-wise map over distributed vectors/matrices
-export VectorMPI_local, MatrixMPI_local, SparseMatrixMPI_local  # Local constructors
-export mean  # Our mean function for SparseMatrixMPI and VectorMPI
+export HPCVector_local, HPCMatrix_local, HPCSparseMatrix_local  # Local constructors
+export mean  # Our mean function for HPCSparseMatrix and HPCVector
 export io0   # Utility for rank-selective output
 export get_backend  # Get the KernelAbstractions backend for a distributed array
 
@@ -30,7 +30,9 @@ export DeviceCPU, DeviceMetal, DeviceCUDA
 export CommSerial, CommMPI
 export SolverMUMPS, AbstractSolverCuDSS
 export HPCBackendCPU, HPCBackendMetal, HPCBackendCUDA
-export backend_cpu_serial, backend_cpu_mpi, backend_metal_mpi, backend_cuda_mpi
+export backend_cpu_serial, backend_cpu_mpi, backend_metal_mpi, backend_cuda_serial, backend_cuda_mpi
+export BACKEND_CPU_SERIAL, BACKEND_CPU_MPI  # Pre-constructed CPU backend constants
+# CUDA backends: use backend_cuda_serial() and backend_cuda_mpi() after loading CUDA
 export comm_rank, comm_size, comm_barrier
 export array_type, matrix_type
 export backends_compatible, assert_backends_compatible
@@ -130,11 +132,11 @@ const _plan_cache = Dict{Tuple{Blake3Hash,Blake3Hash,DataType,DataType,Type},Any
 # Uses Type instead of DataType to support GPU UnionAll types like MtlVector{Float32}
 const _vector_plan_cache = Dict{Tuple{Blake3Hash,Blake3Hash,Type,Type},Any}()
 
-# Cache for memoized DenseMatrixVectorPlans (for MatrixMPI * VectorMPI)
+# Cache for memoized DenseMatrixVectorPlans (for HPCMatrix * HPCVector)
 # Key: (A_hash, x_hash, T, Backend) - uses backend type for GPU support
 const _dense_vector_plan_cache = Dict{Tuple{Blake3Hash,Blake3Hash,Type,Type},Any}()
 
-# Cache for memoized DenseTransposePlans (for transpose(MatrixMPI))
+# Cache for memoized DenseTransposePlans (for transpose(HPCMatrix))
 # Key: (A_hash, T, Backend) - uses backend type for GPU support
 const _dense_transpose_plan_cache = Dict{Tuple{Blake3Hash,Type,Type},Any}()
 
@@ -293,36 +295,36 @@ _convert_array(A::AbstractMatrix, ::DeviceCPU) = Array(A)
 # ============================================================================
 
 """
-    to_backend(v::VectorMPI, backend::HPCBackend) -> VectorMPI
+    to_backend(v::HPCVector, backend::HPCBackend) -> HPCVector
 
-Convert a VectorMPI to use a different backend.
+Convert a HPCVector to use a different backend.
 """
-function to_backend(v::VectorMPI{T}, backend::B) where {T, B<:HPCBackend}
+function to_backend(v::HPCVector{T}, backend::B) where {T, B<:HPCBackend}
     new_v = _convert_array(v.v, backend.device)
-    VectorMPI{T,B}(v.structural_hash, v.partition, new_v, backend)
+    HPCVector{T,B}(v.structural_hash, v.partition, new_v, backend)
 end
 
 """
-    to_backend(A::MatrixMPI, backend::HPCBackend) -> MatrixMPI
+    to_backend(A::HPCMatrix, backend::HPCBackend) -> HPCMatrix
 
-Convert a MatrixMPI to use a different backend.
+Convert a HPCMatrix to use a different backend.
 """
-function to_backend(A::MatrixMPI{T}, backend::B) where {T, B<:HPCBackend}
+function to_backend(A::HPCMatrix{T}, backend::B) where {T, B<:HPCBackend}
     new_A = _convert_array(A.A, backend.device)
-    MatrixMPI{T,B}(A.structural_hash, A.row_partition, A.col_partition, new_A, backend)
+    HPCMatrix{T,B}(A.structural_hash, A.row_partition, A.col_partition, new_A, backend)
 end
 
 """
-    to_backend(A::SparseMatrixMPI, backend::HPCBackend) -> SparseMatrixMPI
+    to_backend(A::HPCSparseMatrix, backend::HPCBackend) -> HPCSparseMatrix
 
-Convert a SparseMatrixMPI to use a different backend.
+Convert a HPCSparseMatrix to use a different backend.
 The nzval and target structure arrays are converted; CPU structure arrays remain on CPU.
 """
-function to_backend(A::SparseMatrixMPI{T,Ti}, backend::B) where {T, Ti, B<:HPCBackend}
+function to_backend(A::HPCSparseMatrix{T,Ti}, backend::B) where {T, Ti, B<:HPCBackend}
     new_nzval = _convert_array(A.nzval, backend.device)
     new_rowptr_target = _to_target_device(A.rowptr, backend.device)
     new_colval_target = _to_target_device(A.colval, backend.device)
-    SparseMatrixMPI{T,Ti,B}(
+    HPCSparseMatrix{T,Ti,B}(
         A.structural_hash,
         A.row_partition,
         A.col_partition,
@@ -345,13 +347,13 @@ end
 # ============================================================================
 
 """
-    _compare_rows_distributed(A::SparseMatrixMPI{T}, B::SparseMatrixMPI{T}) where T
+    _compare_rows_distributed(A::HPCSparseMatrix{T}, B::HPCSparseMatrix{T}) where T
 
 Compare two sparse matrices with potentially different row partitions.
 Redistributes B's rows to match A's row partition, then compares locally.
 Returns true if all corresponding entries are equal.
 """
-function _compare_rows_distributed(A::SparseMatrixMPI{T,Ti,Bk}, B::SparseMatrixMPI{T,Ti,Bk}) where {T,Ti,Bk<:HPCBackend}
+function _compare_rows_distributed(A::HPCSparseMatrix{T,Ti,Bk}, B::HPCSparseMatrix{T,Ti,Bk}) where {T,Ti,Bk<:HPCBackend}
     comm = A.backend.comm
     rank = comm_rank(comm)
     nranks = comm_size(comm)
@@ -557,12 +559,12 @@ function _compare_rows_distributed(A::SparseMatrixMPI{T,Ti,Bk}, B::SparseMatrixM
 end
 
 """
-    LinearAlgebra.issymmetric(A::SparseMatrixMPI{T}) where T
+    LinearAlgebra.issymmetric(A::HPCSparseMatrix{T}) where T
 
 Check if A is symmetric by materializing the transpose and comparing rows.
 Returns true if A == transpose(A). Result is cached for subsequent calls.
 """
-function LinearAlgebra.issymmetric(A::SparseMatrixMPI{T}) where T
+function LinearAlgebra.issymmetric(A::HPCSparseMatrix{T}) where T
     # Return cached result if available
     if A.cached_symmetric !== nothing
         return A.cached_symmetric
@@ -574,7 +576,7 @@ function LinearAlgebra.issymmetric(A::SparseMatrixMPI{T}) where T
         return false
     end
 
-    At = SparseMatrixMPI(transpose(A))
+    At = HPCSparseMatrix(transpose(A))
     result = _compare_rows_distributed(A, At)
     A.cached_symmetric = result
     return result
@@ -585,13 +587,13 @@ end
 # ============================================================================
 
 """
-    Base.:\\(A::SparseMatrixMPI{T}, b::VectorMPI{T}) where T
+    Base.:\\(A::HPCSparseMatrix{T}, b::HPCVector{T}) where T
 
 Solve A*x = b using LU factorization.
 For symmetric matrices, use `Symmetric(A) \\ b` to use the faster LDLT factorization.
 For repeated solves, compute the factorization once with `lu(A)` or `ldlt(A)`.
 """
-function Base.:\(A::SparseMatrixMPI{T}, b::VectorMPI{T}) where T
+function Base.:\(A::HPCSparseMatrix{T}, b::HPCVector{T}) where T
     F = LinearAlgebra.lu(A)
     x = F \ b
     finalize!(F)
@@ -599,12 +601,12 @@ function Base.:\(A::SparseMatrixMPI{T}, b::VectorMPI{T}) where T
 end
 
 """
-    Base.:\\(A::Symmetric{T,<:SparseMatrixMPI{T}}, b::VectorMPI{T}) where T
+    Base.:\\(A::Symmetric{T,<:HPCSparseMatrix{T}}, b::HPCVector{T}) where T
 
 Solve A*x = b for a symmetric matrix using LDLT (no symmetry check needed).
 Use `Symmetric(A)` to wrap a known-symmetric matrix and skip the expensive symmetry check.
 """
-function Base.:\(A::Symmetric{T,<:SparseMatrixMPI{T}}, b::VectorMPI{T}) where T
+function Base.:\(A::Symmetric{T,<:HPCSparseMatrix{T}}, b::HPCVector{T}) where T
     F = LinearAlgebra.ldlt(parent(A))
     x = F \ b
     finalize!(F)
@@ -612,12 +614,12 @@ function Base.:\(A::Symmetric{T,<:SparseMatrixMPI{T}}, b::VectorMPI{T}) where T
 end
 
 """
-    Base.:\\(At::Transpose{T,<:SparseMatrixMPI{T}}, b::VectorMPI{T}) where T
+    Base.:\\(At::Transpose{T,<:HPCSparseMatrix{T}}, b::HPCVector{T}) where T
 
 Solve transpose(A)*x = b using LU factorization.
 """
-function Base.:\(At::Transpose{T,<:SparseMatrixMPI{T}}, b::VectorMPI{T}) where T
-    A_t = SparseMatrixMPI(At)
+function Base.:\(At::Transpose{T,<:HPCSparseMatrix{T}}, b::HPCVector{T}) where T
+    A_t = HPCSparseMatrix(At)
     F = LinearAlgebra.lu(A_t)
     x = F \ b
     finalize!(F)
@@ -632,23 +634,23 @@ end
 # For row vectors: transpose(v) / A solves x * A = transpose(v)
 
 """
-    Base.:/(vt::Transpose{T,VectorMPI{T}}, A::SparseMatrixMPI{T}) where T
+    Base.:/(vt::Transpose{T,HPCVector{T}}, A::HPCSparseMatrix{T}) where T
 
-Solve x * A = transpose(v), returning x as a transposed VectorMPI.
+Solve x * A = transpose(v), returning x as a transposed HPCVector.
 Equivalent to transpose(transpose(A) \\ v).
 """
-function Base.:/(vt::Transpose{T,VectorMPI{T}}, A::SparseMatrixMPI{T}) where T
+function Base.:/(vt::Transpose{T,HPCVector{T}}, A::HPCSparseMatrix{T}) where T
     v = vt.parent
     x = transpose(A) \ v
     return transpose(x)
 end
 
 """
-    Base.:/(vt::Transpose{T,VectorMPI{T}}, At::Transpose{T,<:SparseMatrixMPI{T}}) where T
+    Base.:/(vt::Transpose{T,HPCVector{T}}, At::Transpose{T,<:HPCSparseMatrix{T}}) where T
 
-Solve x * transpose(A) = transpose(v), returning x as a transposed VectorMPI.
+Solve x * transpose(A) = transpose(v), returning x as a transposed HPCVector.
 """
-function Base.:/(vt::Transpose{T,VectorMPI{T}}, At::Transpose{T,<:SparseMatrixMPI{T}}) where T
+function Base.:/(vt::Transpose{T,HPCVector{T}}, At::Transpose{T,<:HPCSparseMatrix{T}}) where T
     v = vt.parent
     A = At.parent
     x = A \ v
@@ -660,7 +662,7 @@ end
 # ============================================================================
 
 """
-    _ensure_hash(A::SparseMatrixMPI) -> Blake3Hash
+    _ensure_hash(A::HPCSparseMatrix) -> Blake3Hash
 
 Ensure that the structural hash is computed. If `A.structural_hash` is `nothing`,
 compute it and cache it in the struct. Returns the hash.
@@ -668,7 +670,7 @@ compute it and cache it in the struct. Returns the hash.
 Note: This function calls `compute_structural_hash` which uses MPI.Allgather,
 so all ranks must call this together.
 """
-function _ensure_hash(A::SparseMatrixMPI)::Blake3Hash
+function _ensure_hash(A::HPCSparseMatrix)::Blake3Hash
     if A.structural_hash === nothing
         A.structural_hash = compute_structural_hash(A.row_partition, A.col_indices, A.rowptr, A.colval, A.backend.comm)
     end
@@ -676,7 +678,7 @@ function _ensure_hash(A::SparseMatrixMPI)::Blake3Hash
 end
 
 """
-    _ensure_hash(A::MatrixMPI{T}) -> Blake3Hash
+    _ensure_hash(A::HPCMatrix{T}) -> Blake3Hash
 
 Ensure that the structural hash is computed. If `A.structural_hash` is `nothing`,
 compute it and cache it in the struct. Returns the hash.
@@ -684,7 +686,7 @@ compute it and cache it in the struct. Returns the hash.
 Note: This function calls `compute_dense_structural_hash` which uses MPI.Allgather,
 so all ranks must call this together.
 """
-function _ensure_hash(A::MatrixMPI{T})::Blake3Hash where T
+function _ensure_hash(A::HPCMatrix{T})::Blake3Hash where T
     if A.structural_hash === nothing
         A.structural_hash = compute_dense_structural_hash(A.row_partition, A.col_partition, size(A.A), A.backend.comm)
     end
@@ -721,12 +723,12 @@ end
 # ============================================================================
 
 """
-    Vector(v::VectorMPI{T}) where T
+    Vector(v::HPCVector{T}) where T
 
-Gather a distributed VectorMPI to a full Vector on all ranks.
+Gather a distributed HPCVector to a full Vector on all ranks.
 Requires MPI communication (Allgatherv).
 """
-function Base.Vector(v::VectorMPI{T}) where T
+function Base.Vector(v::HPCVector{T}) where T
     comm = v.backend.comm
     nranks = comm_size(comm)
 
@@ -744,12 +746,12 @@ function Base.Vector(v::VectorMPI{T}) where T
 end
 
 """
-    Matrix(A::MatrixMPI{T}) where T
+    Matrix(A::HPCMatrix{T}) where T
 
-Gather a distributed MatrixMPI to a full Matrix on all ranks.
+Gather a distributed HPCMatrix to a full Matrix on all ranks.
 Requires MPI communication (Allgatherv).
 """
-function Base.Matrix(A::MatrixMPI{T}) where T
+function Base.Matrix(A::HPCMatrix{T}) where T
     comm = A.backend.comm
     nranks = comm_size(comm)
 
@@ -789,12 +791,12 @@ function Base.Matrix(A::MatrixMPI{T}) where T
 end
 
 """
-    SparseArrays.SparseMatrixCSC(A::SparseMatrixMPI{T}) where T
+    SparseArrays.SparseMatrixCSC(A::HPCSparseMatrix{T}) where T
 
-Gather a distributed SparseMatrixMPI to a full SparseMatrixCSC on all ranks.
+Gather a distributed HPCSparseMatrix to a full SparseMatrixCSC on all ranks.
 Requires MPI communication (Allgatherv).
 """
-function SparseArrays.SparseMatrixCSC(A::SparseMatrixMPI{T}) where T
+function SparseArrays.SparseMatrixCSC(A::HPCSparseMatrix{T}) where T
     comm = A.backend.comm
     rank = comm_rank(comm)
     nranks = comm_size(comm)
@@ -846,73 +848,73 @@ end
 # ============================================================================
 
 """
-    Base.show(io::IO, v::VectorMPI)
+    Base.show(io::IO, v::HPCVector)
 
-Display a VectorMPI by gathering it to a full vector and showing that.
+Display a HPCVector by gathering it to a full vector and showing that.
 """
-function Base.show(io::IO, v::VectorMPI{T}) where T
+function Base.show(io::IO, v::HPCVector{T}) where T
     full_v = Vector(v)
-    print(io, "VectorMPI{$T}(")
+    print(io, "HPCVector{$T}(")
     show(io, full_v)
     print(io, ")")
 end
 
 """
-    Base.show(io::IO, ::MIME"text/plain", v::VectorMPI)
+    Base.show(io::IO, ::MIME"text/plain", v::HPCVector)
 
-Pretty-print a VectorMPI.
+Pretty-print a HPCVector.
 """
-function Base.show(io::IO, ::MIME"text/plain", v::VectorMPI{T}) where T
+function Base.show(io::IO, ::MIME"text/plain", v::HPCVector{T}) where T
     full_v = Vector(v)
-    println(io, length(v), "-element VectorMPI{$T}:")
+    println(io, length(v), "-element HPCVector{$T}:")
     show(io, MIME("text/plain"), full_v)
 end
 
 """
-    Base.show(io::IO, A::MatrixMPI)
+    Base.show(io::IO, A::HPCMatrix)
 
-Display a MatrixMPI by gathering it to a full matrix and showing that.
+Display a HPCMatrix by gathering it to a full matrix and showing that.
 """
-function Base.show(io::IO, A::MatrixMPI{T}) where T
+function Base.show(io::IO, A::HPCMatrix{T}) where T
     full_A = Matrix(A)
-    print(io, "MatrixMPI{$T}(")
+    print(io, "HPCMatrix{$T}(")
     show(io, full_A)
     print(io, ")")
 end
 
 """
-    Base.show(io::IO, ::MIME"text/plain", A::MatrixMPI)
+    Base.show(io::IO, ::MIME"text/plain", A::HPCMatrix)
 
-Pretty-print a MatrixMPI.
+Pretty-print a HPCMatrix.
 """
-function Base.show(io::IO, ::MIME"text/plain", A::MatrixMPI{T}) where T
+function Base.show(io::IO, ::MIME"text/plain", A::HPCMatrix{T}) where T
     full_A = Matrix(A)
     m, n = size(A)
-    println(io, "$m×$n MatrixMPI{$T}:")
+    println(io, "$m×$n HPCMatrix{$T}:")
     show(io, MIME("text/plain"), full_A)
 end
 
 """
-    Base.show(io::IO, A::SparseMatrixMPI)
+    Base.show(io::IO, A::HPCSparseMatrix)
 
-Display a SparseMatrixMPI by gathering it to a full SparseMatrixCSC and showing that.
+Display a HPCSparseMatrix by gathering it to a full SparseMatrixCSC and showing that.
 """
-function Base.show(io::IO, A::SparseMatrixMPI{T}) where T
+function Base.show(io::IO, A::HPCSparseMatrix{T}) where T
     full_A = SparseMatrixCSC(A)
-    print(io, "SparseMatrixMPI{$T}(")
+    print(io, "HPCSparseMatrix{$T}(")
     show(io, full_A)
     print(io, ")")
 end
 
 """
-    Base.show(io::IO, ::MIME"text/plain", A::SparseMatrixMPI)
+    Base.show(io::IO, ::MIME"text/plain", A::HPCSparseMatrix)
 
-Pretty-print a SparseMatrixMPI.
+Pretty-print a HPCSparseMatrix.
 """
-function Base.show(io::IO, ::MIME"text/plain", A::SparseMatrixMPI{T}) where T
+function Base.show(io::IO, ::MIME"text/plain", A::HPCSparseMatrix{T}) where T
     full_A = SparseMatrixCSC(A)
     m, n = size(A)
-    println(io, "$m×$n SparseMatrixMPI{$T} with $(nnz(full_A)) stored entries:")
+    println(io, "$m×$n HPCSparseMatrix{$T} with $(nnz(full_A)) stored entries:")
     show(io, MIME("text/plain"), full_A)
 end
 
@@ -921,22 +923,22 @@ end
 # ============================================================================
 
 """
-    _get_row_partition(A::VectorMPI) -> Vector{Int}
-    _get_row_partition(A::MatrixMPI) -> Vector{Int}
+    _get_row_partition(A::HPCVector) -> Vector{Int}
+    _get_row_partition(A::HPCMatrix) -> Vector{Int}
 
 Get the row partition from a distributed type.
 """
-_get_row_partition(A::VectorMPI) = A.partition
-_get_row_partition(A::MatrixMPI) = A.row_partition
+_get_row_partition(A::HPCVector) = A.partition
+_get_row_partition(A::HPCMatrix) = A.row_partition
 
 """
-    _align_to_partition(A::VectorMPI{T}, p::Vector{Int}) where T
-    _align_to_partition(A::MatrixMPI{T}, p::Vector{Int}) where T
+    _align_to_partition(A::HPCVector{T}, p::Vector{Int}) where T
+    _align_to_partition(A::HPCMatrix{T}, p::Vector{Int}) where T
 
 Repartition a distributed type to match partition p.
 """
-_align_to_partition(A::VectorMPI, p::Vector{Int}) = repartition(A, p)
-_align_to_partition(A::MatrixMPI, p::Vector{Int}) = repartition(A, p)
+_align_to_partition(A::HPCVector, p::Vector{Int}) = repartition(A, p)
+_align_to_partition(A::HPCMatrix, p::Vector{Int}) = repartition(A, p)
 
 # Helper: Convert local matrix to Vector{SVector} by transposing then reinterpreting
 # For column-major storage, transpose gives us rows as contiguous columns
@@ -978,7 +980,7 @@ Apply function `f` row-wise over matrices. Each row is converted to an SVector,
 This is the CPU fallback implementation using broadcasting. The Metal extension
 overrides this for MtlMatrix inputs to use efficient GPU kernels.
 
-For VectorMPI inputs, the vector should be reshaped to a 1-column matrix before calling.
+For HPCVector inputs, the vector should be reshaped to a 1-column matrix before calling.
 """
 function _map_rows_gpu_kernel(f, arg1::AbstractMatrix{T}, rest::AbstractMatrix...) where T
     # Convert to SVector representation for broadcasting
@@ -999,7 +1001,7 @@ _map_rows_cpu_kernel(f, args...) = _map_rows_gpu_kernel(f, args...)
 
 Apply function `f` to corresponding rows of distributed vectors/matrices (GPU-native).
 
-Each argument in `A...` must be either a `VectorMPI` or `MatrixMPI`. All inputs
+Each argument in `A...` must be either a `HPCVector` or `HPCMatrix`. All inputs
 are repartitioned to match the partition of the first argument before applying `f`.
 
 This implementation uses GPU-friendly broadcasting: matrices are converted to
@@ -1010,8 +1012,8 @@ This avoids GPU->CPU->GPU round-trips when the underlying arrays are on GPU.
 for GPU execution. Use [`map_rows`](@ref) for functions with arbitrary closures.
 
 For each row index i, `f` is called with:
-- For `VectorMPI`: the scalar element at index i
-- For `MatrixMPI`: an SVector containing the i-th row
+- For `HPCVector`: the scalar element at index i
+- For `HPCMatrix`: an SVector containing the i-th row
 
 ## Result Type
 
@@ -1019,29 +1021,29 @@ The result type depends on what `f` returns:
 
 | `f` returns | Result |
 |-------------|--------|
-| scalar (`Number`) | `VectorMPI` (one element per input row) |
-| `SVector{K,T}` | `MatrixMPI` (K columns, one row per input row) |
+| scalar (`Number`) | `HPCVector` (one element per input row) |
+| `SVector{K,T}` | `HPCMatrix` (K columns, one row per input row) |
 
 ## Examples
 
 ```julia
 # Element-wise product of two vectors
-u = VectorMPI([1.0, 2.0, 3.0])
-v = VectorMPI([4.0, 5.0, 6.0])
-w = map_rows_gpu((a, b) -> a * b, u, v)  # VectorMPI([4.0, 10.0, 18.0])
+u = HPCVector([1.0, 2.0, 3.0])
+v = HPCVector([4.0, 5.0, 6.0])
+w = map_rows_gpu((a, b) -> a * b, u, v)  # HPCVector([4.0, 10.0, 18.0])
 
 # Row norms of a matrix
-A = MatrixMPI(randn(5, 3))
-norms = map_rows_gpu(r -> norm(r), A)  # VectorMPI of row norms
+A = HPCMatrix(randn(5, 3))
+norms = map_rows_gpu(r -> norm(r), A)  # HPCVector of row norms
 
 # Return SVector to build a matrix
-A = MatrixMPI(randn(3, 2))
-result = map_rows_gpu(r -> SVector(sum(r), prod(r)), A)  # 3×2 MatrixMPI
+A = HPCMatrix(randn(3, 2))
+result = map_rows_gpu(r -> SVector(sum(r), prod(r)), A)  # 3×2 HPCMatrix
 
 # Mixed inputs: matrix rows combined with vector elements
-A = MatrixMPI(randn(4, 3))
-w = VectorMPI([1.0, 2.0, 3.0, 4.0])
-result = map_rows_gpu((row, wi) -> sum(row) * wi, A, w)  # VectorMPI
+A = HPCMatrix(randn(4, 3))
+w = HPCVector([1.0, 2.0, 3.0, 4.0])
+result = map_rows_gpu((row, wi) -> sum(row) * wi, A, w)  # HPCVector
 ```
 
 See also: [`map_rows`](@ref) for CPU fallback version (handles arbitrary closures)
@@ -1055,18 +1057,18 @@ function map_rows_gpu(f, A...)
     # Align all arguments to target partition
     aligned = map(a -> _align_to_partition(a, target_partition), A)
 
-    # Check if all inputs are MatrixMPI (can use GPU kernel path)
-    all_matrices = all(a -> a isa MatrixMPI, aligned)
+    # Check if all inputs are HPCMatrix (can use GPU kernel path)
+    all_matrices = all(a -> a isa HPCMatrix, aligned)
 
     if all_matrices
         # Extract raw matrices and use GPU kernel (specialized by Metal extension for MtlMatrix)
         raw_matrices = map(a -> a.A, aligned)
         local_result = _map_rows_gpu_kernel(f, raw_matrices...)
     else
-        # Mixed VectorMPI/MatrixMPI: use broadcasting approach
-        # VectorMPI.v passes through, MatrixMPI.A gets transposed and reinterpreted
+        # Mixed HPCVector/HPCMatrix: use broadcasting approach
+        # HPCVector.v passes through, HPCMatrix.A gets transposed and reinterpreted
         local_arrays = map(aligned) do a
-            if a isa VectorMPI
+            if a isa HPCVector
                 a.v  # Vector{T} - each element is a "row"
             else
                 _to_svectors(a.A)  # Vector{SVector{K,T}} - each SVector is a row
@@ -1082,13 +1084,13 @@ function map_rows_gpu(f, A...)
 
     # Wrap in MPI type using first argument's partition info
     first_arg = aligned[1]
-    row_partition = first_arg isa VectorMPI ? first_arg.partition : first_arg.row_partition
-    # For VectorMPI, structural_hash == partition hash, so reuse directly
-    # For MatrixMPI, structural_hash includes more info, so just compute partition hash (cached)
-    if first_arg isa VectorMPI
+    row_partition = first_arg isa HPCVector ? first_arg.partition : first_arg.row_partition
+    # For HPCVector, structural_hash == partition hash, so reuse directly
+    # For HPCMatrix, structural_hash includes more info, so just compute partition hash (cached)
+    if first_arg isa HPCVector
         hash = first_arg.structural_hash
     else
-        # MatrixMPI: compute partition hash (uses cache)
+        # HPCMatrix: compute partition hash (uses cache)
         hash = compute_partition_hash(row_partition)
     end
 
@@ -1096,7 +1098,7 @@ function map_rows_gpu(f, A...)
     backend = first_arg.backend
 
     if local_result isa AbstractMatrix
-        return MatrixMPI(
+        return HPCMatrix(
             hash,
             row_partition,
             [1, size(local_result, 2) + 1],  # Full columns on each rank
@@ -1104,7 +1106,7 @@ function map_rows_gpu(f, A...)
             backend
         )
     else
-        return VectorMPI(
+        return HPCVector(
             hash,
             row_partition,
             local_result,
@@ -1124,10 +1126,10 @@ Use `map_rows_gpu` for performance-critical inner loops where `f` is isbits-comp
 
 # Arguments
 - `f`: Function to apply to each row (can capture non-isbits data)
-- `A...`: One or more distributed arrays (VectorMPI or MatrixMPI)
+- `A...`: One or more distributed arrays (HPCVector or HPCMatrix)
 
 # Returns
-- VectorMPI or MatrixMPI depending on the return type of `f`
+- HPCVector or HPCMatrix depending on the return type of `f`
 
 See also: [`map_rows_gpu`](@ref) for GPU-native version (requires isbits closures)
 """
@@ -1135,7 +1137,7 @@ function map_rows(f, A...)
     isempty(A) && error("map_rows requires at least one argument")
 
     # Get a CPU backend with same comm/solver as first arg
-    first_backend = A[1] isa VectorMPI ? A[1].backend : A[1].backend
+    first_backend = A[1] isa HPCVector ? A[1].backend : A[1].backend
     cpu_backend = HPCBackend(DeviceCPU(), first_backend.comm, first_backend.solver)
 
     # Convert all args to CPU
@@ -1158,14 +1160,14 @@ end
 Convert a distributed array to the same backend as the template.
 This is a simplified helper that uses to_backend() internally.
 """
-_to_same_backend(result::VectorMPI, template::VectorMPI) = to_backend(result, template.backend)
-_to_same_backend(result::MatrixMPI, template::MatrixMPI) = to_backend(result, template.backend)
-_to_same_backend(result::VectorMPI, template::MatrixMPI) = to_backend(result, template.backend)
+_to_same_backend(result::HPCVector, template::HPCVector) = to_backend(result, template.backend)
+_to_same_backend(result::HPCMatrix, template::HPCMatrix) = to_backend(result, template.backend)
+_to_same_backend(result::HPCVector, template::HPCMatrix) = to_backend(result, template.backend)
 
 """
-    vertex_indices(A::AbstractVectorMPI)
+    vertex_indices(A::AbstractHPCVector)
 
-Create a VectorMPI of vertex indices (1:n) with the same partitioning and backend as `A`.
+Create a HPCVector of vertex indices (1:n) with the same partitioning and backend as `A`.
 
 This is useful for barrier functions that need to index into captured arrays.
 The indices are created on the same device (CPU/GPU) as the input array.
@@ -1174,16 +1176,16 @@ The indices are created on the same device (CPU/GPU) as the input array.
 - `A`: A distributed array whose partitioning and backend to match
 
 # Returns
-- VectorMPI{Int,AV} where AV matches the integer array type for A's backend
+- HPCVector{Int,AV} where AV matches the integer array type for A's backend
 
 # Example
 ```julia
-Dz = ...  # VectorMPI on GPU
-indices = vertex_indices(Dz)  # GPU VectorMPI of 1:n
+Dz = ...  # HPCVector on GPU
+indices = vertex_indices(Dz)  # GPU HPCVector of 1:n
 map_rows_gpu(f, indices, Dz)  # f receives (j, Dz[j,:])
 ```
 """
-function vertex_indices(A::VectorMPI{T,B}) where {T, B<:HPCBackend}
+function vertex_indices(A::HPCVector{T,B}) where {T, B<:HPCBackend}
     # Get this rank's local row range (global indices)
     rank = comm_rank(A.backend.comm)
     start_idx = A.partition[rank + 1]
@@ -1194,13 +1196,13 @@ function vertex_indices(A::VectorMPI{T,B}) where {T, B<:HPCBackend}
 
     # Create CPU backend for initial construction
     cpu_backend = HPCBackend(DeviceCPU(), A.backend.comm, A.backend.solver)
-    indices_cpu = VectorMPI_local(local_indices, cpu_backend)
+    indices_cpu = HPCVector_local(local_indices, cpu_backend)
 
     # Convert to same device as A
     return to_backend(indices_cpu, A.backend)
 end
 
-function vertex_indices(A::MatrixMPI{T,B}) where {T, B<:HPCBackend}
+function vertex_indices(A::HPCMatrix{T,B}) where {T, B<:HPCBackend}
     # Get this rank's local row range (global indices)
     rank = comm_rank(A.backend.comm)
     start_idx = A.row_partition[rank + 1]
@@ -1211,7 +1213,7 @@ function vertex_indices(A::MatrixMPI{T,B}) where {T, B<:HPCBackend}
 
     # Create CPU backend for initial construction
     cpu_backend = HPCBackend(DeviceCPU(), A.backend.comm, A.backend.solver)
-    indices_cpu = VectorMPI_local(local_indices, cpu_backend)
+    indices_cpu = HPCVector_local(local_indices, cpu_backend)
 
     # Convert to same device as A
     return to_backend(indices_cpu, A.backend)
@@ -1227,7 +1229,7 @@ _zeros_device(::DeviceCPU, ::Type{T}, dims...) where T = zeros(T, dims...)
 # GPU extensions will add methods for DeviceMetal and DeviceCUDA
 
 """
-    Base.zeros(::Type{T}, ::Type{VectorMPI}, backend::HPCBackend, n::Integer) where T
+    Base.zeros(::Type{T}, ::Type{HPCVector}, backend::HPCBackend, n::Integer) where T
 
 Create a distributed zero vector of length `n` with element type `T`.
 
@@ -1237,14 +1239,14 @@ The vector is uniformly partitioned across ranks according to the backend's comm
 ```julia
 # CPU zero vector with serial backend
 backend = backend_cpu_serial()
-v = zeros(Float64, VectorMPI, backend, 100)
+v = zeros(Float64, HPCVector, backend, 100)
 
 # CPU zero vector with MPI backend
 backend = backend_cpu_mpi(MPI.COMM_WORLD)
-v = zeros(Float64, VectorMPI, backend, 100)
+v = zeros(Float64, HPCVector, backend, 100)
 ```
 """
-function Base.zeros(::Type{T}, ::Type{VectorMPI}, backend::HPCBackend, n::Integer) where T
+function Base.zeros(::Type{T}, ::Type{HPCVector}, backend::HPCBackend, n::Integer) where T
     comm = backend.comm
     nranks = comm_size(comm)
     rank = comm_rank(comm)
@@ -1255,18 +1257,18 @@ function Base.zeros(::Type{T}, ::Type{VectorMPI}, backend::HPCBackend, n::Intege
     local_v = _zeros_device(backend.device, T, local_size)
     hash = compute_partition_hash(partition)
 
-    return VectorMPI{T, typeof(backend)}(hash, partition, local_v, backend)
+    return HPCVector{T, typeof(backend)}(hash, partition, local_v, backend)
 end
 
 """
-    Base.zeros(::Type{VectorMPI}, backend::HPCBackend, n::Integer)
+    Base.zeros(::Type{HPCVector}, backend::HPCBackend, n::Integer)
 
 Create a distributed zero vector of length `n` with default element type Float64.
 """
-Base.zeros(::Type{VectorMPI}, backend::HPCBackend, n::Integer) = zeros(Float64, VectorMPI, backend, n)
+Base.zeros(::Type{HPCVector}, backend::HPCBackend, n::Integer) = zeros(Float64, HPCVector, backend, n)
 
 """
-    Base.zeros(::Type{T}, ::Type{MatrixMPI}, backend::HPCBackend, m::Integer, n::Integer) where T
+    Base.zeros(::Type{T}, ::Type{HPCMatrix}, backend::HPCBackend, m::Integer, n::Integer) where T
 
 Create a distributed zero matrix of size `m × n` with element type `T`.
 
@@ -1276,10 +1278,10 @@ The matrix is row-partitioned across ranks according to the backend's comm.
 ```julia
 # CPU zero matrix
 backend = backend_cpu_serial()
-A = zeros(Float64, MatrixMPI, backend, 100, 50)
+A = zeros(Float64, HPCMatrix, backend, 100, 50)
 ```
 """
-function Base.zeros(::Type{T}, ::Type{MatrixMPI}, backend::HPCBackend, m::Integer, n::Integer) where T
+function Base.zeros(::Type{T}, ::Type{HPCMatrix}, backend::HPCBackend, m::Integer, n::Integer) where T
     comm = backend.comm
     nranks = comm_size(comm)
     rank = comm_rank(comm)
@@ -1291,18 +1293,18 @@ function Base.zeros(::Type{T}, ::Type{MatrixMPI}, backend::HPCBackend, m::Intege
     local_A = _zeros_device(backend.device, T, local_nrows, n)
     # Structural hash computed lazily
 
-    return MatrixMPI{T, typeof(backend)}(nothing, row_partition, col_partition, local_A, backend)
+    return HPCMatrix{T, typeof(backend)}(nothing, row_partition, col_partition, local_A, backend)
 end
 
 """
-    Base.zeros(::Type{MatrixMPI}, backend::HPCBackend, m::Integer, n::Integer)
+    Base.zeros(::Type{HPCMatrix}, backend::HPCBackend, m::Integer, n::Integer)
 
 Create a distributed zero matrix of size `m × n` with default element type Float64.
 """
-Base.zeros(::Type{MatrixMPI}, backend::HPCBackend, m::Integer, n::Integer) = zeros(Float64, MatrixMPI, backend, m, n)
+Base.zeros(::Type{HPCMatrix}, backend::HPCBackend, m::Integer, n::Integer) = zeros(Float64, HPCMatrix, backend, m, n)
 
 """
-    Base.zeros(::Type{T}, ::Type{Ti}, ::Type{SparseMatrixMPI}, backend::HPCBackend, m::Integer, n::Integer) where {T,Ti<:Integer}
+    Base.zeros(::Type{T}, ::Type{Ti}, ::Type{HPCSparseMatrix}, backend::HPCBackend, m::Integer, n::Integer) where {T,Ti<:Integer}
 
 Create a distributed zero sparse matrix of size `m × n`.
 
@@ -1314,10 +1316,10 @@ A zero sparse matrix has no nonzero entries, so the resulting matrix has:
 ```julia
 # CPU zero sparse matrix
 backend = backend_cpu_serial()
-A = zeros(Float64, Int, SparseMatrixMPI, backend, 100, 100)
+A = zeros(Float64, Int, HPCSparseMatrix, backend, 100, 100)
 ```
 """
-function Base.zeros(::Type{T}, ::Type{Ti}, ::Type{SparseMatrixMPI}, backend::HPCBackend, m::Integer, n::Integer) where {T, Ti<:Integer}
+function Base.zeros(::Type{T}, ::Type{Ti}, ::Type{HPCSparseMatrix}, backend::HPCBackend, m::Integer, n::Integer) where {T, Ti<:Integer}
     comm = backend.comm
     nranks = comm_size(comm)
     rank = comm_rank(comm)
@@ -1337,7 +1339,7 @@ function Base.zeros(::Type{T}, ::Type{Ti}, ::Type{SparseMatrixMPI}, backend::HPC
     rowptr_target = _to_target_device(rowptr, backend.device)
     colval_target = _to_target_device(colval, backend.device)
 
-    return SparseMatrixMPI{T, Ti, typeof(backend)}(
+    return HPCSparseMatrix{T, Ti, typeof(backend)}(
         nothing,  # Hash computed lazily
         row_partition,
         col_partition,
@@ -1356,11 +1358,11 @@ function Base.zeros(::Type{T}, ::Type{Ti}, ::Type{SparseMatrixMPI}, backend::HPC
 end
 
 """
-    Base.zeros(::Type{SparseMatrixMPI}, backend::HPCBackend, m::Integer, n::Integer)
+    Base.zeros(::Type{HPCSparseMatrix}, backend::HPCBackend, m::Integer, n::Integer)
 
 Create a distributed zero sparse matrix of size `m × n` with default types Float64 and Int.
 """
-Base.zeros(::Type{SparseMatrixMPI}, backend::HPCBackend, m::Integer, n::Integer) = zeros(Float64, Int, SparseMatrixMPI, backend, m, n)
+Base.zeros(::Type{HPCSparseMatrix}, backend::HPCBackend, m::Integer, n::Integer) = zeros(Float64, Int, HPCSparseMatrix, backend, m, n)
 
 # ============================================================================
 # Precompilation Workload
@@ -1369,7 +1371,7 @@ Base.zeros(::Type{SparseMatrixMPI}, backend::HPCBackend, m::Integer, n::Integer)
 using PrecompileTools
 
 # TODO: Re-enable after HPCBackend refactor is complete
-# Temporarily disabled during the VectorMPI/MatrixMPI/SparseMatrixMPI refactor
+# Temporarily disabled during the HPCVector/HPCMatrix/HPCSparseMatrix refactor
 #=
 @setup_workload begin
     # Small test data for precompilation (runs with single MPI rank)
@@ -1416,9 +1418,9 @@ using PrecompileTools
         MPI.Init()
         backend = backend_cpu_mpi(MPI.COMM_WORLD)
 
-        # === VectorMPI operations (Float64) ===
-        v = VectorMPI(v_f64, backend)
-        w = VectorMPI(2.0 .* v_f64, backend)
+        # === HPCVector operations (Float64) ===
+        v = HPCVector(v_f64, backend)
+        w = HPCVector(2.0 .* v_f64, backend)
         _ = v + w
         _ = v - w
         _ = 2.0 * v
@@ -1429,31 +1431,31 @@ using PrecompileTools
         _ = length(v)
         _ = size(v)
 
-        # VectorMPI (ComplexF64)
-        vc = VectorMPI(v_c64, backend)
+        # HPCVector (ComplexF64)
+        vc = HPCVector(v_c64, backend)
         _ = conj(vc)
         _ = norm(vc)
 
-        # === SparseMatrixMPI operations (Float64) ===
-        A = SparseMatrixMPI{Float64}(A_sparse_f64, backend)
-        B = SparseMatrixMPI{Float64}(A_sparse_f64, backend)
+        # === HPCSparseMatrix operations (Float64) ===
+        A = HPCSparseMatrix{Float64}(A_sparse_f64, backend)
+        B = HPCSparseMatrix{Float64}(A_sparse_f64, backend)
         _ = A + B
         _ = A - B
         _ = 2.0 * A
         _ = A * v
         _ = A * B
         _ = transpose(A)
-        At = SparseMatrixMPI(transpose(A))
+        At = HPCSparseMatrix(transpose(A))
         _ = size(A)
         _ = nnz(A)
         _ = norm(A)
 
-        # SparseMatrixMPI (ComplexF64)
-        Ac = SparseMatrixMPI{ComplexF64}(A_sparse_c64, backend)
+        # HPCSparseMatrix (ComplexF64)
+        Ac = HPCSparseMatrix{ComplexF64}(A_sparse_c64, backend)
         _ = Ac * vc
 
-        # === MatrixMPI operations (Float64) ===
-        D = MatrixMPI(A_dense_f64)
+        # === HPCMatrix operations (Float64) ===
+        D = HPCMatrix(A_dense_f64)
         _ = 2.0 * D
         _ = D * v
         _ = transpose(D)
@@ -1461,8 +1463,8 @@ using PrecompileTools
         _ = size(D)
         _ = norm(D)
 
-        # MatrixMPI (ComplexF64)
-        Dc = MatrixMPI(A_dense_c64)
+        # HPCMatrix (ComplexF64)
+        Dc = HPCMatrix(A_dense_c64)
         _ = Dc * vc
 
         # === Mixed operations ===
@@ -1475,8 +1477,8 @@ using PrecompileTools
 
         # === Factorization (MUMPS) ===
         # Make symmetric positive definite: A + A^T + 10I
-        At_mat = SparseMatrixMPI(transpose(A))
-        I_dist = SparseMatrixMPI{Float64}(I_sparse)
+        At_mat = HPCSparseMatrix(transpose(A))
+        I_dist = HPCSparseMatrix{Float64}(I_sparse)
         A_spd = A + At_mat + I_dist * 10.0
         F = LinearAlgebra.ldlt(A_spd)
         x = F \ v
@@ -1502,4 +1504,4 @@ using PrecompileTools
 end
 =#
 
-end # module LinearAlgebraMPI
+end # module HPCLinearAlgebra

@@ -13,7 +13,7 @@ end
 using MPI
 MPI.Init()
 
-using LinearAlgebraMPI
+using HPCLinearAlgebra
 using SparseArrays
 using LinearAlgebra: norm
 using Test
@@ -34,14 +34,14 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     TOL = TestUtils.tolerance(T)
     backend = get_backend()
 
-    println(io0(), "[test] VectorMPI repartition ($T, $backend_name)")
+    println(io0(), "[test] HPCVector repartition ($T, $backend_name)")
 
-    # Test 1: VectorMPI uniform to non-uniform partition
+    # Test 1: HPCVector uniform to non-uniform partition
     n = 12
     v_global = T.(collect(1.0:n))
-    v = VectorMPI(v_global, backend)
+    v = HPCVector(v_global, backend)
     # Create non-uniform partition
-    new_p = LinearAlgebraMPI.uniform_partition(n, nranks)
+    new_p = HPCLinearAlgebra.uniform_partition(n, nranks)
     # Shift elements: first rank gets fewer, last gets more
     if nranks >= 2
         new_p = [1]
@@ -63,31 +63,31 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     @test v_repart.partition == new_p
 
 
-    println(io0(), "[test] VectorMPI same partition fast path ($T, $backend_name)")
+    println(io0(), "[test] HPCVector same partition fast path ($T, $backend_name)")
 
-    v_same = VectorMPI(v_global, backend)
+    v_same = HPCVector(v_global, backend)
     v2 = repartition(v_same, v_same.partition)
     @test v2 === v_same  # Should be same object
 
 
-    println(io0(), "[test] VectorMPI plan caching ($T, $backend_name)")
+    println(io0(), "[test] HPCVector plan caching ($T, $backend_name)")
 
-    v_cache = VectorMPI(v_global, backend)
-    LinearAlgebraMPI.clear_plan_cache!()
+    v_cache = HPCVector(v_global, backend)
+    HPCLinearAlgebra.clear_plan_cache!()
     v3_repart = repartition(v_cache, new_p)
     v4_repart = repartition(v_cache, new_p)
     @test v3_repart.structural_hash == v4_repart.structural_hash
 
 
-    println(io0(), "[test] MatrixMPI repartition ($T, $backend_name)")
+    println(io0(), "[test] HPCMatrix repartition ($T, $backend_name)")
 
     # Test dense matrix repartition
     m, ncols = 8, 4
     M_global = T.(reshape(Float64.(1:m*ncols), m, ncols))
-    M = MatrixMPI(M_global, backend)
+    M = HPCMatrix(M_global, backend)
 
     # Create new partition for rows
-    new_row_p = LinearAlgebraMPI.uniform_partition(m, nranks)
+    new_row_p = HPCLinearAlgebra.uniform_partition(m, nranks)
     if nranks >= 2
         # Create uneven partition
         new_row_p = [1]
@@ -110,14 +110,14 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     @test M_repart.col_partition == M.col_partition  # unchanged
 
 
-    println(io0(), "[test] MatrixMPI same partition fast path ($T, $backend_name)")
+    println(io0(), "[test] HPCMatrix same partition fast path ($T, $backend_name)")
 
-    M_same = MatrixMPI(M_global, backend)
+    M_same = HPCMatrix(M_global, backend)
     M2 = repartition(M_same, M_same.row_partition)
     @test M2 === M_same
 
 
-    println(io0(), "[test] SparseMatrixMPI repartition ($T, $backend_name)")
+    println(io0(), "[test] HPCSparseMatrix repartition ($T, $backend_name)")
 
     # Test sparse matrix repartition
     m_sparse, n_sparse = 8, 6
@@ -126,7 +126,7 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     V_sparse = T.(1:length(I_idx))
     A_global = sparse(I_idx, J_idx, V_sparse, m_sparse, n_sparse)
 
-    A = SparseMatrixMPI(A_global, backend)
+    A = HPCSparseMatrix(A_global, backend)
 
     # Create new partition (must differ from uniform to test actual repartition)
     # Uniform for 8 rows, 4 ranks is [1, 3, 5, 7, 9] (2 rows each)
@@ -152,7 +152,7 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
         end
         p
     else
-        LinearAlgebraMPI.uniform_partition(m_sparse, nranks)
+        HPCLinearAlgebra.uniform_partition(m_sparse, nranks)
     end
 
     A_repart = repartition(A, new_sparse_p)
@@ -163,14 +163,14 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     @test A_repart.col_partition == A.col_partition
 
 
-    println(io0(), "[test] SparseMatrixMPI nnz preserved ($T, $backend_name)")
+    println(io0(), "[test] HPCSparseMatrix nnz preserved ($T, $backend_name)")
 
     @test nnz(A_repart) == nnz(A)
 
 
-    println(io0(), "[test] SparseMatrixMPI same partition fast path ($T, $backend_name)")
+    println(io0(), "[test] HPCSparseMatrix same partition fast path ($T, $backend_name)")
 
-    A_same = SparseMatrixMPI(A_global, backend)
+    A_same = HPCSparseMatrix(A_global, backend)
     A2 = repartition(A_same, A_same.row_partition)
     @test A2 === A_same
 
@@ -178,9 +178,9 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     println(io0(), "[test] Operations after repartition ($T, $backend_name)")
 
     # Test that repartitioned matrix can be used in operations
-    A_for_ops = SparseMatrixMPI(A_global, backend)
+    A_for_ops = HPCSparseMatrix(A_global, backend)
     A_repart_ops = repartition(A_for_ops, new_sparse_p)
-    x = VectorMPI(ones(T, n_sparse), backend)
+    x = HPCVector(ones(T, n_sparse), backend)
     y_orig = A_for_ops * x
     y_repart = A_repart_ops * x
     y_diff = norm(Vector(y_orig) - Vector(y_repart))
@@ -189,8 +189,8 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
 
     println(io0(), "[test] Repartition plan caching ($T, $backend_name)")
 
-    A_cache = SparseMatrixMPI(A_global, backend)
-    LinearAlgebraMPI.clear_plan_cache!()
+    A_cache = HPCSparseMatrix(A_global, backend)
+    HPCLinearAlgebra.clear_plan_cache!()
     A3_repart = repartition(A_cache, new_sparse_p)
     A4_repart = repartition(A_cache, new_sparse_p)
     @test A3_repart.structural_hash == A4_repart.structural_hash

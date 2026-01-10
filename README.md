@@ -1,9 +1,9 @@
-# LinearAlgebraMPI.jl
+# HPCLinearAlgebra.jl
 
-[![Stable](https://img.shields.io/badge/docs-stable-blue.svg)](https://sloisel.github.io/LinearAlgebraMPI.jl/stable/)
-[![Dev](https://img.shields.io/badge/docs-dev-blue.svg)](https://sloisel.github.io/LinearAlgebraMPI.jl/dev/)
-[![Build Status](https://github.com/sloisel/LinearAlgebraMPI.jl/actions/workflows/CI.yml/badge.svg?branch=main)](https://github.com/sloisel/LinearAlgebraMPI.jl/actions/workflows/CI.yml?query=branch%3Amain)
-[![codecov](https://codecov.io/gh/sloisel/LinearAlgebraMPI.jl/branch/main/graph/badge.svg)](https://codecov.io/gh/sloisel/LinearAlgebraMPI.jl)
+[![Stable](https://img.shields.io/badge/docs-stable-blue.svg)](https://sloisel.github.io/HPCLinearAlgebra.jl/stable/)
+[![Dev](https://img.shields.io/badge/docs-dev-blue.svg)](https://sloisel.github.io/HPCLinearAlgebra.jl/dev/)
+[![Build Status](https://github.com/sloisel/HPCLinearAlgebra.jl/actions/workflows/CI.yml/badge.svg?branch=main)](https://github.com/sloisel/HPCLinearAlgebra.jl/actions/workflows/CI.yml?query=branch%3Amain)
+[![codecov](https://codecov.io/gh/sloisel/HPCLinearAlgebra.jl/branch/main/graph/badge.svg)](https://codecov.io/gh/sloisel/HPCLinearAlgebra.jl)
 
 **Author:** S. Loisel
 
@@ -11,8 +11,8 @@ Distributed sparse matrix and vector operations using MPI for Julia. This packag
 
 ## Features
 
-- **Distributed sparse matrices** (`SparseMatrixMPI{T,Ti,AV}`) with row-partitioning across MPI ranks
-- **Distributed dense vectors** (`VectorMPI{T,AV}`) with flexible partitioning
+- **Distributed sparse matrices** (`HPCSparseMatrix{T,Ti,AV}`) with row-partitioning across MPI ranks
+- **Distributed dense vectors** (`HPCVector{T,AV}`) with flexible partitioning
 - **Matrix-matrix multiplication** (`A * B`) with memoized communication plans
 - **Matrix-vector multiplication** (`A * x`, `mul!(y, A, x)`)
 - **Sparse direct solvers**: LU and LDLT factorization using MUMPS
@@ -27,7 +27,7 @@ Distributed sparse matrix and vector operations using MPI for Julia. This packag
 
 ```julia
 using Pkg
-Pkg.add("LinearAlgebraMPI")
+Pkg.add("HPCLinearAlgebra")
 ```
 
 ## Quick Start
@@ -36,23 +36,23 @@ Pkg.add("LinearAlgebraMPI")
 using MPI
 MPI.Init()
 
-using LinearAlgebraMPI
+using HPCLinearAlgebra
 using SparseArrays
 
 # Create a sparse matrix (must be identical on all ranks)
 A_global = sprand(1000, 1000, 0.01)
-A = SparseMatrixMPI{Float64}(A_global)
+A = HPCSparseMatrix{Float64}(A_global)
 
 # Create a vector
 x_global = rand(1000)
-x = VectorMPI(x_global)
+x = HPCVector(x_global)
 
 # Matrix-vector multiplication
 y = A * x
 
 # Matrix-matrix multiplication
 B_global = sprand(1000, 500, 0.01)
-B = SparseMatrixMPI{Float64}(B_global)
+B = HPCSparseMatrix{Float64}(B_global)
 C = A * B
 
 # Transpose operations
@@ -62,14 +62,14 @@ D = At * B  # Materializes transpose as needed
 # Solve linear systems
 using LinearAlgebra
 A_sym = A + transpose(A) + 10I  # Make symmetric positive definite
-A_sym_dist = SparseMatrixMPI{Float64}(A_sym)
+A_sym_dist = HPCSparseMatrix{Float64}(A_sym)
 F = ldlt(A_sym_dist)  # LDLT factorization
 x_sol = solve(F, y)   # Solve A_sym * x_sol = y
 ```
 
 ## GPU Support
 
-LinearAlgebraMPI supports GPU acceleration via Metal.jl (macOS) or CUDA.jl (Linux/Windows). GPU support is optional - extensions are loaded as weak dependencies.
+HPCLinearAlgebra supports GPU acceleration via Metal.jl (macOS) or CUDA.jl (Linux/Windows). GPU support is optional - extensions are loaded as weak dependencies.
 
 ### Metal (macOS)
 
@@ -77,15 +77,15 @@ LinearAlgebraMPI supports GPU acceleration via Metal.jl (macOS) or CUDA.jl (Linu
 using Metal  # Load Metal BEFORE MPI for GPU detection
 using MPI
 MPI.Init()
-using LinearAlgebraMPI
+using HPCLinearAlgebra
 
 # Define backends
 cpu_backend = HPCBackend(DeviceCPU(), CommMPI(), SolverMUMPS())
 metal_backend = HPCBackend(DeviceMetal(), CommMPI(), SolverMUMPS())
 
 # Create vectors/matrices directly with GPU backend
-x_gpu = VectorMPI(Float32.(rand(1000)), metal_backend)
-A = SparseMatrixMPI(sprand(Float32, 1000, 1000, 0.01), metal_backend)
+x_gpu = HPCVector(Float32.(rand(1000)), metal_backend)
+A = HPCSparseMatrix(sprand(Float32, 1000, 1000, 0.01), metal_backend)
 
 # GPU operations work transparently
 y_gpu = A * x_gpu   # Sparse A*x with GPU vector (CPU staging for computation)
@@ -101,14 +101,14 @@ y_cpu = to_backend(y_gpu, cpu_backend)
 using CUDA  # Load CUDA BEFORE MPI
 using MPI
 MPI.Init()
-using LinearAlgebraMPI
+using HPCLinearAlgebra
 
 # Define backends
 cpu_backend = HPCBackend(DeviceCPU(), CommMPI(), SolverMUMPS())
 cuda_backend = HPCBackend(DeviceCUDA(), CommMPI(), SolverMUMPS())
 
 # Create directly with GPU backend
-x_gpu = VectorMPI(rand(1000), cuda_backend)
+x_gpu = HPCVector(rand(1000), cuda_backend)
 
 # GPU operations work transparently
 y_gpu = A * x_gpu
@@ -125,14 +125,14 @@ For multi-GPU distributed sparse direct solves, use `CuDSSFactorizationMPI`:
 ```julia
 using CUDA, MPI
 MPI.Init()
-using LinearAlgebraMPI
+using HPCLinearAlgebra
 
 # Each rank uses one GPU
 CUDA.device!(MPI.Comm_rank(MPI.COMM_WORLD) % length(CUDA.devices()))
 
 # Create distributed sparse matrix
-A = SparseMatrixMPI{Float64}(make_spd_matrix(1000))
-b = VectorMPI(rand(1000))
+A = HPCSparseMatrix{Float64}(make_spd_matrix(1000))
+b = HPCVector(rand(1000))
 
 # Multi-GPU factorization using cuDSS + NCCL
 F = cudss_ldlt(A)  # or cudss_lu(A)
@@ -144,9 +144,9 @@ finalize!(F)  # Clean up cuDSS resources
 
 ### How it works
 
-- **Vectors**: `VectorMPI{T,AV}` where `AV` is `Vector{T}` (CPU), `MtlVector{T}` (Metal), or `CuVector{T}` (CUDA)
-- **Sparse matrices**: `SparseMatrixMPI{T,Ti,AV}` where `AV` determines storage for nonzero values
-- **Dense matrices**: `MatrixMPI{T,AM}` where `AM` is `Matrix{T}`, `MtlMatrix{T}`, or `CuMatrix{T}`
+- **Vectors**: `HPCVector{T,AV}` where `AV` is `Vector{T}` (CPU), `MtlVector{T}` (Metal), or `CuVector{T}` (CUDA)
+- **Sparse matrices**: `HPCSparseMatrix{T,Ti,AV}` where `AV` determines storage for nonzero values
+- **Dense matrices**: `HPCMatrix{T,AM}` where `AM` is `Matrix{T}`, `MtlMatrix{T}`, or `CuMatrix{T}`
 - **MPI communication**: Always uses CPU buffers (staged automatically)
 - **Element types**: Metal requires `Float32`; CUDA supports `Float32` and `Float64`
 
@@ -170,4 +170,4 @@ mpiexec -n 4 julia your_script.jl
 
 ## Documentation
 
-For detailed documentation, see the [stable docs](https://sloisel.github.io/LinearAlgebraMPI.jl/stable/) or [dev docs](https://sloisel.github.io/LinearAlgebraMPI.jl/dev/).
+For detailed documentation, see the [stable docs](https://sloisel.github.io/HPCLinearAlgebra.jl/stable/) or [dev docs](https://sloisel.github.io/HPCLinearAlgebra.jl/dev/).

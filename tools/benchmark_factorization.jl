@@ -17,7 +17,7 @@ using Dates
 
 # Add the package
 push!(LOAD_PATH, joinpath(@__DIR__, ".."))
-using LinearAlgebraMPI
+using HPCLinearAlgebra
 
 const comm = MPI.COMM_WORLD
 const rank = MPI.Comm_rank(comm)
@@ -109,7 +109,7 @@ function run_benchmarks()
         end
 
         # Create distributed matrix (all ranks have same A_local)
-        A_mpi = SparseMatrixMPI{Float64}(A_local)
+        A_mpi = HPCSparseMatrix{Float64}(A_local)
 
         # Determine iterations based on size (fewer runs for faster benchmarking)
         if actual_n <= 200

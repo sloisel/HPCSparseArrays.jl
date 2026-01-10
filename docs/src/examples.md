@@ -1,6 +1,6 @@
 # Examples
 
-This page provides detailed examples of using LinearAlgebraMPI.jl for various distributed sparse matrix operations.
+This page provides detailed examples of using HPCLinearAlgebra.jl for various distributed sparse matrix operations.
 
 ## Matrix Multiplication
 
@@ -8,7 +8,7 @@ This page provides detailed examples of using LinearAlgebraMPI.jl for various di
 
 ```julia
 using MPI
-using LinearAlgebraMPI
+using HPCLinearAlgebra
 MPI.Init()
 using SparseArrays
 using LinearAlgebra
@@ -25,15 +25,15 @@ V2 = [1.5*ones(n); 0.25*ones(n-1); 0.25*ones(n-1)]
 B = sparse(I, J, V2, n, n)
 
 # Distribute matrices
-Adist = SparseMatrixMPI{Float64}(A)
-Bdist = SparseMatrixMPI{Float64}(B)
+Adist = HPCSparseMatrix{Float64}(A)
+Bdist = HPCSparseMatrix{Float64}(B)
 
 # Multiply
 Cdist = Adist * Bdist
 
 # Verify against reference
 C_ref = A * B
-C_ref_dist = SparseMatrixMPI{Float64}(C_ref)
+C_ref_dist = HPCSparseMatrix{Float64}(C_ref)
 err = norm(Cdist - C_ref_dist, Inf)
 
 println(io0(), "Multiplication error: $err")
@@ -44,7 +44,7 @@ println(io0(), "Multiplication error: $err")
 
 ```julia
 using MPI
-using LinearAlgebraMPI
+using HPCLinearAlgebra
 MPI.Init()
 using SparseArrays
 using LinearAlgebra
@@ -62,8 +62,8 @@ J_B = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
 V_B = Float64.(1:length(I_B))
 B = sparse(I_B, J_B, V_B, k, n)
 
-Adist = SparseMatrixMPI{Float64}(A)
-Bdist = SparseMatrixMPI{Float64}(B)
+Adist = HPCSparseMatrix{Float64}(A)
+Bdist = HPCSparseMatrix{Float64}(B)
 
 Cdist = Adist * Bdist
 
@@ -77,7 +77,7 @@ println(io0(), "Result size: $(size(Cdist))")
 
 ```julia
 using MPI
-using LinearAlgebraMPI
+using HPCLinearAlgebra
 MPI.Init()
 using SparseArrays
 using LinearAlgebra
@@ -95,8 +95,8 @@ V_B = ComplexF64.([1.5*ones(n); 0.25*ones(n-1); 0.25*ones(n-1)]) .+
       im .* ComplexF64.([-0.1*ones(n); 0.1*ones(n-1); 0.1*ones(n-1)])
 B = sparse(I, J, V_B, n, n)
 
-Adist = SparseMatrixMPI{ComplexF64}(A)
-Bdist = SparseMatrixMPI{ComplexF64}(B)
+Adist = HPCSparseMatrix{ComplexF64}(A)
+Bdist = HPCSparseMatrix{ComplexF64}(B)
 
 # Multiplication
 Cdist = Adist * Bdist
@@ -118,7 +118,7 @@ println(io0(), "Complex matrix operations completed")
 
 ```julia
 using MPI
-using LinearAlgebraMPI
+using HPCLinearAlgebra
 MPI.Init()
 using SparseArrays
 using LinearAlgebra
@@ -138,8 +138,8 @@ J_B = [1, 1, 2, 3, 4, 5, 6, 7, 8]
 V_B = Float64.(9:-1:1)
 B = sparse(I_B, J_B, V_B, n, n)
 
-Adist = SparseMatrixMPI{Float64}(A)
-Bdist = SparseMatrixMPI{Float64}(B)
+Adist = HPCSparseMatrix{Float64}(A)
+Bdist = HPCSparseMatrix{Float64}(B)
 
 # Addition - handles different sparsity patterns
 Cdist = Adist + Bdist
@@ -148,7 +148,7 @@ Cdist = Adist + Bdist
 Ddist = Adist - Bdist
 
 # Verify
-C_ref_dist = SparseMatrixMPI{Float64}(A + B)
+C_ref_dist = HPCSparseMatrix{Float64}(A + B)
 err = norm(Cdist - C_ref_dist, Inf)
 
 println(io0(), "Addition error: $err")
@@ -163,7 +163,7 @@ The `transpose` function creates a lazy wrapper without transposing the data. Th
 
 ```julia
 using MPI
-using LinearAlgebraMPI
+using HPCLinearAlgebra
 MPI.Init()
 using SparseArrays
 using LinearAlgebra
@@ -179,8 +179,8 @@ J_D = [1, 2, 3, 4, 5, 6, 7, 8]
 V_D = Float64.(1:length(I_D))
 D = sparse(I_D, J_D, V_D, n, m)
 
-Cdist = SparseMatrixMPI{Float64}(C)
-Ddist = SparseMatrixMPI{Float64}(D)
+Cdist = HPCSparseMatrix{Float64}(C)
+Ddist = HPCSparseMatrix{Float64}(D)
 
 # transpose(C) * transpose(D) = transpose(D * C)
 # This is computed efficiently without explicitly transposing
@@ -194,7 +194,7 @@ println(io0(), "Lazy transpose multiplication completed")
 
 ```julia
 using MPI
-using LinearAlgebraMPI
+using HPCLinearAlgebra
 MPI.Init()
 using SparseArrays
 using LinearAlgebra
@@ -213,15 +213,15 @@ J_B = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 1, 2]
 V_B = Float64.(1:length(I_B))
 B = sparse(I_B, J_B, V_B, m, p)
 
-Adist = SparseMatrixMPI{Float64}(A)
-Bdist = SparseMatrixMPI{Float64}(B)
+Adist = HPCSparseMatrix{Float64}(A)
+Bdist = HPCSparseMatrix{Float64}(B)
 
 # transpose(A) * B - A is automatically materialized as transpose
 result_dist = transpose(Adist) * Bdist
 
 # Verify
 ref = sparse(A') * B
-ref_dist = SparseMatrixMPI{Float64}(ref)
+ref_dist = HPCSparseMatrix{Float64}(ref)
 err = norm(result_dist - ref_dist, Inf)
 
 println(io0(), "transpose(A) * B error: $err")
@@ -232,7 +232,7 @@ println(io0(), "transpose(A) * B error: $err")
 
 ```julia
 using MPI
-using LinearAlgebraMPI
+using HPCLinearAlgebra
 MPI.Init()
 using SparseArrays
 using LinearAlgebra
@@ -243,7 +243,7 @@ J = [1, 2, 3, 4, 5, 6, 7, 8]
 V = Float64.(1:length(I))
 A = sparse(I, J, V, m, n)
 
-Adist = SparseMatrixMPI{Float64}(A)
+Adist = HPCSparseMatrix{Float64}(A)
 
 # Scalar times matrix
 a = 2.5
@@ -255,7 +255,7 @@ At = transpose(Adist)
 result3 = a * At  # Returns transpose(a * A)
 
 # Verify
-ref_dist = SparseMatrixMPI{Float64}(a * A)
+ref_dist = HPCSparseMatrix{Float64}(a * A)
 err1 = norm(result1 - ref_dist, Inf)
 err2 = norm(result2 - ref_dist, Inf)
 
@@ -267,7 +267,7 @@ println(io0(), "Scalar multiplication errors: $err1, $err2")
 
 ```julia
 using MPI
-using LinearAlgebraMPI
+using HPCLinearAlgebra
 MPI.Init()
 using SparseArrays
 using LinearAlgebra
@@ -278,7 +278,7 @@ J = [1, 2, 3, 4, 5, 6, 7, 8, 1, 3]
 V = Float64.(1:length(I))
 A = sparse(I, J, V, m, n)
 
-Adist = SparseMatrixMPI{Float64}(A)
+Adist = HPCSparseMatrix{Float64}(A)
 
 # Element-wise norms (treating matrix as vector)
 frob_norm = norm(Adist)        # Frobenius (2-norm)
@@ -301,11 +301,11 @@ println(io0(), "Operator Inf-norm: $op_inf")
 
 ## Iterative Methods Example
 
-Here's an example of using LinearAlgebraMPI.jl for power iteration to find the dominant eigenvalue:
+Here's an example of using HPCLinearAlgebra.jl for power iteration to find the dominant eigenvalue:
 
 ```julia
 using MPI
-using LinearAlgebraMPI
+using HPCLinearAlgebra
 MPI.Init()
 using SparseArrays
 using LinearAlgebra
@@ -317,10 +317,10 @@ J = [1:n; 2:n; 1:n-1]
 V = [4.0*ones(n); -ones(n-1); -ones(n-1)]
 A = sparse(I, J, V, n, n)
 
-Adist = SparseMatrixMPI{Float64}(A)
+Adist = HPCSparseMatrix{Float64}(A)
 
 # For power iteration, we need matrix-vector products
-# Currently LinearAlgebraMPI focuses on matrix-matrix products
+# Currently HPCLinearAlgebra focuses on matrix-matrix products
 # This example shows how to use A*A for related computations
 
 # Compute A^2
@@ -336,13 +336,13 @@ println(io0(), "||A^2||_F = $norm_A2")
 
 ## Solving Linear Systems
 
-LinearAlgebraMPI provides distributed sparse direct solvers using the multifrontal method.
+HPCLinearAlgebra provides distributed sparse direct solvers using the multifrontal method.
 
 ### LDLT Factorization (Symmetric Matrices)
 
 ```julia
 using MPI
-using LinearAlgebraMPI
+using HPCLinearAlgebra
 MPI.Init()
 using SparseArrays
 using LinearAlgebra
@@ -355,13 +355,13 @@ V = [4.0*ones(n); -ones(n-1); -ones(n-1)]
 A = sparse(I, J, V, n, n)
 
 # Distribute the matrix
-Adist = SparseMatrixMPI{Float64}(A)
+Adist = HPCSparseMatrix{Float64}(A)
 
 # Compute LDLT factorization
 F = ldlt(Adist)
 
 # Create right-hand side
-b = VectorMPI(ones(n))
+b = HPCVector(ones(n))
 
 # Solve Ax = b
 x = solve(F, b)
@@ -381,7 +381,7 @@ println(io0(), "LDLT solve residual: $residual")
 
 ```julia
 using MPI
-using LinearAlgebraMPI
+using HPCLinearAlgebra
 MPI.Init()
 using SparseArrays
 using LinearAlgebra
@@ -394,11 +394,11 @@ V = [2.0*ones(n); -0.5*ones(n-1); -0.8*ones(n-1)]  # Non-symmetric
 A = sparse(I, J, V, n, n)
 
 # Distribute and factorize
-Adist = SparseMatrixMPI{Float64}(A)
+Adist = HPCSparseMatrix{Float64}(A)
 F = lu(Adist)
 
 # Solve
-b = VectorMPI(ones(n))
+b = HPCVector(ones(n))
 x = solve(F, b)
 
 # Verify
@@ -415,7 +415,7 @@ LDLT uses Bunch-Kaufman pivoting to handle symmetric indefinite matrices:
 
 ```julia
 using MPI
-using LinearAlgebraMPI
+using HPCLinearAlgebra
 MPI.Init()
 using SparseArrays
 using LinearAlgebra
@@ -428,10 +428,10 @@ diag_vals = [(-1.0)^i * 2.0 for i in 1:n]  # Alternating signs
 V = [diag_vals; -ones(n-1); -ones(n-1)]
 A = sparse(I, J, V, n, n)
 
-Adist = SparseMatrixMPI{Float64}(A)
+Adist = HPCSparseMatrix{Float64}(A)
 F = ldlt(Adist)
 
-b = VectorMPI(collect(1.0:n))
+b = HPCVector(collect(1.0:n))
 x = solve(F, b)
 
 x_full = Vector(x)
@@ -447,7 +447,7 @@ For sequences of matrices with the same sparsity pattern, the symbolic factoriza
 
 ```julia
 using MPI
-using LinearAlgebraMPI
+using HPCLinearAlgebra
 MPI.Init()
 using SparseArrays
 using LinearAlgebra
@@ -459,7 +459,7 @@ J = [1:n; 2:n; 1:n-1]
 # First matrix
 V1 = [4.0*ones(n); -ones(n-1); -ones(n-1)]
 A1 = sparse(I, J, V1, n, n)
-A1dist = SparseMatrixMPI{Float64}(A1)
+A1dist = HPCSparseMatrix{Float64}(A1)
 
 # First factorization - computes symbolic phase
 F1 = ldlt(A1dist; reuse_symbolic=true)
@@ -467,13 +467,13 @@ F1 = ldlt(A1dist; reuse_symbolic=true)
 # Second matrix - same structure, different values
 V2 = [8.0*ones(n); -2.0*ones(n-1); -2.0*ones(n-1)]
 A2 = sparse(I, J, V2, n, n)
-A2dist = SparseMatrixMPI{Float64}(A2)
+A2dist = HPCSparseMatrix{Float64}(A2)
 
 # Second factorization - reuses cached symbolic phase (faster)
 F2 = ldlt(A2dist; reuse_symbolic=true)
 
 # Both factorizations work
-b = VectorMPI(ones(n))
+b = HPCVector(ones(n))
 x1 = solve(F1, b)
 x2 = solve(F2, b)
 
@@ -488,7 +488,7 @@ println(io0(), "F2 residual: ", norm(A2 * x2_full - ones(n), Inf))
 
 ```julia
 using MPI
-using LinearAlgebraMPI
+using HPCLinearAlgebra
 MPI.Init()
 using SparseArrays
 
@@ -496,8 +496,8 @@ n = 100
 A = spdiagm(0 => 2.0*ones(n), 1 => -ones(n-1), -1 => -ones(n-1))
 B = spdiagm(0 => 1.5*ones(n), 1 => 0.5*ones(n-1), -1 => 0.5*ones(n-1))
 
-Adist = SparseMatrixMPI{Float64}(A)
-Bdist = SparseMatrixMPI{Float64}(B)
+Adist = HPCSparseMatrix{Float64}(A)
+Bdist = HPCSparseMatrix{Float64}(B)
 
 # First multiplication - creates and caches the plan
 C1 = Adist * Bdist
@@ -529,7 +529,7 @@ Row-wise operations are local - no MPI communication is needed since rows are al
 
 ```julia
 using MPI
-using LinearAlgebraMPI
+using HPCLinearAlgebra
 MPI.Init()
 using LinearAlgebra
 
@@ -538,7 +538,7 @@ m, n = 100, 10
 A_global = Float64.([i + 0.1*j for i in 1:m, j in 1:n])
 
 # Distribute
-Adist = MatrixMPI(A_global)
+Adist = HPCMatrix(A_global)
 
 # Compute row statistics: for each row, compute [norm, max, sum]
 # This transforms 100×10 matrix to 100×3 matrix
@@ -554,7 +554,7 @@ Column-wise operations require MPI communication to gather each full column:
 
 ```julia
 using MPI
-using LinearAlgebraMPI
+using HPCLinearAlgebra
 MPI.Init()
 using LinearAlgebra
 
@@ -562,7 +562,7 @@ using LinearAlgebra
 m, n = 100, 10
 A_global = Float64.([i + 0.1*j for i in 1:m, j in 1:n])
 
-Adist = MatrixMPI(A_global)
+Adist = HPCMatrix(A_global)
 
 # Compute column statistics: for each column, compute [norm, max]
 # This transforms 100×10 matrix to 2×10 matrix
@@ -578,7 +578,7 @@ The standard Julia pattern `vcat(f.(eachrow(A))...)` doesn't work with distribut
 
 ```julia
 using MPI
-using LinearAlgebraMPI
+using HPCLinearAlgebra
 MPI.Init()
 using LinearAlgebra
 
@@ -589,7 +589,7 @@ using LinearAlgebra
 
 # MPI-compatible equivalent:
 A_global = Float64.([i + 0.1*j for i in 1:100, j in 1:10])
-Adist = MatrixMPI(A_global)
+Adist = HPCMatrix(A_global)
 
 # Use mapslices with dims=2 to apply function to each row
 # The function returns a vector, which becomes a row in the result

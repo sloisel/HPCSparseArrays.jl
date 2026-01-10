@@ -13,7 +13,7 @@ end
 using MPI
 MPI.Init()
 
-using LinearAlgebraMPI
+using HPCLinearAlgebra
 using SparseArrays
 using LinearAlgebra: norm
 using Test
@@ -50,11 +50,11 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     end
     B = sparse(I_B, J_B, V_B, n, n)
 
-    Adist = SparseMatrixMPI(A, backend)
-    Bdist = SparseMatrixMPI(B, backend)
+    Adist = HPCSparseMatrix(A, backend)
+    Bdist = HPCSparseMatrix(B, backend)
     Cdist = assert_type(Adist * Bdist, ST)
     C_ref = A * B
-    C_ref_dist = SparseMatrixMPI(C_ref, backend)
+    C_ref_dist = HPCSparseMatrix(C_ref, backend)
 
     # Convert to CPU for norm comparison
     Cdist_cpu = to_backend(Cdist, cpu_backend)
@@ -76,11 +76,11 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     V_B2 = T <: Complex ? T.(1:length(I_B2)) .+ im .* T.(length(I_B2):-1:1) : T.(1:length(I_B2))
     B2 = sparse(I_B2, J_B2, V_B2, k, n2)
 
-    Adist2 = SparseMatrixMPI(A2, backend)
-    Bdist2 = SparseMatrixMPI(B2, backend)
+    Adist2 = HPCSparseMatrix(A2, backend)
+    Bdist2 = HPCSparseMatrix(B2, backend)
     Cdist2 = assert_type(Adist2 * Bdist2, ST)
     C_ref2 = A2 * B2
-    C_ref_dist2 = SparseMatrixMPI(C_ref2, backend)
+    C_ref_dist2 = HPCSparseMatrix(C_ref2, backend)
 
     Cdist2_cpu = to_backend(Cdist2, cpu_backend)
     C_ref_dist2_cpu = to_backend(C_ref_dist2, cpu_backend)

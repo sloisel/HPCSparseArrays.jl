@@ -8,7 +8,7 @@
 # - Solver: How linear systems are solved (MUMPS, cuDSS variants)
 #
 # The HPCBackend type unifies these concerns into a single type parameter for
-# distributed array types (VectorMPI, MatrixMPI, SparseMatrixMPI).
+# distributed array types (HPCVector, HPCMatrix, HPCSparseMatrix).
 
 # ============================================================================
 # Device Types
@@ -101,7 +101,7 @@ Concrete types are defined in the CUDA extension.
 abstract type AbstractSolverCuDSS <: AbstractSolver end
 
 # Note: SolverCuDSS_Single, SolverCuDSS_MG, SolverCuDSS_MGMN are defined
-# in ext/LinearAlgebraMPICUDAExt.jl since they depend on CUDA types.
+# in ext/HPCLinearAlgebraCUDAExt.jl since they depend on CUDA types.
 
 # ============================================================================
 # HPCBackend Type
@@ -330,6 +330,33 @@ function backend_cpu_mpi(comm::MPI.Comm)
     return HPCBackend(DeviceCPU(), CommMPI(comm), SolverMUMPS())
 end
 
+# ============================================================================
+# Pre-constructed Backend Constants
+# ============================================================================
+#
+# These constants are available at module load time (before MPI.Init()).
+# MPI.COMM_WORLD is a static handle that can be stored before initialization;
+# the communicator is only used when actual MPI operations are performed.
+
+"""
+    BACKEND_CPU_SERIAL
+
+Pre-constructed CPU backend with serial (single-process) communication and MUMPS solver.
+Use this for non-MPI code or single-process testing.
+"""
+const BACKEND_CPU_SERIAL = HPCBackend(DeviceCPU(), CommSerial(), SolverMUMPS())
+
+"""
+    BACKEND_CPU_MPI
+
+Pre-constructed CPU backend with MPI communication (using COMM_WORLD) and MUMPS solver.
+This is the default backend for distributed CPU computations.
+
+Note: While this constant is created at module load time, actual MPI operations
+will only work after MPI.Init() has been called.
+"""
+const BACKEND_CPU_MPI = HPCBackend(DeviceCPU(), CommMPI(MPI.COMM_WORLD), SolverMUMPS())
+
 # GPU backend factory functions are defined in the extensions
 # These are placeholder declarations so extensions can add methods
 
@@ -342,9 +369,17 @@ Requires the Metal extension to be loaded.
 function backend_metal_mpi end
 
 """
+    backend_cuda_serial() -> HPCBackend
+
+Create a CUDA GPU backend with serial (single-process) communication and cuDSS solver.
+Requires the CUDA extension to be loaded.
+"""
+function backend_cuda_serial end
+
+"""
     backend_cuda_mpi(comm::MPI.Comm) -> HPCBackend
 
-Create a CUDA GPU backend with MPI communication.
+Create a CUDA GPU backend with MPI communication and cuDSS solver.
 Requires the CUDA extension to be loaded.
 """
 function backend_cuda_mpi end

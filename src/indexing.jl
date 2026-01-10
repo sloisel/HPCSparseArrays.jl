@@ -2,12 +2,12 @@
 # Communication tags: 40 (index request), 41 (value response)
 
 """
-    _invalidate_cached_transpose!(A::SparseMatrixMPI)
+    _invalidate_cached_transpose!(A::HPCSparseMatrix)
 
 Invalidate the cached transpose of A bidirectionally.
 If A has a cached transpose B, then B.cached_transpose is also cleared.
 """
-function _invalidate_cached_transpose!(A::SparseMatrixMPI)
+function _invalidate_cached_transpose!(A::HPCSparseMatrix)
     if A.cached_transpose !== nothing
         A.cached_transpose.cached_transpose = nothing
     end
@@ -21,7 +21,7 @@ end
 # ============================================================================
 
 # ============================================================================
-# Range Indexing for VectorMPI
+# Range Indexing for HPCVector
 # ============================================================================
 
 """
@@ -62,9 +62,9 @@ function _compute_subpartition(partition::Vector{Int}, rng::UnitRange{Int})
 end
 
 """
-    Base.getindex(v::VectorMPI{T}, rng::UnitRange{Int}) where T
+    Base.getindex(v::HPCVector{T}, rng::UnitRange{Int}) where T
 
-Extract a subvector `v[rng]` from a distributed vector, returning a new VectorMPI.
+Extract a subvector `v[rng]` from a distributed vector, returning a new HPCVector.
 
 This is a collective operation - all ranks must call it with the same range.
 The result has a partition derived from `v.partition` such that each rank
@@ -72,11 +72,11 @@ extracts only its local portion (no data communication, only hash computation).
 
 # Example
 ```julia
-v = VectorMPI([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0])
-w = v[3:6]  # Returns VectorMPI with elements [3.0, 4.0, 5.0, 6.0]
+v = HPCVector([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0])
+w = v[3:6]  # Returns HPCVector with elements [3.0, 4.0, 5.0, 6.0]
 ```
 """
-function Base.getindex(v::VectorMPI{T,B}, rng::UnitRange{Int}) where {T, B<:HPCBackend}
+function Base.getindex(v::HPCVector{T,B}, rng::UnitRange{Int}) where {T, B<:HPCBackend}
     backend = v.backend
     comm = backend.comm
     device = backend.device
@@ -84,14 +84,14 @@ function Base.getindex(v::VectorMPI{T,B}, rng::UnitRange{Int}) where {T, B<:HPCB
 
     n = length(v)
     if first(rng) < 1 || last(rng) > n
-        error("VectorMPI range out of bounds: $rng, length=$n")
+        error("HPCVector range out of bounds: $rng, length=$n")
     end
 
     if isempty(rng)
-        # Empty range - return empty VectorMPI
+        # Empty range - return empty HPCVector
         new_partition = ones(Int, comm_size(comm) + 1)
         hash = compute_partition_hash(new_partition)
-        return VectorMPI{T,B}(hash, new_partition, similar(v.v, 0), backend)
+        return HPCVector{T,B}(hash, new_partition, similar(v.v, 0), backend)
     end
 
     # Compute new partition (local computation, no communication)
@@ -117,37 +117,37 @@ function Base.getindex(v::VectorMPI{T,B}, rng::UnitRange{Int}) where {T, B<:HPCB
     # Compute hash (requires Allgather for consistency)
     hash = compute_partition_hash(new_partition)
 
-    return VectorMPI{T,B}(hash, new_partition, local_v, backend)
+    return HPCVector{T,B}(hash, new_partition, local_v, backend)
 end
 
 """
-    Base.setindex!(v::VectorMPI{T}, vals, rng::UnitRange{Int}) where T
+    Base.setindex!(v::HPCVector{T}, vals, rng::UnitRange{Int}) where T
 
 Set elements `v[rng] = vals` in a distributed vector.
 
 This is a collective operation - all ranks must call it with the same range.
 `vals` can be:
 - A scalar (broadcast to all positions)
-- A VectorMPI with compatible length
+- A HPCVector with compatible length
 - A regular Vector (must have length equal to the range)
 
 Only ranks that own elements in the range modify their local data.
 
 # Example
 ```julia
-v = VectorMPI([1.0, 2.0, 3.0, 4.0])
+v = HPCVector([1.0, 2.0, 3.0, 4.0])
 v[2:3] = 0.0  # Set elements 2 and 3 to zero
 v[2:3] = [5.0, 6.0]  # Set elements 2 and 3 to 5.0 and 6.0
 ```
 """
-function Base.setindex!(v::VectorMPI{T,B}, val::Number, rng::UnitRange{Int}) where {T, B<:HPCBackend}
+function Base.setindex!(v::HPCVector{T,B}, val::Number, rng::UnitRange{Int}) where {T, B<:HPCBackend}
     backend = v.backend
     comm = backend.comm
     rank = comm_rank(comm)
 
     n = length(v)
     if first(rng) < 1 || last(rng) > n
-        error("VectorMPI range out of bounds: $rng, length=$n")
+        error("HPCVector range out of bounds: $rng, length=$n")
     end
 
     if isempty(rng)
@@ -171,18 +171,18 @@ function Base.setindex!(v::VectorMPI{T,B}, val::Number, rng::UnitRange{Int}) whe
     return val
 end
 
-function Base.setindex!(v::VectorMPI{T,B}, vals::AbstractVector, rng::UnitRange{Int}) where {T, B<:HPCBackend}
+function Base.setindex!(v::HPCVector{T,B}, vals::AbstractVector, rng::UnitRange{Int}) where {T, B<:HPCBackend}
     backend = v.backend
     comm = backend.comm
     rank = comm_rank(comm)
 
     n = length(v)
     if first(rng) < 1 || last(rng) > n
-        error("VectorMPI range out of bounds: $rng, length=$n")
+        error("HPCVector range out of bounds: $rng, length=$n")
     end
 
     if length(vals) != length(rng)
-        error("VectorMPI setindex!: length mismatch, got $(length(vals)) values for range of length $(length(rng))")
+        error("HPCVector setindex!: length mismatch, got $(length(vals)) values for range of length $(length(rng))")
     end
 
     if isempty(rng)
@@ -210,9 +210,9 @@ function Base.setindex!(v::VectorMPI{T,B}, vals::AbstractVector, rng::UnitRange{
 end
 
 """
-    Base.setindex!(v::VectorMPI{T}, src::VectorMPI, rng::UnitRange{Int}) where T
+    Base.setindex!(v::HPCVector{T}, src::HPCVector, rng::UnitRange{Int}) where T
 
-Set elements `v[rng] = src` where `src` is a distributed VectorMPI.
+Set elements `v[rng] = src` where `src` is a distributed HPCVector.
 
 This is a collective operation - all ranks must call it with the same `rng` and `src`.
 Each rank only updates the elements it owns that fall within `rng`.
@@ -222,23 +222,23 @@ local copy is performed. Otherwise, a communication plan redistributes the sourc
 
 # Example
 ```julia
-v = VectorMPI([1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
-src = VectorMPI([10.0, 20.0, 30.0])
+v = HPCVector([1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
+src = HPCVector([10.0, 20.0, 30.0])
 v[2:4] = src  # Each rank only writes to elements it owns
 ```
 """
-function Base.setindex!(v::VectorMPI{T,B}, src::VectorMPI, rng::UnitRange{Int}) where {T, B<:HPCBackend}
+function Base.setindex!(v::HPCVector{T,B}, src::HPCVector, rng::UnitRange{Int}) where {T, B<:HPCBackend}
     backend = v.backend
     comm = backend.comm
     rank = comm_rank(comm)
 
     n = length(v)
     if first(rng) < 1 || last(rng) > n
-        error("VectorMPI range out of bounds: $rng, length=$n")
+        error("HPCVector range out of bounds: $rng, length=$n")
     end
 
     if length(src) != length(rng)
-        error("VectorMPI setindex!: length mismatch, got $(length(src)) values for range of length $(length(rng))")
+        error("HPCVector setindex!: length mismatch, got $(length(src)) values for range of length $(length(rng))")
     end
 
     if isempty(rng)
@@ -279,13 +279,13 @@ function Base.setindex!(v::VectorMPI{T,B}, src::VectorMPI, rng::UnitRange{Int}) 
 end
 
 # ============================================================================
-# Range Indexing for MatrixMPI
+# Range Indexing for HPCMatrix
 # ============================================================================
 
 """
-    Base.getindex(A::MatrixMPI{T}, row_rng::UnitRange{Int}, col_rng::UnitRange{Int}) where T
+    Base.getindex(A::HPCMatrix{T}, row_rng::UnitRange{Int}, col_rng::UnitRange{Int}) where T
 
-Extract a submatrix `A[row_rng, col_rng]` from a distributed dense matrix, returning a new MatrixMPI.
+Extract a submatrix `A[row_rng, col_rng]` from a distributed dense matrix, returning a new HPCMatrix.
 
 This is a collective operation - all ranks must call it with the same ranges.
 The result has a row partition derived from `A.row_partition` such that each rank
@@ -293,11 +293,11 @@ extracts only its local portion (no data communication, only hash computation).
 
 # Example
 ```julia
-A = MatrixMPI(reshape(1.0:12.0, 4, 3))
-B = A[2:3, 1:2]  # Returns MatrixMPI submatrix
+A = HPCMatrix(reshape(1.0:12.0, 4, 3))
+B = A[2:3, 1:2]  # Returns HPCMatrix submatrix
 ```
 """
-function Base.getindex(A::MatrixMPI{T,B}, row_rng::UnitRange{Int}, col_rng::UnitRange{Int}) where {T, B<:HPCBackend}
+function Base.getindex(A::HPCMatrix{T,B}, row_rng::UnitRange{Int}, col_rng::UnitRange{Int}) where {T, B<:HPCBackend}
     backend = A.backend
     comm = backend.comm
     device = backend.device
@@ -306,22 +306,22 @@ function Base.getindex(A::MatrixMPI{T,B}, row_rng::UnitRange{Int}, col_rng::Unit
 
     m, n = size(A)
     if first(row_rng) < 1 || last(row_rng) > m
-        error("MatrixMPI row range out of bounds: $row_rng, nrows=$m")
+        error("HPCMatrix row range out of bounds: $row_rng, nrows=$m")
     end
     if first(col_rng) < 1 || last(col_rng) > n
-        error("MatrixMPI column range out of bounds: $col_rng, ncols=$n")
+        error("HPCMatrix column range out of bounds: $col_rng, ncols=$n")
     end
 
     new_nrows = length(row_rng)
     new_ncols = length(col_rng)
 
     if isempty(row_rng) || isempty(col_rng)
-        # Empty range - return empty MatrixMPI with correct dimensions
+        # Empty range - return empty HPCMatrix with correct dimensions
         new_row_partition = uniform_partition(new_nrows, nranks)
         new_col_partition = uniform_partition(new_ncols, nranks)
         my_local_rows = new_row_partition[rank + 2] - new_row_partition[rank + 1]
         hash = compute_dense_structural_hash(new_row_partition, new_col_partition, (new_nrows, new_ncols), comm)
-        return MatrixMPI{T,B}(hash, new_row_partition, new_col_partition, similar(A.A, my_local_rows, new_ncols), backend)
+        return HPCMatrix{T,B}(hash, new_row_partition, new_col_partition, similar(A.A, my_local_rows, new_ncols), backend)
     end
 
     # Compute new row partition (local computation, no communication)
@@ -350,50 +350,50 @@ function Base.getindex(A::MatrixMPI{T,B}, row_rng::UnitRange{Int}, col_rng::Unit
     # Compute hash (requires Allgather for consistency)
     hash = compute_dense_structural_hash(new_row_partition, new_col_partition, size(local_A), comm)
 
-    return MatrixMPI{T,B}(hash, new_row_partition, new_col_partition, local_A, backend)
+    return HPCMatrix{T,B}(hash, new_row_partition, new_col_partition, local_A, backend)
 end
 
 # Convenience: A[row_rng, :] - all columns
-function Base.getindex(A::MatrixMPI{T}, row_rng::UnitRange{Int}, ::Colon) where T
+function Base.getindex(A::HPCMatrix{T}, row_rng::UnitRange{Int}, ::Colon) where T
     return A[row_rng, 1:size(A, 2)]
 end
 
 # Convenience: A[:, col_rng] - all rows
-function Base.getindex(A::MatrixMPI{T}, ::Colon, col_rng::UnitRange{Int}) where T
+function Base.getindex(A::HPCMatrix{T}, ::Colon, col_rng::UnitRange{Int}) where T
     return A[1:size(A, 1), col_rng]
 end
 
 # Convenience: A[:, :] - full copy
-function Base.getindex(A::MatrixMPI{T}, ::Colon, ::Colon) where T
+function Base.getindex(A::HPCMatrix{T}, ::Colon, ::Colon) where T
     return A[1:size(A, 1), 1:size(A, 2)]
 end
 
 """
-    Base.getindex(A::MatrixMPI{T}, ::Colon, k::Integer) where T
+    Base.getindex(A::HPCMatrix{T}, ::Colon, k::Integer) where T
 
-Extract column k from a distributed dense matrix as a VectorMPI.
+Extract column k from a distributed dense matrix as a HPCVector.
 
 This is a collective operation - all ranks must call it.
 Each rank extracts its local portion of the column.
 
 # Example
 ```julia
-A = MatrixMPI(reshape(1.0:12.0, 4, 3))
-v = A[:, 2]  # Get second column as VectorMPI
+A = HPCMatrix(reshape(1.0:12.0, 4, 3))
+v = A[:, 2]  # Get second column as HPCVector
 ```
 """
-function Base.getindex(A::MatrixMPI{T}, ::Colon, k::Integer) where T
+function Base.getindex(A::HPCMatrix{T}, ::Colon, k::Integer) where T
     m, n = size(A)
     if k < 1 || k > n
-        error("MatrixMPI column index out of bounds: k=$k, ncols=$n")
+        error("HPCMatrix column index out of bounds: k=$k, ncols=$n")
     end
     # Extract local portion of column k
     local_col = A.A[:, k]
-    return VectorMPI_local(local_col, A.backend)
+    return HPCVector_local(local_col, A.backend)
 end
 
 """
-    Base.setindex!(A::MatrixMPI{T}, val, row_rng::UnitRange{Int}, col_rng::UnitRange{Int}) where T
+    Base.setindex!(A::HPCMatrix{T}, val, row_rng::UnitRange{Int}, col_rng::UnitRange{Int}) where T
 
 Set elements `A[row_rng, col_rng] = val` in a distributed dense matrix.
 
@@ -402,21 +402,21 @@ This is a collective operation - all ranks must call it with the same ranges.
 
 # Example
 ```julia
-A = MatrixMPI(reshape(1.0:12.0, 4, 3))
+A = HPCMatrix(reshape(1.0:12.0, 4, 3))
 A[2:3, 1:2] = 0.0  # Set submatrix to zeros
 A[2:3, 1:2] = [5.0 6.0; 7.0 8.0]  # Set submatrix to specific values
 ```
 """
-function Base.setindex!(A::MatrixMPI{T,B}, val::Number, row_rng::UnitRange{Int}, col_rng::UnitRange{Int}) where {T, B<:HPCBackend}
+function Base.setindex!(A::HPCMatrix{T,B}, val::Number, row_rng::UnitRange{Int}, col_rng::UnitRange{Int}) where {T, B<:HPCBackend}
     comm = A.backend.comm
     rank = comm_rank(comm)
 
     m, n = size(A)
     if first(row_rng) < 1 || last(row_rng) > m
-        error("MatrixMPI row range out of bounds: $row_rng, nrows=$m")
+        error("HPCMatrix row range out of bounds: $row_rng, nrows=$m")
     end
     if first(col_rng) < 1 || last(col_rng) > n
-        error("MatrixMPI column range out of bounds: $col_rng, ncols=$n")
+        error("HPCMatrix column range out of bounds: $col_rng, ncols=$n")
     end
 
     if isempty(row_rng) || isempty(col_rng)
@@ -439,20 +439,20 @@ function Base.setindex!(A::MatrixMPI{T,B}, val::Number, row_rng::UnitRange{Int},
     return val
 end
 
-function Base.setindex!(A::MatrixMPI{T,B}, vals::AbstractMatrix, row_rng::UnitRange{Int}, col_rng::UnitRange{Int}) where {T, B<:HPCBackend}
+function Base.setindex!(A::HPCMatrix{T,B}, vals::AbstractMatrix, row_rng::UnitRange{Int}, col_rng::UnitRange{Int}) where {T, B<:HPCBackend}
     comm = A.backend.comm
     rank = comm_rank(comm)
 
     m, n = size(A)
     if first(row_rng) < 1 || last(row_rng) > m
-        error("MatrixMPI row range out of bounds: $row_rng, nrows=$m")
+        error("HPCMatrix row range out of bounds: $row_rng, nrows=$m")
     end
     if first(col_rng) < 1 || last(col_rng) > n
-        error("MatrixMPI column range out of bounds: $col_rng, ncols=$n")
+        error("HPCMatrix column range out of bounds: $col_rng, ncols=$n")
     end
 
     if size(vals) != (length(row_rng), length(col_rng))
-        error("MatrixMPI setindex!: size mismatch, got $(size(vals)) for range of size ($(length(row_rng)), $(length(col_rng)))")
+        error("HPCMatrix setindex!: size mismatch, got $(size(vals)) for range of size ($(length(row_rng)), $(length(col_rng)))")
     end
 
     if isempty(row_rng) || isempty(col_rng)
@@ -479,9 +479,9 @@ function Base.setindex!(A::MatrixMPI{T,B}, vals::AbstractMatrix, row_rng::UnitRa
 end
 
 """
-    Base.setindex!(A::MatrixMPI{T}, src::MatrixMPI, row_rng::UnitRange{Int}, col_rng::UnitRange{Int}) where T
+    Base.setindex!(A::HPCMatrix{T}, src::HPCMatrix, row_rng::UnitRange{Int}, col_rng::UnitRange{Int}) where T
 
-Set elements `A[row_rng, col_rng] = src` where `src` is a distributed MatrixMPI.
+Set elements `A[row_rng, col_rng] = src` where `src` is a distributed HPCMatrix.
 
 This is a collective operation - all ranks must call it with the same arguments.
 Each rank only updates the rows it owns that fall within `row_rng`.
@@ -491,26 +491,26 @@ local copy is performed. Otherwise, point-to-point communication redistributes t
 
 # Example
 ```julia
-A = MatrixMPI(zeros(6, 4))
-src = MatrixMPI(ones(3, 2))
+A = HPCMatrix(zeros(6, 4))
+src = HPCMatrix(ones(3, 2))
 A[2:4, 1:2] = src  # Each rank only writes to rows it owns
 ```
 """
-function Base.setindex!(A::MatrixMPI{T,B}, src::MatrixMPI, row_rng::UnitRange{Int}, col_rng::UnitRange{Int}) where {T, B<:HPCBackend}
+function Base.setindex!(A::HPCMatrix{T,B}, src::HPCMatrix, row_rng::UnitRange{Int}, col_rng::UnitRange{Int}) where {T, B<:HPCBackend}
     comm = A.backend.comm
     rank = comm_rank(comm)
     nranks = comm_size(comm)
 
     m, n = size(A)
     if first(row_rng) < 1 || last(row_rng) > m
-        error("MatrixMPI row range out of bounds: $row_rng, nrows=$m")
+        error("HPCMatrix row range out of bounds: $row_rng, nrows=$m")
     end
     if first(col_rng) < 1 || last(col_rng) > n
-        error("MatrixMPI column range out of bounds: $col_rng, ncols=$n")
+        error("HPCMatrix column range out of bounds: $col_rng, ncols=$n")
     end
 
     if size(src) != (length(row_rng), length(col_rng))
-        error("MatrixMPI setindex!: size mismatch, got $(size(src)) for range of size ($(length(row_rng)), $(length(col_rng)))")
+        error("HPCMatrix setindex!: size mismatch, got $(size(src)) for range of size ($(length(row_rng)), $(length(col_rng)))")
     end
 
     if isempty(row_rng) || isempty(col_rng)
@@ -661,22 +661,22 @@ function Base.setindex!(A::MatrixMPI{T,B}, src::MatrixMPI, row_rng::UnitRange{In
 end
 
 # Convenience methods for setindex! with Colon
-function Base.setindex!(A::MatrixMPI{T}, val, row_rng::UnitRange{Int}, ::Colon) where T
+function Base.setindex!(A::HPCMatrix{T}, val, row_rng::UnitRange{Int}, ::Colon) where T
     return setindex!(A, val, row_rng, 1:size(A, 2))
 end
 
-function Base.setindex!(A::MatrixMPI{T}, val, ::Colon, col_rng::UnitRange{Int}) where T
+function Base.setindex!(A::HPCMatrix{T}, val, ::Colon, col_rng::UnitRange{Int}) where T
     return setindex!(A, val, 1:size(A, 1), col_rng)
 end
 
 # ============================================================================
-# Range Indexing for SparseMatrixMPI
+# Range Indexing for HPCSparseMatrix
 # ============================================================================
 
 """
-    Base.getindex(A::SparseMatrixMPI{T}, row_rng::UnitRange{Int}, col_rng::UnitRange{Int}) where T
+    Base.getindex(A::HPCSparseMatrix{T}, row_rng::UnitRange{Int}, col_rng::UnitRange{Int}) where T
 
-Extract a submatrix `A[row_rng, col_rng]` from a distributed sparse matrix, returning a new SparseMatrixMPI.
+Extract a submatrix `A[row_rng, col_rng]` from a distributed sparse matrix, returning a new HPCSparseMatrix.
 
 This is a collective operation - all ranks must call it with the same ranges.
 The result has a row partition derived from `A.row_partition` such that each rank
@@ -684,11 +684,11 @@ extracts only its local portion (no data communication, only hash computation).
 
 # Example
 ```julia
-A = SparseMatrixMPI{Float64}(sprand(10, 10, 0.3))
-B = A[3:7, 2:8]  # Returns SparseMatrixMPI submatrix
+A = HPCSparseMatrix{Float64}(sprand(10, 10, 0.3))
+B = A[3:7, 2:8]  # Returns HPCSparseMatrix submatrix
 ```
 """
-function Base.getindex(A::SparseMatrixMPI{T,Ti,Bk}, row_rng::UnitRange{Int}, col_rng::UnitRange{Int}) where {T,Ti,Bk<:HPCBackend}
+function Base.getindex(A::HPCSparseMatrix{T,Ti,Bk}, row_rng::UnitRange{Int}, col_rng::UnitRange{Int}) where {T,Ti,Bk<:HPCBackend}
     backend = A.backend
     comm = backend.comm
     device = backend.device
@@ -697,17 +697,17 @@ function Base.getindex(A::SparseMatrixMPI{T,Ti,Bk}, row_rng::UnitRange{Int}, col
 
     m, n = size(A)
     if first(row_rng) < 1 || last(row_rng) > m
-        error("SparseMatrixMPI row range out of bounds: $row_rng, nrows=$m")
+        error("HPCSparseMatrix row range out of bounds: $row_rng, nrows=$m")
     end
     if first(col_rng) < 1 || last(col_rng) > n
-        error("SparseMatrixMPI column range out of bounds: $col_rng, ncols=$n")
+        error("HPCSparseMatrix column range out of bounds: $col_rng, ncols=$n")
     end
 
     new_nrows = length(row_rng)
     new_ncols = length(col_rng)
 
     if isempty(row_rng) || isempty(col_rng)
-        # Empty range - return empty SparseMatrixMPI with correct dimensions
+        # Empty range - return empty HPCSparseMatrix with correct dimensions
         new_row_partition = uniform_partition(new_nrows, nranks)
         new_col_partition = uniform_partition(new_ncols, nranks)
         my_local_rows = new_row_partition[rank + 2] - new_row_partition[rank + 1]
@@ -718,7 +718,7 @@ function Base.getindex(A::SparseMatrixMPI{T,Ti,Bk}, row_rng::UnitRange{Int}, col
         empty_nzval = _values_to_backend(empty_AT.nzval, A.nzval)
         rowptr_target = _to_target_device(empty_AT.colptr, device)
         colval_target = _to_target_device(empty_AT.rowval, device)
-        return SparseMatrixMPI{T,Ti,Bk}(hash, new_row_partition, new_col_partition, Int[],
+        return HPCSparseMatrix{T,Ti,Bk}(hash, new_row_partition, new_col_partition, Int[],
                                    empty_AT.colptr, empty_AT.rowval, empty_nzval,
                                    my_local_rows, 0, nothing, nothing, rowptr_target, colval_target, backend)
     end
@@ -834,45 +834,45 @@ function Base.getindex(A::SparseMatrixMPI{T,Ti,Bk}, row_rng::UnitRange{Int}, col
     rowptr_target = _to_target_device(new_AT.colptr, device)
     colval_target = _to_target_device(new_AT.rowval, device)
 
-    return SparseMatrixMPI{T,Ti,Bk}(hash, new_row_partition, new_col_partition, final_col_indices,
+    return HPCSparseMatrix{T,Ti,Bk}(hash, new_row_partition, new_col_partition, final_col_indices,
                                new_AT.colptr, new_AT.rowval, result_nzval, local_nrows,
                                length(final_col_indices), nothing, nothing, rowptr_target, colval_target, backend)
 end
 
 # Convenience: A[row_rng, :] - all columns
-function Base.getindex(A::SparseMatrixMPI{T}, row_rng::UnitRange{Int}, ::Colon) where T
+function Base.getindex(A::HPCSparseMatrix{T}, row_rng::UnitRange{Int}, ::Colon) where T
     return A[row_rng, 1:size(A, 2)]
 end
 
 # Convenience: A[:, col_rng] - all rows
-function Base.getindex(A::SparseMatrixMPI{T}, ::Colon, col_rng::UnitRange{Int}) where T
+function Base.getindex(A::HPCSparseMatrix{T}, ::Colon, col_rng::UnitRange{Int}) where T
     return A[1:size(A, 1), col_rng]
 end
 
 # Convenience: A[:, :] - full copy
-function Base.getindex(A::SparseMatrixMPI{T}, ::Colon, ::Colon) where T
+function Base.getindex(A::HPCSparseMatrix{T}, ::Colon, ::Colon) where T
     return A[1:size(A, 1), 1:size(A, 2)]
 end
 
 """
-    Base.getindex(A::SparseMatrixMPI{T,Ti,AV}, ::Colon, k::Integer) where {T,Ti,AV}
+    Base.getindex(A::HPCSparseMatrix{T,Ti,AV}, ::Colon, k::Integer) where {T,Ti,AV}
 
-Extract column k from a distributed sparse matrix as a VectorMPI.
+Extract column k from a distributed sparse matrix as a HPCVector.
 
 This is a collective operation - all ranks must call it.
 Each rank extracts its local portion of the column.
-The returned VectorMPI uses the same backend (CPU/GPU) as the input sparse matrix.
+The returned HPCVector uses the same backend (CPU/GPU) as the input sparse matrix.
 
 # Example
 ```julia
-A = SparseMatrixMPI{Float64}(sprand(10, 5, 0.3))
-v = A[:, 2]  # Get second column as VectorMPI
+A = HPCSparseMatrix{Float64}(sprand(10, 5, 0.3))
+v = A[:, 2]  # Get second column as HPCVector
 ```
 """
-function Base.getindex(A::SparseMatrixMPI{T,Ti,Bk}, ::Colon, k::Integer) where {T,Ti,Bk<:HPCBackend}
+function Base.getindex(A::HPCSparseMatrix{T,Ti,Bk}, ::Colon, k::Integer) where {T,Ti,Bk<:HPCBackend}
     m, n = size(A)
     if k < 1 || k > n
-        error("SparseMatrixMPI column index out of bounds: k=$k, ncols=$n")
+        error("HPCSparseMatrix column index out of bounds: k=$k, ncols=$n")
     end
 
     backend = A.backend
@@ -910,11 +910,11 @@ function Base.getindex(A::SparseMatrixMPI{T,Ti,Bk}, ::Colon, k::Integer) where {
     # Convert to same backend as input sparse matrix
     local_col = _values_to_backend(local_col_cpu, A.nzval)
 
-    return VectorMPI_local(local_col, A.backend)
+    return HPCVector_local(local_col, A.backend)
 end
 
 """
-    Base.setindex!(A::SparseMatrixMPI{T}, val::Number, row_rng::UnitRange{Int}, col_rng::UnitRange{Int}) where T
+    Base.setindex!(A::HPCSparseMatrix{T}, val::Number, row_rng::UnitRange{Int}, col_rng::UnitRange{Int}) where T
 
 Set elements `A[row_rng, col_rng] = val` in a distributed sparse matrix.
 
@@ -924,21 +924,21 @@ If val is zero, existing entries become explicit zeros (structure is preserved).
 
 # Example
 ```julia
-A = SparseMatrixMPI{Float64}(sprand(10, 10, 0.3))
+A = HPCSparseMatrix{Float64}(sprand(10, 10, 0.3))
 A[2:4, 3:5] = 0.0  # Set all structural nonzeros in range to zero
 A[2:4, 3:5] = 2.0  # Set all structural nonzeros in range to 2.0
 ```
 """
-function Base.setindex!(A::SparseMatrixMPI{T,Ti,Bk}, val::Number, row_rng::UnitRange{Int}, col_rng::UnitRange{Int}) where {T,Ti,Bk<:HPCBackend}
+function Base.setindex!(A::HPCSparseMatrix{T,Ti,Bk}, val::Number, row_rng::UnitRange{Int}, col_rng::UnitRange{Int}) where {T,Ti,Bk<:HPCBackend}
     comm = A.backend.comm
     rank = comm_rank(comm)
 
     m, n = size(A)
     if first(row_rng) < 1 || last(row_rng) > m
-        error("SparseMatrixMPI row range out of bounds: $row_rng, nrows=$m")
+        error("HPCSparseMatrix row range out of bounds: $row_rng, nrows=$m")
     end
     if first(col_rng) < 1 || last(col_rng) > n
-        error("SparseMatrixMPI column range out of bounds: $col_rng, ncols=$n")
+        error("HPCSparseMatrix column range out of bounds: $col_rng, ncols=$n")
     end
 
     if isempty(row_rng) || isempty(col_rng)
@@ -982,9 +982,9 @@ function Base.setindex!(A::SparseMatrixMPI{T,Ti,Bk}, val::Number, row_rng::UnitR
 end
 
 """
-    Base.setindex!(A::SparseMatrixMPI{T}, src::SparseMatrixMPI{T}, row_rng::UnitRange{Int}, col_rng::UnitRange{Int}) where T
+    Base.setindex!(A::HPCSparseMatrix{T}, src::HPCSparseMatrix{T}, row_rng::UnitRange{Int}, col_rng::UnitRange{Int}) where T
 
-Set elements `A[row_rng, col_rng] = src` where `src` is a distributed SparseMatrixMPI.
+Set elements `A[row_rng, col_rng] = src` where `src` is a distributed HPCSparseMatrix.
 
 This is a collective operation - all ranks must call it with the same arguments.
 Each rank only updates the rows it owns that fall within `row_rng`.
@@ -1002,26 +1002,26 @@ After the operation:
 
 # Example
 ```julia
-A = SparseMatrixMPI{Float64}(spzeros(6, 6))
-src = SparseMatrixMPI{Float64}(sparse([1, 2], [1, 2], [1.0, 2.0], 3, 3))
+A = HPCSparseMatrix{Float64}(spzeros(6, 6))
+src = HPCSparseMatrix{Float64}(sparse([1, 2], [1, 2], [1.0, 2.0], 3, 3))
 A[2:4, 1:3] = src  # Each rank only writes to rows it owns
 ```
 """
-function Base.setindex!(A::SparseMatrixMPI{T,Ti,Bk}, src::SparseMatrixMPI{T,Ti,Bk}, row_rng::UnitRange{Int}, col_rng::UnitRange{Int}) where {T,Ti,Bk<:HPCBackend}
+function Base.setindex!(A::HPCSparseMatrix{T,Ti,Bk}, src::HPCSparseMatrix{T,Ti,Bk}, row_rng::UnitRange{Int}, col_rng::UnitRange{Int}) where {T,Ti,Bk<:HPCBackend}
     comm = A.backend.comm
     rank = comm_rank(comm)
     nranks = comm_size(comm)
 
     m, n = size(A)
     if first(row_rng) < 1 || last(row_rng) > m
-        error("SparseMatrixMPI row range out of bounds: $row_rng, nrows=$m")
+        error("HPCSparseMatrix row range out of bounds: $row_rng, nrows=$m")
     end
     if first(col_rng) < 1 || last(col_rng) > n
-        error("SparseMatrixMPI column range out of bounds: $col_rng, ncols=$n")
+        error("HPCSparseMatrix column range out of bounds: $col_rng, ncols=$n")
     end
 
     if size(src) != (length(row_rng), length(col_rng))
-        error("SparseMatrixMPI setindex!: size mismatch, got $(size(src)) for range of size ($(length(row_rng)), $(length(col_rng)))")
+        error("HPCSparseMatrix setindex!: size mismatch, got $(size(src)) for range of size ($(length(row_rng)), $(length(col_rng)))")
     end
 
     if isempty(row_rng) || isempty(col_rng)
@@ -1297,46 +1297,46 @@ function Base.setindex!(A::SparseMatrixMPI{T,Ti,Bk}, src::SparseMatrixMPI{T,Ti,B
 end
 
 # Convenience methods for setindex! with Colon
-function Base.setindex!(A::SparseMatrixMPI{T}, val, row_rng::UnitRange{Int}, ::Colon) where T
+function Base.setindex!(A::HPCSparseMatrix{T}, val, row_rng::UnitRange{Int}, ::Colon) where T
     return setindex!(A, val, row_rng, 1:size(A, 2))
 end
 
-function Base.setindex!(A::SparseMatrixMPI{T}, val, ::Colon, col_rng::UnitRange{Int}) where T
+function Base.setindex!(A::HPCSparseMatrix{T}, val, ::Colon, col_rng::UnitRange{Int}) where T
     return setindex!(A, val, 1:size(A, 1), col_rng)
 end
 
-function Base.setindex!(A::SparseMatrixMPI{T}, val, ::Colon, ::Colon) where T
+function Base.setindex!(A::HPCSparseMatrix{T}, val, ::Colon, ::Colon) where T
     return setindex!(A, val, 1:size(A, 1), 1:size(A, 2))
 end
 
-# Also add full colon setindex! for MatrixMPI
-function Base.setindex!(A::MatrixMPI{T}, val, ::Colon, ::Colon) where T
+# Also add full colon setindex! for HPCMatrix
+function Base.setindex!(A::HPCMatrix{T}, val, ::Colon, ::Colon) where T
     return setindex!(A, val, 1:size(A, 1), 1:size(A, 2))
 end
 
 # ============================================================================
-# VectorMPI Indexing with VectorMPI indices
+# HPCVector Indexing with HPCVector indices
 # ============================================================================
 
 """
-    Base.getindex(v::VectorMPI{T}, idx::VectorMPI{Int}) where T
+    Base.getindex(v::HPCVector{T}, idx::HPCVector{Int}) where T
 
-Extract elements `v[idx]` where `idx` is a distributed VectorMPI of integer indices.
+Extract elements `v[idx]` where `idx` is a distributed HPCVector of integer indices.
 
 This is a collective operation - all ranks must call it with the same `idx`.
 Each rank requests the values at its local indices `idx.v`, which may be owned
 by different ranks in `v`. Communication is used to gather the requested values.
 
-The result is a VectorMPI with the same partition as `idx`.
+The result is a HPCVector with the same partition as `idx`.
 
 # Example
 ```julia
-v = VectorMPI([1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
-idx = VectorMPI([3, 1, 5, 2])
-result = v[idx]  # Returns VectorMPI with values [3.0, 1.0, 5.0, 2.0]
+v = HPCVector([1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
+idx = HPCVector([3, 1, 5, 2])
+result = v[idx]  # Returns HPCVector with values [3.0, 1.0, 5.0, 2.0]
 ```
 """
-function Base.getindex(v::VectorMPI{T,B}, idx::VectorMPI{Int}) where {T,B<:HPCBackend}
+function Base.getindex(v::HPCVector{T,B}, idx::HPCVector{Int}) where {T,B<:HPCBackend}
     comm = v.backend.comm
     rank = comm_rank(comm)
     nranks = comm_size(comm)
@@ -1346,7 +1346,7 @@ function Base.getindex(v::VectorMPI{T,B}, idx::VectorMPI{Int}) where {T,B<:HPCBa
     # Validate indices (local check - each rank checks its own indices)
     for i in idx.v
         if i < 1 || i > n
-            error("VectorMPI index out of bounds: $i, length=$n")
+            error("HPCVector index out of bounds: $i, length=$n")
         end
     end
 
@@ -1454,33 +1454,33 @@ function Base.getindex(v::VectorMPI{T,B}, idx::VectorMPI{Int}) where {T,B<:HPCBa
     # Result has same partition as idx, so same hash
     # Convert result to target device if needed
     result_v_backend = _convert_array(result_v, v.backend.device)
-    return VectorMPI{T,B}(idx.structural_hash, idx.partition, result_v_backend, v.backend)
+    return HPCVector{T,B}(idx.structural_hash, idx.partition, result_v_backend, v.backend)
 end
 
 # ============================================================================
-# MatrixMPI Indexing with VectorMPI indices
+# HPCMatrix Indexing with HPCVector indices
 # ============================================================================
 
 """
-    Base.getindex(A::MatrixMPI{T}, row_idx::VectorMPI{Int}, col_idx::VectorMPI{Int}) where T
+    Base.getindex(A::HPCMatrix{T}, row_idx::HPCVector{Int}, col_idx::HPCVector{Int}) where T
 
-Extract a submatrix `A[row_idx, col_idx]` where indices are distributed VectorMPI{Int}.
+Extract a submatrix `A[row_idx, col_idx]` where indices are distributed HPCVector{Int}.
 
 This is a collective operation - all ranks must call it with the same `row_idx` and `col_idx`.
-The result is a MatrixMPI of size `(length(row_idx), length(col_idx))`.
+The result is a HPCMatrix of size `(length(row_idx), length(col_idx))`.
 
 Each rank computes its local portion of the result matrix based on `row_idx`'s partition.
 Communication is used to gather row data from ranks that own the requested rows.
 
 # Example
 ```julia
-A = MatrixMPI(reshape(1.0:12.0, 4, 3))
-row_idx = VectorMPI([2, 4, 1])
-col_idx = VectorMPI([3, 1])
-result = A[row_idx, col_idx]  # Returns MatrixMPI submatrix
+A = HPCMatrix(reshape(1.0:12.0, 4, 3))
+row_idx = HPCVector([2, 4, 1])
+col_idx = HPCVector([3, 1])
+result = A[row_idx, col_idx]  # Returns HPCMatrix submatrix
 ```
 """
-function Base.getindex(A::MatrixMPI{T,B}, row_idx::VectorMPI{Int}, col_idx::VectorMPI{Int}) where {T,B<:HPCBackend}
+function Base.getindex(A::HPCMatrix{T,B}, row_idx::HPCVector{Int}, col_idx::HPCVector{Int}) where {T,B<:HPCBackend}
     comm = A.backend.comm
     rank = comm_rank(comm)
     nranks = comm_size(comm)
@@ -1493,7 +1493,7 @@ function Base.getindex(A::MatrixMPI{T,B}, row_idx::VectorMPI{Int}, col_idx::Vect
     # Validate column indices
     for j in col_indices
         if j < 1 || j > n
-            error("MatrixMPI column index out of bounds: $j, ncols=$n")
+            error("HPCMatrix column index out of bounds: $j, ncols=$n")
         end
     end
 
@@ -1510,7 +1510,7 @@ function Base.getindex(A::MatrixMPI{T,B}, row_idx::VectorMPI{Int}, col_idx::Vect
     # Validate row indices
     for i in my_row_indices
         if i < 1 || i > m
-            error("MatrixMPI row index out of bounds: $i, nrows=$m")
+            error("HPCMatrix row index out of bounds: $i, nrows=$m")
         end
     end
 
@@ -1624,20 +1624,20 @@ function Base.getindex(A::MatrixMPI{T,B}, row_idx::VectorMPI{Int}, col_idx::Vect
 
     # Convert result to target device if needed (no-op for CPU, copies to GPU for GPU backends)
     result_A_backend = _convert_array(result_A, A.backend.device)
-    return MatrixMPI{T,B}(hash, result_row_partition, result_col_partition, result_A_backend, A.backend)
+    return HPCMatrix{T,B}(hash, result_row_partition, result_col_partition, result_A_backend, A.backend)
 end
 
 # ============================================================================
-# SparseMatrixMPI Indexing with VectorMPI indices
+# HPCSparseMatrix Indexing with HPCVector indices
 # ============================================================================
 
 """
-    Base.getindex(A::SparseMatrixMPI{T}, row_idx::VectorMPI{Int}, col_idx::VectorMPI{Int}) where T
+    Base.getindex(A::HPCSparseMatrix{T}, row_idx::HPCVector{Int}, col_idx::HPCVector{Int}) where T
 
-Extract a submatrix `A[row_idx, col_idx]` where indices are distributed VectorMPI{Int}.
+Extract a submatrix `A[row_idx, col_idx]` where indices are distributed HPCVector{Int}.
 
 This is a collective operation - all ranks must call it with the same `row_idx` and `col_idx`.
-The result is a MatrixMPI (dense) of size `(length(row_idx), length(col_idx))`.
+The result is a HPCMatrix (dense) of size `(length(row_idx), length(col_idx))`.
 
 Note: The result is dense because arbitrary indexing typically doesn't preserve
 useful sparsity patterns. For large sparse matrices with structured indexing,
@@ -1645,13 +1645,13 @@ consider using range-based indexing instead.
 
 # Example
 ```julia
-A = SparseMatrixMPI{Float64}(sparse([1, 2, 3], [1, 2, 3], [1.0, 2.0, 3.0], 4, 4))
-row_idx = VectorMPI([2, 4, 1])
-col_idx = VectorMPI([3, 1])
-result = A[row_idx, col_idx]  # Returns MatrixMPI (dense) submatrix
+A = HPCSparseMatrix{Float64}(sparse([1, 2, 3], [1, 2, 3], [1.0, 2.0, 3.0], 4, 4))
+row_idx = HPCVector([2, 4, 1])
+col_idx = HPCVector([3, 1])
+result = A[row_idx, col_idx]  # Returns HPCMatrix (dense) submatrix
 ```
 """
-function Base.getindex(A::SparseMatrixMPI{T,Ti,Bk}, row_idx::VectorMPI{Int}, col_idx::VectorMPI{Int}) where {T,Ti,Bk<:HPCBackend}
+function Base.getindex(A::HPCSparseMatrix{T,Ti,Bk}, row_idx::HPCVector{Int}, col_idx::HPCVector{Int}) where {T,Ti,Bk<:HPCBackend}
     comm = A.backend.comm
     rank = comm_rank(comm)
     nranks = comm_size(comm)
@@ -1664,7 +1664,7 @@ function Base.getindex(A::SparseMatrixMPI{T,Ti,Bk}, row_idx::VectorMPI{Int}, col
     # Validate column indices
     for j in col_indices
         if j < 1 || j > n
-            error("SparseMatrixMPI column index out of bounds: $j, ncols=$n")
+            error("HPCSparseMatrix column index out of bounds: $j, ncols=$n")
         end
     end
 
@@ -1687,7 +1687,7 @@ function Base.getindex(A::SparseMatrixMPI{T,Ti,Bk}, row_idx::VectorMPI{Int}, col
     # Validate row indices
     for i in my_row_indices
         if i < 1 || i > m
-            error("SparseMatrixMPI row index out of bounds: $i, nrows=$m")
+            error("HPCSparseMatrix row index out of bounds: $i, nrows=$m")
         end
     end
 
@@ -1814,11 +1814,11 @@ function Base.getindex(A::SparseMatrixMPI{T,Ti,Bk}, row_idx::VectorMPI{Int}, col
 
     # Convert result to target device if needed (no-op for CPU, copies to GPU for GPU backends)
     result_A_backend = _convert_array(result_A, A.backend.device)
-    return MatrixMPI{T,Bk}(hash, result_row_partition, result_col_partition, result_A_backend, A.backend)
+    return HPCMatrix{T,Bk}(hash, result_row_partition, result_col_partition, result_A_backend, A.backend)
 end
 
-# Helper function to gather a VectorMPI to all ranks (generic version for any element type)
-function _gather_vector_to_all(v::VectorMPI{T}, comm::AbstractComm) where T
+# Helper function to gather a HPCVector to all ranks (generic version for any element type)
+function _gather_vector_to_all(v::HPCVector{T}, comm::AbstractComm) where T
     rank = comm_rank(comm)
     nranks = comm_size(comm)
 
@@ -1844,14 +1844,14 @@ function _gather_vector_to_all(v::VectorMPI{T}, comm::AbstractComm) where T
 end
 
 # ============================================================================
-# VectorMPI setindex! with VectorMPI indices
+# HPCVector setindex! with HPCVector indices
 # ============================================================================
 
 """
-    Base.setindex!(v::VectorMPI{T}, src::VectorMPI{T}, idx::VectorMPI{Int}) where T
+    Base.setindex!(v::HPCVector{T}, src::HPCVector{T}, idx::HPCVector{Int}) where T
 
-Set elements `v[idx] = src` where `idx` is a distributed VectorMPI of integer indices
-and `src` is a distributed VectorMPI of values.
+Set elements `v[idx] = src` where `idx` is a distributed HPCVector of integer indices
+and `src` is a distributed HPCVector of values.
 
 This is a collective operation - all ranks must call it with the same `idx` and `src`.
 The `src` and `idx` must have the same partition (same length and distribution).
@@ -1862,13 +1862,13 @@ ranks that own the destination positions in `v`.
 
 # Example
 ```julia
-v = VectorMPI([1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
-idx = VectorMPI([3, 1, 5, 2])
-src = VectorMPI([30.0, 10.0, 50.0, 20.0])
+v = HPCVector([1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
+idx = HPCVector([3, 1, 5, 2])
+src = HPCVector([30.0, 10.0, 50.0, 20.0])
 v[idx] = src  # Sets v[3]=30, v[1]=10, v[5]=50, v[2]=20
 ```
 """
-function Base.setindex!(v::VectorMPI{T,B}, src::VectorMPI{T,B}, idx::VectorMPI{Int}) where {T,B<:HPCBackend}
+function Base.setindex!(v::HPCVector{T,B}, src::HPCVector{T,B}, idx::HPCVector{Int}) where {T,B<:HPCBackend}
     comm = v.backend.comm
     rank = comm_rank(comm)
     nranks = comm_size(comm)
@@ -1877,13 +1877,13 @@ function Base.setindex!(v::VectorMPI{T,B}, src::VectorMPI{T,B}, idx::VectorMPI{I
 
     # Validate that src and idx have the same partition
     if src.partition != idx.partition
-        error("VectorMPI setindex!: src and idx must have the same partition")
+        error("HPCVector setindex!: src and idx must have the same partition")
     end
 
     # Validate indices (local check)
     for i in idx.v
         if i < 1 || i > n
-            error("VectorMPI index out of bounds: $i, length=$n")
+            error("HPCVector index out of bounds: $i, length=$n")
         end
     end
 
@@ -1986,14 +1986,14 @@ function Base.setindex!(v::VectorMPI{T,B}, src::VectorMPI{T,B}, idx::VectorMPI{I
 end
 
 # ============================================================================
-# MatrixMPI setindex! with VectorMPI indices
+# HPCMatrix setindex! with HPCVector indices
 # ============================================================================
 
 """
-    Base.setindex!(A::MatrixMPI{T}, src::MatrixMPI{T}, row_idx::VectorMPI{Int}, col_idx::VectorMPI{Int}) where T
+    Base.setindex!(A::HPCMatrix{T}, src::HPCMatrix{T}, row_idx::HPCVector{Int}, col_idx::HPCVector{Int}) where T
 
-Set elements `A[row_idx, col_idx] = src` where indices are distributed VectorMPI{Int}
-and `src` is a distributed MatrixMPI of values.
+Set elements `A[row_idx, col_idx] = src` where indices are distributed HPCVector{Int}
+and `src` is a distributed HPCMatrix of values.
 
 This is a collective operation - all ranks must call it with the same arguments.
 The `src` must have size `(length(row_idx), length(col_idx))` and its row partition
@@ -2003,14 +2003,14 @@ Each `src[i, j]` is assigned to `A[row_idx[i], col_idx[j]]`.
 
 # Example
 ```julia
-A = MatrixMPI(zeros(6, 4))
-row_idx = VectorMPI([2, 4, 1])
-col_idx = VectorMPI([3, 1])
-src = MatrixMPI(ones(3, 2))
+A = HPCMatrix(zeros(6, 4))
+row_idx = HPCVector([2, 4, 1])
+col_idx = HPCVector([3, 1])
+src = HPCMatrix(ones(3, 2))
 A[row_idx, col_idx] = src  # Sets A[2,3]=1, A[2,1]=1, A[4,3]=1, etc.
 ```
 """
-function Base.setindex!(A::MatrixMPI{T,B}, src::MatrixMPI{T,B}, row_idx::VectorMPI{Int}, col_idx::VectorMPI{Int}) where {T,B<:HPCBackend}
+function Base.setindex!(A::HPCMatrix{T,B}, src::HPCMatrix{T,B}, row_idx::HPCVector{Int}, col_idx::HPCVector{Int}) where {T,B<:HPCBackend}
     comm = A.backend.comm
     rank = comm_rank(comm)
     nranks = comm_size(comm)
@@ -2023,25 +2023,25 @@ function Base.setindex!(A::MatrixMPI{T,B}, src::MatrixMPI{T,B}, row_idx::VectorM
 
     # Validate dimensions
     if size(src) != (length(row_idx), ncols_src)
-        error("MatrixMPI setindex!: src size $(size(src)) doesn't match index dimensions ($(length(row_idx)), $ncols_src)")
+        error("HPCMatrix setindex!: src size $(size(src)) doesn't match index dimensions ($(length(row_idx)), $ncols_src)")
     end
 
     # Validate that src row partition matches row_idx partition
     if src.row_partition != row_idx.partition
-        error("MatrixMPI setindex!: src row partition must match row_idx partition")
+        error("HPCMatrix setindex!: src row partition must match row_idx partition")
     end
 
     # Validate column indices
     for j in col_indices
         if j < 1 || j > n
-            error("MatrixMPI column index out of bounds: $j, ncols=$n")
+            error("HPCMatrix column index out of bounds: $j, ncols=$n")
         end
     end
 
     # Validate row indices (local check)
     for i in row_idx.v
         if i < 1 || i > m
-            error("MatrixMPI row index out of bounds: $i, nrows=$m")
+            error("HPCMatrix row index out of bounds: $i, nrows=$m")
         end
     end
 
@@ -2151,14 +2151,14 @@ function Base.setindex!(A::MatrixMPI{T,B}, src::MatrixMPI{T,B}, row_idx::VectorM
 end
 
 # ============================================================================
-# SparseMatrixMPI setindex! with VectorMPI indices
+# HPCSparseMatrix setindex! with HPCVector indices
 # ============================================================================
 
 """
-    Base.setindex!(A::SparseMatrixMPI{T}, src::MatrixMPI{T}, row_idx::VectorMPI{Int}, col_idx::VectorMPI{Int}) where T
+    Base.setindex!(A::HPCSparseMatrix{T}, src::HPCMatrix{T}, row_idx::HPCVector{Int}, col_idx::HPCVector{Int}) where T
 
-Set elements `A[row_idx, col_idx] = src` where indices are distributed VectorMPI{Int}
-and `src` is a distributed MatrixMPI of values.
+Set elements `A[row_idx, col_idx] = src` where indices are distributed HPCVector{Int}
+and `src` is a distributed HPCMatrix of values.
 
 This is a collective operation - all ranks must call it with the same arguments.
 The `src` must have size `(length(row_idx), length(col_idx))` and its row partition
@@ -2169,14 +2169,14 @@ pattern. After the operation, structural_hash is recomputed and caches are inval
 
 # Example
 ```julia
-A = SparseMatrixMPI{Float64}(spzeros(6, 6))
-row_idx = VectorMPI([2, 4, 1])
-col_idx = VectorMPI([3, 1])
-src = MatrixMPI(ones(3, 2))
+A = HPCSparseMatrix{Float64}(spzeros(6, 6))
+row_idx = HPCVector([2, 4, 1])
+col_idx = HPCVector([3, 1])
+src = HPCMatrix(ones(3, 2))
 A[row_idx, col_idx] = src  # Adds nonzeros at specified positions
 ```
 """
-function Base.setindex!(A::SparseMatrixMPI{T,Ti,Bk}, src::MatrixMPI{T}, row_idx::VectorMPI{Int}, col_idx::VectorMPI{Int}) where {T,Ti,Bk<:HPCBackend}
+function Base.setindex!(A::HPCSparseMatrix{T,Ti,Bk}, src::HPCMatrix{T}, row_idx::HPCVector{Int}, col_idx::HPCVector{Int}) where {T,Ti,Bk<:HPCBackend}
     comm = A.backend.comm
     rank = comm_rank(comm)
     nranks = comm_size(comm)
@@ -2189,25 +2189,25 @@ function Base.setindex!(A::SparseMatrixMPI{T,Ti,Bk}, src::MatrixMPI{T}, row_idx:
 
     # Validate dimensions
     if size(src) != (length(row_idx), ncols_src)
-        error("SparseMatrixMPI setindex!: src size $(size(src)) doesn't match index dimensions ($(length(row_idx)), $ncols_src)")
+        error("HPCSparseMatrix setindex!: src size $(size(src)) doesn't match index dimensions ($(length(row_idx)), $ncols_src)")
     end
 
     # Validate that src row partition matches row_idx partition
     if src.row_partition != row_idx.partition
-        error("SparseMatrixMPI setindex!: src row partition must match row_idx partition")
+        error("HPCSparseMatrix setindex!: src row partition must match row_idx partition")
     end
 
     # Validate column indices
     for j in col_indices
         if j < 1 || j > n
-            error("SparseMatrixMPI column index out of bounds: $j, ncols=$n")
+            error("HPCSparseMatrix column index out of bounds: $j, ncols=$n")
         end
     end
 
     # Validate row indices (local check)
     for i in row_idx.v
         if i < 1 || i > m
-            error("SparseMatrixMPI row index out of bounds: $i, nrows=$m")
+            error("HPCSparseMatrix row index out of bounds: $i, nrows=$m")
         end
     end
 
@@ -2339,16 +2339,16 @@ function Base.setindex!(A::SparseMatrixMPI{T,Ti,Bk}, src::MatrixMPI{T}, row_idx:
 end
 
 # ============================================================================
-# Mixed indexing: VectorMPI with ranges, Colon, and scalars
+# Mixed indexing: HPCVector with ranges, Colon, and scalars
 # ============================================================================
 
 """
-    Base.getindex(A::MatrixMPI{T}, row_idx::VectorMPI{Int}, col_rng::UnitRange{Int}) where T
+    Base.getindex(A::HPCMatrix{T}, row_idx::HPCVector{Int}, col_rng::UnitRange{Int}) where T
 
-Get submatrix with rows selected by VectorMPI and columns by range.
-Returns a MatrixMPI with row partition matching row_idx.partition.
+Get submatrix with rows selected by HPCVector and columns by range.
+Returns a HPCMatrix with row partition matching row_idx.partition.
 """
-function Base.getindex(A::MatrixMPI{T,B}, row_idx::VectorMPI{Int}, col_rng::UnitRange{Int}) where {T,B<:HPCBackend}
+function Base.getindex(A::HPCMatrix{T,B}, row_idx::HPCVector{Int}, col_rng::UnitRange{Int}) where {T,B<:HPCBackend}
     comm = A.backend.comm
     rank = comm_rank(comm)
     nranks = comm_size(comm)
@@ -2358,13 +2358,13 @@ function Base.getindex(A::MatrixMPI{T,B}, row_idx::VectorMPI{Int}, col_rng::Unit
 
     # Validate column range
     if first(col_rng) < 1 || last(col_rng) > n
-        error("MatrixMPI column range out of bounds: $col_rng, ncols=$n")
+        error("HPCMatrix column range out of bounds: $col_rng, ncols=$n")
     end
 
     # Validate row indices (local check)
     for i in row_idx.v
         if i < 1 || i > m
-            error("MatrixMPI row index out of bounds: $i, nrows=$m")
+            error("HPCMatrix row index out of bounds: $i, nrows=$m")
         end
     end
 
@@ -2463,25 +2463,25 @@ function Base.getindex(A::MatrixMPI{T,B}, row_idx::VectorMPI{Int}, col_rng::Unit
 
     comm_waitall(comm, data_send_reqs)
 
-    return MatrixMPI_local(result_local, A.backend)
+    return HPCMatrix_local(result_local, A.backend)
 end
 
 """
-    Base.getindex(A::MatrixMPI{T}, row_idx::VectorMPI{Int}, ::Colon) where T
+    Base.getindex(A::HPCMatrix{T}, row_idx::HPCVector{Int}, ::Colon) where T
 
-Get submatrix with rows selected by VectorMPI and all columns.
+Get submatrix with rows selected by HPCVector and all columns.
 """
-function Base.getindex(A::MatrixMPI{T}, row_idx::VectorMPI{Int}, ::Colon) where T
+function Base.getindex(A::HPCMatrix{T}, row_idx::HPCVector{Int}, ::Colon) where T
     return A[row_idx, 1:size(A, 2)]
 end
 
 """
-    Base.getindex(A::MatrixMPI{T}, row_rng::UnitRange{Int}, col_idx::VectorMPI{Int}) where T
+    Base.getindex(A::HPCMatrix{T}, row_rng::UnitRange{Int}, col_idx::HPCVector{Int}) where T
 
-Get submatrix with rows selected by range and columns by VectorMPI.
-Returns a MatrixMPI with standard row partition for the given row range size.
+Get submatrix with rows selected by range and columns by HPCVector.
+Returns a HPCMatrix with standard row partition for the given row range size.
 """
-function Base.getindex(A::MatrixMPI{T,B}, row_rng::UnitRange{Int}, col_idx::VectorMPI{Int}) where {T,B<:HPCBackend}
+function Base.getindex(A::HPCMatrix{T,B}, row_rng::UnitRange{Int}, col_idx::HPCVector{Int}) where {T,B<:HPCBackend}
     comm = A.backend.comm
     rank = comm_rank(comm)
     nranks = comm_size(comm)
@@ -2491,7 +2491,7 @@ function Base.getindex(A::MatrixMPI{T,B}, row_rng::UnitRange{Int}, col_idx::Vect
 
     # Validate row range
     if first(row_rng) < 1 || last(row_rng) > m
-        error("MatrixMPI row range out of bounds: $row_rng, nrows=$m")
+        error("HPCMatrix row range out of bounds: $row_rng, nrows=$m")
     end
 
     # Gather col_idx to all ranks (columns are not distributed)
@@ -2501,7 +2501,7 @@ function Base.getindex(A::MatrixMPI{T,B}, row_rng::UnitRange{Int}, col_idx::Vect
     # Validate column indices
     for j in col_indices
         if j < 1 || j > n
-            error("MatrixMPI column index out of bounds: $j, ncols=$n")
+            error("HPCMatrix column index out of bounds: $j, ncols=$n")
         end
     end
 
@@ -2515,7 +2515,7 @@ function Base.getindex(A::MatrixMPI{T,B}, row_rng::UnitRange{Int}, col_idx::Vect
 
     if n_local_result_rows <= 0
         result_local = Matrix{T}(undef, 0, ncols_result)
-        return MatrixMPI_local(result_local, A.backend)
+        return HPCMatrix_local(result_local, A.backend)
     end
 
     # Global rows I need from A
@@ -2617,25 +2617,25 @@ function Base.getindex(A::MatrixMPI{T,B}, row_rng::UnitRange{Int}, col_idx::Vect
 
     comm_waitall(comm, data_send_reqs)
 
-    return MatrixMPI_local(result_local, A.backend)
+    return HPCMatrix_local(result_local, A.backend)
 end
 
 """
-    Base.getindex(A::MatrixMPI{T}, ::Colon, col_idx::VectorMPI{Int}) where T
+    Base.getindex(A::HPCMatrix{T}, ::Colon, col_idx::HPCVector{Int}) where T
 
-Get submatrix with all rows and columns selected by VectorMPI.
+Get submatrix with all rows and columns selected by HPCVector.
 """
-function Base.getindex(A::MatrixMPI{T}, ::Colon, col_idx::VectorMPI{Int}) where T
+function Base.getindex(A::HPCMatrix{T}, ::Colon, col_idx::HPCVector{Int}) where T
     return A[1:size(A, 1), col_idx]
 end
 
 """
-    Base.getindex(A::MatrixMPI{T}, row_idx::VectorMPI{Int}, j::Int) where T
+    Base.getindex(A::HPCMatrix{T}, row_idx::HPCVector{Int}, j::Int) where T
 
-Get column vector with rows selected by VectorMPI and single column j.
-Returns a VectorMPI with partition matching row_idx.partition.
+Get column vector with rows selected by HPCVector and single column j.
+Returns a HPCVector with partition matching row_idx.partition.
 """
-function Base.getindex(A::MatrixMPI{T,B}, row_idx::VectorMPI{Int}, j::Int) where {T,B<:HPCBackend}
+function Base.getindex(A::HPCMatrix{T,B}, row_idx::HPCVector{Int}, j::Int) where {T,B<:HPCBackend}
     comm = A.backend.comm
     rank = comm_rank(comm)
     nranks = comm_size(comm)
@@ -2644,13 +2644,13 @@ function Base.getindex(A::MatrixMPI{T,B}, row_idx::VectorMPI{Int}, j::Int) where
 
     # Validate column
     if j < 1 || j > n
-        error("MatrixMPI column index out of bounds: $j, ncols=$n")
+        error("HPCMatrix column index out of bounds: $j, ncols=$n")
     end
 
     # Validate row indices
     for i in row_idx.v
         if i < 1 || i > m
-            error("MatrixMPI row index out of bounds: $i, nrows=$m")
+            error("HPCMatrix row index out of bounds: $i, nrows=$m")
         end
     end
 
@@ -2749,16 +2749,16 @@ function Base.getindex(A::MatrixMPI{T,B}, row_idx::VectorMPI{Int}, j::Int) where
 
     comm_waitall(comm, val_send_reqs)
 
-    return VectorMPI_local(result_local, A.backend)
+    return HPCVector_local(result_local, A.backend)
 end
 
 """
-    Base.getindex(A::MatrixMPI{T}, i::Int, col_idx::VectorMPI{Int}) where T
+    Base.getindex(A::HPCMatrix{T}, i::Int, col_idx::HPCVector{Int}) where T
 
-Get row vector with single row i and columns selected by VectorMPI.
-Returns a VectorMPI with partition matching col_idx.partition.
+Get row vector with single row i and columns selected by HPCVector.
+Returns a HPCVector with partition matching col_idx.partition.
 """
-function Base.getindex(A::MatrixMPI{T,B}, i::Int, col_idx::VectorMPI{Int}) where {T,B<:HPCBackend}
+function Base.getindex(A::HPCMatrix{T,B}, i::Int, col_idx::HPCVector{Int}) where {T,B<:HPCBackend}
     comm = A.backend.comm
     rank = comm_rank(comm)
     nranks = comm_size(comm)
@@ -2767,7 +2767,7 @@ function Base.getindex(A::MatrixMPI{T,B}, i::Int, col_idx::VectorMPI{Int}) where
 
     # Validate row
     if i < 1 || i > m
-        error("MatrixMPI row index out of bounds: $i, nrows=$m")
+        error("HPCMatrix row index out of bounds: $i, nrows=$m")
     end
 
     # Gather col_idx to all ranks
@@ -2776,7 +2776,7 @@ function Base.getindex(A::MatrixMPI{T,B}, i::Int, col_idx::VectorMPI{Int}) where
     # Validate column indices
     for j in col_indices
         if j < 1 || j > n
-            error("MatrixMPI column index out of bounds: $j, ncols=$n")
+            error("HPCMatrix column index out of bounds: $j, ncols=$n")
         end
     end
 
@@ -2808,18 +2808,18 @@ function Base.getindex(A::MatrixMPI{T,B}, i::Int, col_idx::VectorMPI{Int}) where
         result_local = T[]
     end
 
-    return VectorMPI_local(result_local, A.backend)
+    return HPCVector_local(result_local, A.backend)
 end
 
-# SparseMatrixMPI mixed indexing methods
+# HPCSparseMatrix mixed indexing methods
 
 """
-    Base.getindex(A::SparseMatrixMPI{T}, row_idx::VectorMPI{Int}, col_rng::UnitRange{Int}) where T
+    Base.getindex(A::HPCSparseMatrix{T}, row_idx::HPCVector{Int}, col_rng::UnitRange{Int}) where T
 
-Get submatrix with rows selected by VectorMPI and columns by range.
-Returns a dense MatrixMPI with row partition matching row_idx.partition.
+Get submatrix with rows selected by HPCVector and columns by range.
+Returns a dense HPCMatrix with row partition matching row_idx.partition.
 """
-function Base.getindex(A::SparseMatrixMPI{T,Ti,Bk}, row_idx::VectorMPI{Int}, col_rng::UnitRange{Int}) where {T,Ti,Bk<:HPCBackend}
+function Base.getindex(A::HPCSparseMatrix{T,Ti,Bk}, row_idx::HPCVector{Int}, col_rng::UnitRange{Int}) where {T,Ti,Bk<:HPCBackend}
     comm = A.backend.comm
     rank = comm_rank(comm)
     nranks = comm_size(comm)
@@ -2829,13 +2829,13 @@ function Base.getindex(A::SparseMatrixMPI{T,Ti,Bk}, row_idx::VectorMPI{Int}, col
 
     # Validate column range
     if first(col_rng) < 1 || last(col_rng) > n
-        error("SparseMatrixMPI column range out of bounds: $col_rng, ncols=$n")
+        error("HPCSparseMatrix column range out of bounds: $col_rng, ncols=$n")
     end
 
     # Validate row indices
     for i in row_idx.v
         if i < 1 || i > m
-            error("SparseMatrixMPI row index out of bounds: $i, nrows=$m")
+            error("HPCSparseMatrix row index out of bounds: $i, nrows=$m")
         end
     end
 
@@ -2946,25 +2946,25 @@ function Base.getindex(A::SparseMatrixMPI{T,Ti,Bk}, row_idx::VectorMPI{Int}, col
 
     comm_waitall(comm, data_send_reqs)
 
-    return MatrixMPI_local(result_local, A.backend)
+    return HPCMatrix_local(result_local, A.backend)
 end
 
 """
-    Base.getindex(A::SparseMatrixMPI{T}, row_idx::VectorMPI{Int}, ::Colon) where T
+    Base.getindex(A::HPCSparseMatrix{T}, row_idx::HPCVector{Int}, ::Colon) where T
 
-Get submatrix with rows selected by VectorMPI and all columns.
+Get submatrix with rows selected by HPCVector and all columns.
 """
-function Base.getindex(A::SparseMatrixMPI{T}, row_idx::VectorMPI{Int}, ::Colon) where T
+function Base.getindex(A::HPCSparseMatrix{T}, row_idx::HPCVector{Int}, ::Colon) where T
     return A[row_idx, 1:size(A, 2)]
 end
 
 """
-    Base.getindex(A::SparseMatrixMPI{T}, row_rng::UnitRange{Int}, col_idx::VectorMPI{Int}) where T
+    Base.getindex(A::HPCSparseMatrix{T}, row_rng::UnitRange{Int}, col_idx::HPCVector{Int}) where T
 
-Get submatrix with rows by range and columns by VectorMPI.
-Returns a dense MatrixMPI.
+Get submatrix with rows by range and columns by HPCVector.
+Returns a dense HPCMatrix.
 """
-function Base.getindex(A::SparseMatrixMPI{T,Ti,Bk}, row_rng::UnitRange{Int}, col_idx::VectorMPI{Int}) where {T,Ti,Bk<:HPCBackend}
+function Base.getindex(A::HPCSparseMatrix{T,Ti,Bk}, row_rng::UnitRange{Int}, col_idx::HPCVector{Int}) where {T,Ti,Bk<:HPCBackend}
     comm = A.backend.comm
     rank = comm_rank(comm)
     nranks = comm_size(comm)
@@ -2974,7 +2974,7 @@ function Base.getindex(A::SparseMatrixMPI{T,Ti,Bk}, row_rng::UnitRange{Int}, col
 
     # Validate row range
     if first(row_rng) < 1 || last(row_rng) > m
-        error("SparseMatrixMPI row range out of bounds: $row_rng, nrows=$m")
+        error("HPCSparseMatrix row range out of bounds: $row_rng, nrows=$m")
     end
 
     # Gather col_idx to all ranks
@@ -2984,7 +2984,7 @@ function Base.getindex(A::SparseMatrixMPI{T,Ti,Bk}, row_rng::UnitRange{Int}, col
     # Validate column indices
     for j in col_indices_result
         if j < 1 || j > n
-            error("SparseMatrixMPI column index out of bounds: $j, ncols=$n")
+            error("HPCSparseMatrix column index out of bounds: $j, ncols=$n")
         end
     end
 
@@ -2996,7 +2996,7 @@ function Base.getindex(A::SparseMatrixMPI{T,Ti,Bk}, row_rng::UnitRange{Int}, col
 
     if n_local_result_rows <= 0
         result_local = Matrix{T}(undef, 0, ncols_result)
-        return MatrixMPI_local(result_local, A.backend)
+        return HPCMatrix_local(result_local, A.backend)
     end
 
     # Global rows I need
@@ -3111,25 +3111,25 @@ function Base.getindex(A::SparseMatrixMPI{T,Ti,Bk}, row_rng::UnitRange{Int}, col
 
     comm_waitall(comm, data_send_reqs)
 
-    return MatrixMPI_local(result_local, A.backend)
+    return HPCMatrix_local(result_local, A.backend)
 end
 
 """
-    Base.getindex(A::SparseMatrixMPI{T}, ::Colon, col_idx::VectorMPI{Int}) where T
+    Base.getindex(A::HPCSparseMatrix{T}, ::Colon, col_idx::HPCVector{Int}) where T
 
-Get submatrix with all rows and columns by VectorMPI.
+Get submatrix with all rows and columns by HPCVector.
 """
-function Base.getindex(A::SparseMatrixMPI{T}, ::Colon, col_idx::VectorMPI{Int}) where T
+function Base.getindex(A::HPCSparseMatrix{T}, ::Colon, col_idx::HPCVector{Int}) where T
     return A[1:size(A, 1), col_idx]
 end
 
 """
-    Base.getindex(A::SparseMatrixMPI{T}, row_idx::VectorMPI{Int}, j::Int) where T
+    Base.getindex(A::HPCSparseMatrix{T}, row_idx::HPCVector{Int}, j::Int) where T
 
-Get column vector with rows by VectorMPI and single column j.
-Returns a VectorMPI.
+Get column vector with rows by HPCVector and single column j.
+Returns a HPCVector.
 """
-function Base.getindex(A::SparseMatrixMPI{T,Ti,Bk}, row_idx::VectorMPI{Int}, j::Int) where {T,Ti,Bk<:HPCBackend}
+function Base.getindex(A::HPCSparseMatrix{T,Ti,Bk}, row_idx::HPCVector{Int}, j::Int) where {T,Ti,Bk<:HPCBackend}
     comm = A.backend.comm
     rank = comm_rank(comm)
     nranks = comm_size(comm)
@@ -3138,11 +3138,11 @@ function Base.getindex(A::SparseMatrixMPI{T,Ti,Bk}, row_idx::VectorMPI{Int}, j::
 
     # Validate
     if j < 1 || j > n
-        error("SparseMatrixMPI column index out of bounds: $j, ncols=$n")
+        error("HPCSparseMatrix column index out of bounds: $j, ncols=$n")
     end
     for i in row_idx.v
         if i < 1 || i > m
-            error("SparseMatrixMPI row index out of bounds: $i, nrows=$m")
+            error("HPCSparseMatrix row index out of bounds: $i, nrows=$m")
         end
     end
 
@@ -3247,16 +3247,16 @@ function Base.getindex(A::SparseMatrixMPI{T,Ti,Bk}, row_idx::VectorMPI{Int}, j::
 
     comm_waitall(comm, val_send_reqs)
 
-    return VectorMPI_local(result_local, A.backend)
+    return HPCVector_local(result_local, A.backend)
 end
 
 """
-    Base.getindex(A::SparseMatrixMPI{T}, i::Int, col_idx::VectorMPI{Int}) where T
+    Base.getindex(A::HPCSparseMatrix{T}, i::Int, col_idx::HPCVector{Int}) where T
 
-Get row vector with single row i and columns by VectorMPI.
-Returns a VectorMPI.
+Get row vector with single row i and columns by HPCVector.
+Returns a HPCVector.
 """
-function Base.getindex(A::SparseMatrixMPI{T,Ti,Bk}, i::Int, col_idx::VectorMPI{Int}) where {T,Ti,Bk<:HPCBackend}
+function Base.getindex(A::HPCSparseMatrix{T,Ti,Bk}, i::Int, col_idx::HPCVector{Int}) where {T,Ti,Bk<:HPCBackend}
     comm = A.backend.comm
     rank = comm_rank(comm)
     nranks = comm_size(comm)
@@ -3265,7 +3265,7 @@ function Base.getindex(A::SparseMatrixMPI{T,Ti,Bk}, i::Int, col_idx::VectorMPI{I
 
     # Validate
     if i < 1 || i > m
-        error("SparseMatrixMPI row index out of bounds: $i, nrows=$m")
+        error("HPCSparseMatrix row index out of bounds: $i, nrows=$m")
     end
 
     # Gather col_idx
@@ -3273,7 +3273,7 @@ function Base.getindex(A::SparseMatrixMPI{T,Ti,Bk}, i::Int, col_idx::VectorMPI{I
 
     for j in col_indices_result
         if j < 1 || j > n
-            error("SparseMatrixMPI column index out of bounds: $j, ncols=$n")
+            error("HPCSparseMatrix column index out of bounds: $j, ncols=$n")
         end
     end
 
@@ -3315,20 +3315,20 @@ function Base.getindex(A::SparseMatrixMPI{T,Ti,Bk}, i::Int, col_idx::VectorMPI{I
         result_local = T[]
     end
 
-    return VectorMPI_local(result_local, A.backend)
+    return HPCVector_local(result_local, A.backend)
 end
 
 # ============================================================================
-# Mixed setindex!: VectorMPI with ranges, Colon, and scalars
+# Mixed setindex!: HPCVector with ranges, Colon, and scalars
 # ============================================================================
 
 """
-    Base.setindex!(A::MatrixMPI{T}, src::MatrixMPI{T}, row_idx::VectorMPI{Int}, col_rng::UnitRange{Int}) where T
+    Base.setindex!(A::HPCMatrix{T}, src::HPCMatrix{T}, row_idx::HPCVector{Int}, col_rng::UnitRange{Int}) where T
 
-Set `A[row_idx, col_rng] = src` where rows are selected by VectorMPI and columns by range.
+Set `A[row_idx, col_rng] = src` where rows are selected by HPCVector and columns by range.
 The `src` must have row partition matching `row_idx.partition` and column count matching `length(col_rng)`.
 """
-function Base.setindex!(A::MatrixMPI{T,B}, src::MatrixMPI{T,B}, row_idx::VectorMPI{Int}, col_rng::UnitRange{Int}) where {T,B<:HPCBackend}
+function Base.setindex!(A::HPCMatrix{T,B}, src::HPCMatrix{T,B}, row_idx::HPCVector{Int}, col_rng::UnitRange{Int}) where {T,B<:HPCBackend}
     comm = A.backend.comm
     rank = comm_rank(comm)
     nranks = comm_size(comm)
@@ -3338,21 +3338,21 @@ function Base.setindex!(A::MatrixMPI{T,B}, src::MatrixMPI{T,B}, row_idx::VectorM
 
     # Validate column range
     if first(col_rng) < 1 || last(col_rng) > n
-        error("MatrixMPI column range out of bounds: $col_rng, ncols=$n")
+        error("HPCMatrix column range out of bounds: $col_rng, ncols=$n")
     end
 
     # Validate src dimensions
     if size(src, 2) != ncols_src
-        error("MatrixMPI setindex!: src columns ($(size(src, 2))) must match range length ($ncols_src)")
+        error("HPCMatrix setindex!: src columns ($(size(src, 2))) must match range length ($ncols_src)")
     end
     if src.row_partition != row_idx.partition
-        error("MatrixMPI setindex!: src row partition must match row_idx partition")
+        error("HPCMatrix setindex!: src row partition must match row_idx partition")
     end
 
     # Validate row indices (local check)
     for i in row_idx.v
         if i < 1 || i > m
-            error("MatrixMPI row index out of bounds: $i, nrows=$m")
+            error("HPCMatrix row index out of bounds: $i, nrows=$m")
         end
     end
 
@@ -3457,22 +3457,22 @@ function Base.setindex!(A::MatrixMPI{T,B}, src::MatrixMPI{T,B}, row_idx::VectorM
 end
 
 """
-    Base.setindex!(A::MatrixMPI{T}, src::MatrixMPI{T}, row_idx::VectorMPI{Int}, ::Colon) where T
+    Base.setindex!(A::HPCMatrix{T}, src::HPCMatrix{T}, row_idx::HPCVector{Int}, ::Colon) where T
 
-Set `A[row_idx, :] = src` where rows are selected by VectorMPI and all columns.
+Set `A[row_idx, :] = src` where rows are selected by HPCVector and all columns.
 """
-function Base.setindex!(A::MatrixMPI{T}, src::MatrixMPI{T}, row_idx::VectorMPI{Int}, ::Colon) where T
+function Base.setindex!(A::HPCMatrix{T}, src::HPCMatrix{T}, row_idx::HPCVector{Int}, ::Colon) where T
     A[row_idx, 1:size(A, 2)] = src
     return src
 end
 
 """
-    Base.setindex!(A::MatrixMPI{T}, src::MatrixMPI{T}, row_rng::UnitRange{Int}, col_idx::VectorMPI{Int}) where T
+    Base.setindex!(A::HPCMatrix{T}, src::HPCMatrix{T}, row_rng::UnitRange{Int}, col_idx::HPCVector{Int}) where T
 
-Set `A[row_rng, col_idx] = src` where rows are selected by range and columns by VectorMPI.
+Set `A[row_rng, col_idx] = src` where rows are selected by range and columns by HPCVector.
 The `src` must have matching dimensions.
 """
-function Base.setindex!(A::MatrixMPI{T,B}, src::MatrixMPI{T,B}, row_rng::UnitRange{Int}, col_idx::VectorMPI{Int}) where {T,B<:HPCBackend}
+function Base.setindex!(A::HPCMatrix{T,B}, src::HPCMatrix{T,B}, row_rng::UnitRange{Int}, col_idx::HPCVector{Int}) where {T,B<:HPCBackend}
     comm = A.backend.comm
     rank = comm_rank(comm)
     nranks = comm_size(comm)
@@ -3482,7 +3482,7 @@ function Base.setindex!(A::MatrixMPI{T,B}, src::MatrixMPI{T,B}, row_rng::UnitRan
 
     # Validate row range
     if first(row_rng) < 1 || last(row_rng) > m
-        error("MatrixMPI row range out of bounds: $row_rng, nrows=$m")
+        error("HPCMatrix row range out of bounds: $row_rng, nrows=$m")
     end
 
     # Gather col_idx to all ranks (columns are not distributed)
@@ -3492,13 +3492,13 @@ function Base.setindex!(A::MatrixMPI{T,B}, src::MatrixMPI{T,B}, row_rng::UnitRan
     # Validate column indices
     for j in col_indices
         if j < 1 || j > n
-            error("MatrixMPI column index out of bounds: $j, ncols=$n")
+            error("HPCMatrix column index out of bounds: $j, ncols=$n")
         end
     end
 
     # Validate src dimensions
     if size(src, 1) != nrows_src || size(src, 2) != ncols_src
-        error("MatrixMPI setindex!: src size ($(size(src))) must match ($nrows_src, $ncols_src)")
+        error("HPCMatrix setindex!: src size ($(size(src))) must match ($nrows_src, $ncols_src)")
     end
 
     # Compute which rows of src I own vs which rows of A's row_rng I own
@@ -3613,22 +3613,22 @@ function Base.setindex!(A::MatrixMPI{T,B}, src::MatrixMPI{T,B}, row_rng::UnitRan
 end
 
 """
-    Base.setindex!(A::MatrixMPI{T}, src::MatrixMPI{T}, ::Colon, col_idx::VectorMPI{Int}) where T
+    Base.setindex!(A::HPCMatrix{T}, src::HPCMatrix{T}, ::Colon, col_idx::HPCVector{Int}) where T
 
-Set `A[:, col_idx] = src` where all rows and columns selected by VectorMPI.
+Set `A[:, col_idx] = src` where all rows and columns selected by HPCVector.
 """
-function Base.setindex!(A::MatrixMPI{T}, src::MatrixMPI{T}, ::Colon, col_idx::VectorMPI{Int}) where T
+function Base.setindex!(A::HPCMatrix{T}, src::HPCMatrix{T}, ::Colon, col_idx::HPCVector{Int}) where T
     A[1:size(A, 1), col_idx] = src
     return src
 end
 
 """
-    Base.setindex!(A::MatrixMPI{T}, src::VectorMPI{T}, row_idx::VectorMPI{Int}, j::Integer) where T
+    Base.setindex!(A::HPCMatrix{T}, src::HPCVector{T}, row_idx::HPCVector{Int}, j::Integer) where T
 
-Set `A[row_idx, j] = src` where rows are selected by VectorMPI and a single column.
+Set `A[row_idx, j] = src` where rows are selected by HPCVector and a single column.
 The `src` must have partition matching `row_idx.partition`.
 """
-function Base.setindex!(A::MatrixMPI{T,B}, src::VectorMPI{T,B}, row_idx::VectorMPI{Int}, j::Integer) where {T,B<:HPCBackend}
+function Base.setindex!(A::HPCMatrix{T,B}, src::HPCVector{T,B}, row_idx::HPCVector{Int}, j::Integer) where {T,B<:HPCBackend}
     comm = A.backend.comm
     rank = comm_rank(comm)
     nranks = comm_size(comm)
@@ -3637,18 +3637,18 @@ function Base.setindex!(A::MatrixMPI{T,B}, src::VectorMPI{T,B}, row_idx::VectorM
 
     # Validate column index
     if j < 1 || j > n
-        error("MatrixMPI column index out of bounds: $j, ncols=$n")
+        error("HPCMatrix column index out of bounds: $j, ncols=$n")
     end
 
     # Validate partitions match
     if src.partition != row_idx.partition
-        error("MatrixMPI setindex!: src partition must match row_idx partition")
+        error("HPCMatrix setindex!: src partition must match row_idx partition")
     end
 
     # Validate row indices (local check)
     for i in row_idx.v
         if i < 1 || i > m
-            error("MatrixMPI row index out of bounds: $i, nrows=$m")
+            error("HPCMatrix row index out of bounds: $i, nrows=$m")
         end
     end
 
@@ -3748,12 +3748,12 @@ function Base.setindex!(A::MatrixMPI{T,B}, src::VectorMPI{T,B}, row_idx::VectorM
 end
 
 """
-    Base.setindex!(A::MatrixMPI{T}, src::VectorMPI{T}, i::Integer, col_idx::VectorMPI{Int}) where T
+    Base.setindex!(A::HPCMatrix{T}, src::HPCVector{T}, i::Integer, col_idx::HPCVector{Int}) where T
 
-Set `A[i, col_idx] = src` where a single row and columns selected by VectorMPI.
+Set `A[i, col_idx] = src` where a single row and columns selected by HPCVector.
 The `src` must have partition matching `col_idx.partition`.
 """
-function Base.setindex!(A::MatrixMPI{T,B}, src::VectorMPI{T,B}, i::Integer, col_idx::VectorMPI{Int}) where {T,B<:HPCBackend}
+function Base.setindex!(A::HPCMatrix{T,B}, src::HPCVector{T,B}, i::Integer, col_idx::HPCVector{Int}) where {T,B<:HPCBackend}
     comm = A.backend.comm
     rank = comm_rank(comm)
     nranks = comm_size(comm)
@@ -3762,18 +3762,18 @@ function Base.setindex!(A::MatrixMPI{T,B}, src::VectorMPI{T,B}, i::Integer, col_
 
     # Validate row index
     if i < 1 || i > m
-        error("MatrixMPI row index out of bounds: $i, nrows=$m")
+        error("HPCMatrix row index out of bounds: $i, nrows=$m")
     end
 
     # Validate partitions match
     if src.partition != col_idx.partition
-        error("MatrixMPI setindex!: src partition must match col_idx partition")
+        error("HPCMatrix setindex!: src partition must match col_idx partition")
     end
 
     # Validate column indices (local check)
     for j in col_idx.v
         if j < 1 || j > n
-            error("MatrixMPI column index out of bounds: $j, ncols=$n")
+            error("HPCMatrix column index out of bounds: $j, ncols=$n")
         end
     end
 
@@ -3800,16 +3800,16 @@ function Base.setindex!(A::MatrixMPI{T,B}, src::VectorMPI{T,B}, i::Integer, col_
 end
 
 # ============================================================================
-# SparseMatrixMPI mixed setindex!
+# HPCSparseMatrix mixed setindex!
 # ============================================================================
 
 """
-    Base.setindex!(A::SparseMatrixMPI{T}, src::MatrixMPI{T}, row_idx::VectorMPI{Int}, col_rng::UnitRange{Int}) where T
+    Base.setindex!(A::HPCSparseMatrix{T}, src::HPCMatrix{T}, row_idx::HPCVector{Int}, col_rng::UnitRange{Int}) where T
 
-Set `A[row_idx, col_rng] = src` where rows are selected by VectorMPI and columns by range.
+Set `A[row_idx, col_rng] = src` where rows are selected by HPCVector and columns by range.
 The `src` must have row partition matching `row_idx.partition` and column count matching `length(col_rng)`.
 """
-function Base.setindex!(A::SparseMatrixMPI{T,Ti,Bk}, src::MatrixMPI{T}, row_idx::VectorMPI{Int}, col_rng::UnitRange{Int}) where {T,Ti,Bk<:HPCBackend}
+function Base.setindex!(A::HPCSparseMatrix{T,Ti,Bk}, src::HPCMatrix{T}, row_idx::HPCVector{Int}, col_rng::UnitRange{Int}) where {T,Ti,Bk<:HPCBackend}
     comm = A.backend.comm
     rank = comm_rank(comm)
     nranks = comm_size(comm)
@@ -3819,21 +3819,21 @@ function Base.setindex!(A::SparseMatrixMPI{T,Ti,Bk}, src::MatrixMPI{T}, row_idx:
 
     # Validate column range
     if first(col_rng) < 1 || last(col_rng) > n
-        error("SparseMatrixMPI column range out of bounds: $col_rng, ncols=$n")
+        error("HPCSparseMatrix column range out of bounds: $col_rng, ncols=$n")
     end
 
     # Validate src dimensions
     if size(src, 2) != ncols_src
-        error("SparseMatrixMPI setindex!: src columns ($(size(src, 2))) must match range length ($ncols_src)")
+        error("HPCSparseMatrix setindex!: src columns ($(size(src, 2))) must match range length ($ncols_src)")
     end
     if src.row_partition != row_idx.partition
-        error("SparseMatrixMPI setindex!: src row partition must match row_idx partition")
+        error("HPCSparseMatrix setindex!: src row partition must match row_idx partition")
     end
 
     # Validate row indices (local check)
     for i in row_idx.v
         if i < 1 || i > m
-            error("SparseMatrixMPI row index out of bounds: $i, nrows=$m")
+            error("HPCSparseMatrix row index out of bounds: $i, nrows=$m")
         end
     end
 
@@ -3964,21 +3964,21 @@ function Base.setindex!(A::SparseMatrixMPI{T,Ti,Bk}, src::MatrixMPI{T}, row_idx:
 end
 
 """
-    Base.setindex!(A::SparseMatrixMPI{T}, src::MatrixMPI{T}, row_idx::VectorMPI{Int}, ::Colon) where T
+    Base.setindex!(A::HPCSparseMatrix{T}, src::HPCMatrix{T}, row_idx::HPCVector{Int}, ::Colon) where T
 
-Set `A[row_idx, :] = src` where rows are selected by VectorMPI and all columns.
+Set `A[row_idx, :] = src` where rows are selected by HPCVector and all columns.
 """
-function Base.setindex!(A::SparseMatrixMPI{T}, src::MatrixMPI{T}, row_idx::VectorMPI{Int}, ::Colon) where T
+function Base.setindex!(A::HPCSparseMatrix{T}, src::HPCMatrix{T}, row_idx::HPCVector{Int}, ::Colon) where T
     A[row_idx, 1:size(A, 2)] = src
     return src
 end
 
 """
-    Base.setindex!(A::SparseMatrixMPI{T}, src::MatrixMPI{T}, row_rng::UnitRange{Int}, col_idx::VectorMPI{Int}) where T
+    Base.setindex!(A::HPCSparseMatrix{T}, src::HPCMatrix{T}, row_rng::UnitRange{Int}, col_idx::HPCVector{Int}) where T
 
-Set `A[row_rng, col_idx] = src` where rows are selected by range and columns by VectorMPI.
+Set `A[row_rng, col_idx] = src` where rows are selected by range and columns by HPCVector.
 """
-function Base.setindex!(A::SparseMatrixMPI{T,Ti,Bk}, src::MatrixMPI{T}, row_rng::UnitRange{Int}, col_idx::VectorMPI{Int}) where {T,Ti,Bk<:HPCBackend}
+function Base.setindex!(A::HPCSparseMatrix{T,Ti,Bk}, src::HPCMatrix{T}, row_rng::UnitRange{Int}, col_idx::HPCVector{Int}) where {T,Ti,Bk<:HPCBackend}
     comm = A.backend.comm
     rank = comm_rank(comm)
     nranks = comm_size(comm)
@@ -3988,7 +3988,7 @@ function Base.setindex!(A::SparseMatrixMPI{T,Ti,Bk}, src::MatrixMPI{T}, row_rng:
 
     # Validate row range
     if first(row_rng) < 1 || last(row_rng) > m
-        error("SparseMatrixMPI row range out of bounds: $row_rng, nrows=$m")
+        error("HPCSparseMatrix row range out of bounds: $row_rng, nrows=$m")
     end
 
     # Gather col_idx to all ranks (columns are not distributed)
@@ -3998,13 +3998,13 @@ function Base.setindex!(A::SparseMatrixMPI{T,Ti,Bk}, src::MatrixMPI{T}, row_rng:
     # Validate column indices
     for j in col_indices
         if j < 1 || j > n
-            error("SparseMatrixMPI column index out of bounds: $j, ncols=$n")
+            error("HPCSparseMatrix column index out of bounds: $j, ncols=$n")
         end
     end
 
     # Validate src dimensions
     if size(src, 1) != nrows_src || size(src, 2) != ncols_src
-        error("SparseMatrixMPI setindex!: src size ($(size(src))) must match ($nrows_src, $ncols_src)")
+        error("HPCSparseMatrix setindex!: src size ($(size(src))) must match ($nrows_src, $ncols_src)")
     end
 
     # Compute which rows of src I own vs which rows of A's row_rng I own
@@ -4137,22 +4137,22 @@ function Base.setindex!(A::SparseMatrixMPI{T,Ti,Bk}, src::MatrixMPI{T}, row_rng:
 end
 
 """
-    Base.setindex!(A::SparseMatrixMPI{T}, src::MatrixMPI{T}, ::Colon, col_idx::VectorMPI{Int}) where T
+    Base.setindex!(A::HPCSparseMatrix{T}, src::HPCMatrix{T}, ::Colon, col_idx::HPCVector{Int}) where T
 
-Set `A[:, col_idx] = src` where all rows and columns selected by VectorMPI.
+Set `A[:, col_idx] = src` where all rows and columns selected by HPCVector.
 """
-function Base.setindex!(A::SparseMatrixMPI{T}, src::MatrixMPI{T}, ::Colon, col_idx::VectorMPI{Int}) where T
+function Base.setindex!(A::HPCSparseMatrix{T}, src::HPCMatrix{T}, ::Colon, col_idx::HPCVector{Int}) where T
     A[1:size(A, 1), col_idx] = src
     return src
 end
 
 """
-    Base.setindex!(A::SparseMatrixMPI{T}, src::VectorMPI{T}, row_idx::VectorMPI{Int}, j::Integer) where T
+    Base.setindex!(A::HPCSparseMatrix{T}, src::HPCVector{T}, row_idx::HPCVector{Int}, j::Integer) where T
 
-Set `A[row_idx, j] = src` where rows are selected by VectorMPI and a single column.
+Set `A[row_idx, j] = src` where rows are selected by HPCVector and a single column.
 The `src` must have partition matching `row_idx.partition`.
 """
-function Base.setindex!(A::SparseMatrixMPI{T,Ti,Bk}, src::VectorMPI{T}, row_idx::VectorMPI{Int}, j::Integer) where {T,Ti,Bk<:HPCBackend}
+function Base.setindex!(A::HPCSparseMatrix{T,Ti,Bk}, src::HPCVector{T}, row_idx::HPCVector{Int}, j::Integer) where {T,Ti,Bk<:HPCBackend}
     comm = A.backend.comm
     rank = comm_rank(comm)
     nranks = comm_size(comm)
@@ -4161,18 +4161,18 @@ function Base.setindex!(A::SparseMatrixMPI{T,Ti,Bk}, src::VectorMPI{T}, row_idx:
 
     # Validate column index
     if j < 1 || j > n
-        error("SparseMatrixMPI column index out of bounds: $j, ncols=$n")
+        error("HPCSparseMatrix column index out of bounds: $j, ncols=$n")
     end
 
     # Validate partitions match
     if src.partition != row_idx.partition
-        error("SparseMatrixMPI setindex!: src partition must match row_idx partition")
+        error("HPCSparseMatrix setindex!: src partition must match row_idx partition")
     end
 
     # Validate row indices (local check)
     for i in row_idx.v
         if i < 1 || i > m
-            error("SparseMatrixMPI row index out of bounds: $i, nrows=$m")
+            error("HPCSparseMatrix row index out of bounds: $i, nrows=$m")
         end
     end
 
@@ -4292,12 +4292,12 @@ function Base.setindex!(A::SparseMatrixMPI{T,Ti,Bk}, src::VectorMPI{T}, row_idx:
 end
 
 """
-    Base.setindex!(A::SparseMatrixMPI{T}, src::VectorMPI{T}, i::Integer, col_idx::VectorMPI{Int}) where T
+    Base.setindex!(A::HPCSparseMatrix{T}, src::HPCVector{T}, i::Integer, col_idx::HPCVector{Int}) where T
 
-Set `A[i, col_idx] = src` where a single row and columns selected by VectorMPI.
+Set `A[i, col_idx] = src` where a single row and columns selected by HPCVector.
 The `src` must have partition matching `col_idx.partition`.
 """
-function Base.setindex!(A::SparseMatrixMPI{T,Ti,Bk}, src::VectorMPI{T}, i::Integer, col_idx::VectorMPI{Int}) where {T,Ti,Bk<:HPCBackend}
+function Base.setindex!(A::HPCSparseMatrix{T,Ti,Bk}, src::HPCVector{T}, i::Integer, col_idx::HPCVector{Int}) where {T,Ti,Bk<:HPCBackend}
     comm = A.backend.comm
     rank = comm_rank(comm)
     nranks = comm_size(comm)
@@ -4306,18 +4306,18 @@ function Base.setindex!(A::SparseMatrixMPI{T,Ti,Bk}, src::VectorMPI{T}, i::Integ
 
     # Validate row index
     if i < 1 || i > m
-        error("SparseMatrixMPI row index out of bounds: $i, nrows=$m")
+        error("HPCSparseMatrix row index out of bounds: $i, nrows=$m")
     end
 
     # Validate partitions match
     if src.partition != col_idx.partition
-        error("SparseMatrixMPI setindex!: src partition must match col_idx partition")
+        error("HPCSparseMatrix setindex!: src partition must match col_idx partition")
     end
 
     # Validate column indices (local check)
     for j in col_idx.v
         if j < 1 || j > n
-            error("SparseMatrixMPI column index out of bounds: $j, ncols=$n")
+            error("HPCSparseMatrix column index out of bounds: $j, ncols=$n")
         end
     end
 

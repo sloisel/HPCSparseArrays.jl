@@ -1,16 +1,16 @@
 # User Guide
 
-This guide covers the essential workflows for using LinearAlgebraMPI.jl.
+This guide covers the essential workflows for using HPCLinearAlgebra.jl.
 
 ## Core Types
 
-LinearAlgebraMPI provides three distributed types:
+HPCLinearAlgebra provides three distributed types:
 
 | Type | Description | Storage |
 |------|-------------|---------|
-| `VectorMPI{T,AV}` | Distributed vector | Row-partitioned |
-| `MatrixMPI{T,AM}` | Distributed dense matrix | Row-partitioned |
-| `SparseMatrixMPI{T,Ti,AV}` | Distributed sparse matrix | Row-partitioned CSR |
+| `HPCVector{T,AV}` | Distributed vector | Row-partitioned |
+| `HPCMatrix{T,AM}` | Distributed dense matrix | Row-partitioned |
+| `HPCSparseMatrix{T,Ti,AV}` | Distributed sparse matrix | Row-partitioned CSR |
 
 The type parameters are:
 - `T`: Element type (`Float64`, `Float32`, `ComplexF64`, etc.)
@@ -22,7 +22,7 @@ All types are row-partitioned across MPI ranks, meaning each rank owns a contigu
 
 ### Internal Storage: CSR Format
 
-Internally, `SparseMatrixMPI` stores local rows in CSR (Compressed Sparse Row) format using the `SparseMatrixCSR` type. This enables efficient row-wise iteration for a row-partitioned distributed matrix.
+Internally, `HPCSparseMatrix` stores local rows in CSR (Compressed Sparse Row) format using the `SparseMatrixCSR` type. This enables efficient row-wise iteration for a row-partitioned distributed matrix.
 
 In Julia, `SparseMatrixCSR{T,Ti}` is a type alias for `Transpose{T, SparseMatrixCSC{T,Ti}}`. You don't need to worry about this for normal usage - it's handled automatically.
 
@@ -32,14 +32,14 @@ In Julia, `SparseMatrixCSR{T,Ti}` is a type alias for `Transpose{T, SparseMatrix
 
 ```julia
 using MPI
-using LinearAlgebraMPI
+using HPCLinearAlgebra
 using SparseArrays
 MPI.Init()
 
 # Create from native types (data is distributed automatically)
-v = VectorMPI(randn(100))
-A = MatrixMPI(randn(50, 30))
-S = SparseMatrixMPI{Float64}(sprandn(100, 100, 0.1))
+v = HPCVector(randn(100))
+A = HPCMatrix(randn(50, 30))
+S = HPCSparseMatrix{Float64}(sprandn(100, 100, 0.1))
 ```
 
 ### Local Constructors
@@ -48,9 +48,9 @@ For performance-critical code, use local constructors that avoid global communic
 
 ```julia
 # Create from local data (each rank provides its own rows)
-v_local = VectorMPI_local(my_local_vector)
-A_local = MatrixMPI_local(my_local_matrix)
-S_local = SparseMatrixMPI_local(my_local_sparse)
+v_local = HPCVector_local(my_local_vector)
+A_local = HPCMatrix_local(my_local_matrix)
+S_local = HPCSparseMatrix_local(my_local_sparse)
 ```
 
 ### Efficient Local-Only Construction
@@ -86,7 +86,7 @@ end
 A = sparse(I, J, V, m, n)
 
 # The constructor extracts only local rows - other rows are ignored
-Adist = SparseMatrixMPI{Float64}(A)
+Adist = HPCSparseMatrix{Float64}(A)
 ```
 
 ## Basic Operations
@@ -94,8 +94,8 @@ Adist = SparseMatrixMPI{Float64}(A)
 ### Vector Operations
 
 ```julia
-v = VectorMPI(randn(100))
-w = VectorMPI(randn(100))
+v = HPCVector(randn(100))
+w = HPCVector(randn(100))
 
 # Arithmetic
 u = v + w
@@ -112,8 +112,8 @@ c = conj(v)
 ### Matrix-Vector Products
 
 ```julia
-A = MatrixMPI(randn(50, 100))
-v = VectorMPI(randn(100))
+A = HPCMatrix(randn(50, 100))
+v = HPCVector(randn(100))
 
 # Matrix-vector multiply
 y = A * v
@@ -124,14 +124,14 @@ y = A * v
 ```julia
 using SparseArrays
 
-A = SparseMatrixMPI{Float64}(sprandn(100, 100, 0.1))
-v = VectorMPI(randn(100))
+A = HPCSparseMatrix{Float64}(sprandn(100, 100, 0.1))
+v = HPCVector(randn(100))
 
 # Matrix-vector multiply
 y = A * v
 
 # Matrix-matrix multiply
-B = SparseMatrixMPI{Float64}(sprandn(100, 100, 0.1))
+B = HPCSparseMatrix{Float64}(sprandn(100, 100, 0.1))
 C = A * B
 ```
 
@@ -143,8 +143,8 @@ C = A * B
 using SparseArrays
 
 # Create a well-conditioned sparse matrix
-A = SparseMatrixMPI{Float64}(sprandn(100, 100, 0.1) + 10I)
-b = VectorMPI(randn(100))
+A = HPCSparseMatrix{Float64}(sprandn(100, 100, 0.1) + 10I)
+b = HPCVector(randn(100))
 
 # Solve A * x = b
 x = A \ b
@@ -158,11 +158,11 @@ For symmetric matrices, wrap with `Symmetric` to use faster LDLT factorization:
 using LinearAlgebra
 
 # Create symmetric positive definite matrix
-A_base = SparseMatrixMPI{Float64}(sprandn(100, 100, 0.1))
-A_spd = A_base + SparseMatrixMPI(transpose(A_base)) + 
-        SparseMatrixMPI{Float64}(sparse(10.0I, 100, 100))
+A_base = HPCSparseMatrix{Float64}(sprandn(100, 100, 0.1))
+A_spd = A_base + HPCSparseMatrix(transpose(A_base)) + 
+        HPCSparseMatrix{Float64}(sparse(10.0I, 100, 100))
 
-b = VectorMPI(randn(100))
+b = HPCVector(randn(100))
 
 # Use Symmetric wrapper for faster solve
 x = Symmetric(A_spd) \ b
@@ -189,14 +189,14 @@ finalize!(F)
 
 ## Threading
 
-LinearAlgebraMPI uses two threading mechanisms for the MUMPS sparse direct solver:
+HPCLinearAlgebra uses two threading mechanisms for the MUMPS sparse direct solver:
 
 1. **OpenMP threads** (`OMP_NUM_THREADS`) - Affects MUMPS algorithm-level parallelism
 2. **BLAS threads** (`OPENBLAS_NUM_THREADS`) - Affects dense matrix operations in both Julia and MUMPS
 
 ### MUMPS Solver Threading
 
-LinearAlgebraMPI uses the MUMPS (MUltifrontal Massively Parallel Solver) library for sparse direct solves via `lu()` and `ldlt()`. MUMPS has two independent threading mechanisms that can be tuned for performance.
+HPCLinearAlgebra uses the MUMPS (MUltifrontal Massively Parallel Solver) library for sparse direct solves via `lu()` and `ldlt()`. MUMPS has two independent threading mechanisms that can be tuned for performance.
 
 **OpenMP threads (`OMP_NUM_THREADS`)**
 - Controls MUMPS's algorithm-level parallelism
@@ -251,7 +251,7 @@ export OPENBLAS_NUM_THREADS=10  # or your number of CPU cores
 julia your_script.jl
 ```
 
-Environment variables must be set before starting Julia because OpenBLAS creates its thread pool during library initialization. LinearAlgebraMPI attempts to set sensible defaults programmatically, but this may not always take effect if the thread pool is already initialized.
+Environment variables must be set before starting Julia because OpenBLAS creates its thread pool during library initialization. HPCLinearAlgebra attempts to set sensible defaults programmatically, but this may not always take effect if the thread pool is already initialized.
 
 You can also add these to your shell profile (`.bashrc`, `.zshrc`, etc.) or Julia's `startup.jl`:
 
@@ -280,16 +280,16 @@ This MUMPS configuration (OMP=4, BLAS=4) achieved 14% faster performance than Ju
 The `map_rows` function applies a function to corresponding rows across distributed arrays:
 
 ```julia
-A = MatrixMPI(randn(50, 10))
+A = HPCMatrix(randn(50, 10))
 
 # Compute row norms
-norms = map_rows(row -> norm(row), A)  # Returns VectorMPI
+norms = map_rows(row -> norm(row), A)  # Returns HPCVector
 
 # Compute row sums and products
-stats = map_rows(row -> [sum(row), prod(row)]', A)  # Returns MatrixMPI
+stats = map_rows(row -> [sum(row), prod(row)]', A)  # Returns HPCMatrix
 
 # Combine multiple inputs
-v = VectorMPI(randn(50))
+v = HPCVector(randn(50))
 weighted = map_rows((row, w) -> sum(row) * w[1], A, v)
 ```
 
@@ -297,10 +297,10 @@ weighted = map_rows((row, w) -> sum(row) * w[1], A, v)
 
 | `f` returns | Result type |
 |-------------|-------------|
-| Scalar | `VectorMPI` |
-| Column vector | `VectorMPI` (concatenated) |
-| Row vector (`v'`) | `MatrixMPI` |
-| Matrix | `MatrixMPI` |
+| Scalar | `HPCVector` |
+| Column vector | `HPCVector` (concatenated) |
+| Row vector (`v'`) | `HPCMatrix` |
+| Matrix | `HPCMatrix` |
 
 ## Type Conversions
 
@@ -309,13 +309,13 @@ weighted = map_rows((row, w) -> sum(row) * w[1], A, v)
 Convert distributed types back to native Julia arrays (gathers data to all ranks):
 
 ```julia
-v_mpi = VectorMPI(randn(100))
+v_mpi = HPCVector(randn(100))
 v_native = Vector(v_mpi)  # Full vector on all ranks
 
-A_mpi = MatrixMPI(randn(50, 30))
+A_mpi = HPCMatrix(randn(50, 30))
 A_native = Matrix(A_mpi)  # Full matrix on all ranks
 
-S_mpi = SparseMatrixMPI{Float64}(sprandn(100, 100, 0.1))
+S_mpi = HPCSparseMatrix{Float64}(sprandn(100, 100, 0.1))
 S_native = SparseMatrixCSC(S_mpi)  # Full sparse matrix
 ```
 
@@ -346,7 +346,7 @@ nranks = MPI.Comm_size(MPI.COMM_WORLD) # Total number of ranks
 Redistribute data to match a different partition:
 
 ```julia
-v = VectorMPI(randn(100))
+v = HPCVector(randn(100))
 
 # Get current partition
 old_partition = v.partition
@@ -360,7 +360,7 @@ v_new = repartition(v, new_partition)
 
 ## GPU Support
 
-LinearAlgebraMPI supports GPU acceleration via Metal.jl (macOS) or CUDA.jl (Linux/Windows). GPU support is optional and loaded as package extensions.
+HPCLinearAlgebra supports GPU acceleration via Metal.jl (macOS) or CUDA.jl (Linux/Windows). GPU support is optional and loaded as package extensions.
 
 ### Setup
 
@@ -370,13 +370,13 @@ Load the GPU package **before** MPI for proper detection:
 # For Metal (macOS)
 using Metal
 using MPI
-using LinearAlgebraMPI
+using HPCLinearAlgebra
 MPI.Init()
 
 # For CUDA (Linux/Windows)
 using CUDA, NCCL, CUDSS_jll
 using MPI
-using LinearAlgebraMPI
+using HPCLinearAlgebra
 MPI.Init()
 ```
 
@@ -391,13 +391,13 @@ metal_backend = HPCBackend(DeviceMetal(), CommMPI(), SolverMUMPS())
 cuda_backend = HPCBackend(DeviceCUDA(), CommMPI(), SolverMUMPS())
 
 # Create CPU vector
-x_cpu = VectorMPI(rand(Float32, 1000), cpu_backend)
+x_cpu = HPCVector(rand(Float32, 1000), cpu_backend)
 
 # Convert to GPU (Metal)
-x_gpu = to_backend(x_cpu, metal_backend)  # Returns VectorMPI with MtlVector storage
+x_gpu = to_backend(x_cpu, metal_backend)  # Returns HPCVector with MtlVector storage
 
 # Convert to GPU (CUDA)
-x_gpu = to_backend(x_cpu, cuda_backend)   # Returns VectorMPI with CuVector storage
+x_gpu = to_backend(x_cpu, cuda_backend)   # Returns HPCVector with CuVector storage
 
 # GPU operations work transparently
 y_gpu = x_gpu + x_gpu  # Native GPU addition
@@ -413,12 +413,12 @@ The type parameter `AV` (or `AM` for matrices) determines where data lives:
 
 | Type | Storage | Operations |
 |------|---------|------------|
-| `VectorMPI{T, Vector{T}}` | CPU | Native CPU |
-| `VectorMPI{T, MtlVector{T}}` | Metal GPU | Native GPU for vector ops |
-| `VectorMPI{T, CuVector{T}}` | CUDA GPU | Native GPU for vector ops |
-| `MatrixMPI{T, Matrix{T}}` | CPU | Native CPU |
-| `MatrixMPI{T, MtlMatrix{T}}` | Metal GPU | Native GPU |
-| `MatrixMPI{T, CuMatrix{T}}` | CUDA GPU | Native GPU |
+| `HPCVector{T, Vector{T}}` | CPU | Native CPU |
+| `HPCVector{T, MtlVector{T}}` | Metal GPU | Native GPU for vector ops |
+| `HPCVector{T, CuVector{T}}` | CUDA GPU | Native GPU for vector ops |
+| `HPCMatrix{T, Matrix{T}}` | CPU | Native CPU |
+| `HPCMatrix{T, MtlMatrix{T}}` | Metal GPU | Native GPU |
+| `HPCMatrix{T, CuMatrix{T}}` | CUDA GPU | Native GPU |
 
 ### MPI Communication
 
@@ -432,15 +432,15 @@ This is handled transparently - you just use the same operations.
 
 ### Sparse Matrix Operations
 
-Sparse matrices (`SparseMatrixMPI`) remain on CPU. When multiplying with GPU vectors:
+Sparse matrices (`HPCSparseMatrix`) remain on CPU. When multiplying with GPU vectors:
 
 ```julia
 cuda_backend = HPCBackend(DeviceCUDA(), CommMPI(), SolverMUMPS())
-A = SparseMatrixMPI(sprand(100, 100, 0.1), cuda_backend)
-x_gpu = VectorMPI(rand(100), cuda_backend)
+A = HPCSparseMatrix(sprand(100, 100, 0.1), cuda_backend)
+x_gpu = HPCVector(rand(100), cuda_backend)
 
 # Sparse multiply: x gathered via CPU, multiply on CPU, result copied to GPU
-y_gpu = A * x_gpu  # Returns VectorMPI with CuVector storage
+y_gpu = A * x_gpu  # Returns HPCVector with CuVector storage
 ```
 
 ### Supported GPU Operations
@@ -462,22 +462,22 @@ y_gpu = A * x_gpu  # Returns VectorMPI with CuVector storage
 
 ## cuDSS Multi-GPU Solver (CUDA only)
 
-For multi-GPU distributed sparse direct solves, LinearAlgebraMPI provides `CuDSSFactorizationMPI` using NVIDIA's cuDSS library with NCCL inter-GPU communication.
+For multi-GPU distributed sparse direct solves, HPCLinearAlgebra provides `CuDSSFactorizationMPI` using NVIDIA's cuDSS library with NCCL inter-GPU communication.
 
 ### Basic Usage
 
 ```julia
 using CUDA, NCCL, CUDSS_jll
 using MPI
-using LinearAlgebraMPI
+using HPCLinearAlgebra
 MPI.Init()
 
 # Each MPI rank should use a different GPU
 CUDA.device!(MPI.Comm_rank(MPI.COMM_WORLD) % length(CUDA.devices()))
 
 # Create distributed sparse matrix (symmetric positive definite)
-A = SparseMatrixMPI{Float64}(make_spd_matrix(1000))
-b = VectorMPI(rand(1000))
+A = HPCSparseMatrix{Float64}(make_spd_matrix(1000))
+b = HPCVector(rand(1000))
 
 # Multi-GPU LDLT factorization
 F = cudss_ldlt(A)
@@ -515,7 +515,7 @@ cuDSS MGMN mode crashes with `status=5` on certain sparse matrix patterns, notab
 
 ## Cache Management
 
-LinearAlgebraMPI caches communication plans for efficiency. Clear caches when needed:
+HPCLinearAlgebra caches communication plans for efficiency. Clear caches when needed:
 
 ```julia
 clear_plan_cache!()  # Clears all plan caches including MUMPS analysis cache
@@ -524,7 +524,7 @@ clear_plan_cache!()  # Clears all plan caches including MUMPS analysis cache
 ## MPI Collective Operations
 
 !!! warning "All Operations Are Collective"
-    Most LinearAlgebraMPI functions are MPI collective operations. All ranks must:
+    Most HPCLinearAlgebra functions are MPI collective operations. All ranks must:
     - Call the function together
     - Use the same parameters
     - Avoid conditional execution based on rank

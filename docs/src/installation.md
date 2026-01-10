@@ -4,7 +4,7 @@
 
 ### MPI
 
-LinearAlgebraMPI.jl requires an MPI implementation. When you install the package, Julia automatically provides `MPI.jl` with `MPI_jll` (bundled MPI implementation).
+HPCLinearAlgebra.jl requires an MPI implementation. When you install the package, Julia automatically provides `MPI.jl` with `MPI_jll` (bundled MPI implementation).
 
 For HPC environments, you may want to configure MPI.jl to use your system's MPI installation. See the [MPI.jl documentation](https://juliaparallel.org/MPI.jl/stable/configuration/) for details.
 
@@ -18,14 +18,14 @@ The package uses MUMPS for sparse direct solves. MUMPS is typically available th
 
 ```julia
 using Pkg
-Pkg.add(url="https://github.com/sloisel/LinearAlgebraMPI.jl")
+Pkg.add(url="https://github.com/sloisel/HPCLinearAlgebra.jl")
 ```
 
 ### Development Installation
 
 ```bash
-git clone https://github.com/sloisel/LinearAlgebraMPI.jl
-cd LinearAlgebraMPI.jl
+git clone https://github.com/sloisel/HPCLinearAlgebra.jl
+cd HPCLinearAlgebra.jl
 julia --project -e 'using Pkg; Pkg.instantiate()'
 ```
 
@@ -34,7 +34,7 @@ julia --project -e 'using Pkg; Pkg.instantiate()'
 Test your installation with MPI:
 
 ```bash
-cd LinearAlgebraMPI.jl
+cd HPCLinearAlgebra.jl
 mpiexec -n 2 julia --project test/runtests.jl
 ```
 
@@ -46,7 +46,7 @@ mpiexec -n 2 julia --project test/runtests.jl
 ```julia
 # CORRECT
 using MPI
-using LinearAlgebraMPI
+using HPCLinearAlgebra
 MPI.Init()
 # Now you can use the package
 ```
@@ -57,13 +57,13 @@ Create a script file (e.g., `my_program.jl`):
 
 ```julia
 using MPI
-using LinearAlgebraMPI
+using HPCLinearAlgebra
 MPI.Init()
 using SparseArrays
 
 # Create distributed matrix
-A = SparseMatrixMPI{Float64}(sprandn(100, 100, 0.1) + 10I)
-b = VectorMPI(randn(100))
+A = HPCSparseMatrix{Float64}(sprandn(100, 100, 0.1) + 10I)
+b = HPCVector(randn(100))
 
 # Solve
 x = A \ b

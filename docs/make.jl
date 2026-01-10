@@ -6,14 +6,14 @@ if !MPI.Initialized()
     MPI.Init()
 end
 
-using LinearAlgebraMPI
+using HPCLinearAlgebra
 
 makedocs(
-    sitename = "LinearAlgebraMPI.jl",
-    modules = [LinearAlgebraMPI],
+    sitename = "HPCLinearAlgebra.jl",
+    modules = [HPCLinearAlgebra],
     format = Documenter.HTML(
         prettyurls = get(ENV, "CI", nothing) == "true",
-        canonical = "https://sloisel.github.io/LinearAlgebraMPI.jl",
+        canonical = "https://sloisel.github.io/HPCLinearAlgebra.jl",
     ),
     pages = [
         "Home" => "index.md",
@@ -26,7 +26,7 @@ makedocs(
 )
 
 deploydocs(
-    repo = "github.com/sloisel/LinearAlgebraMPI.jl.git",
+    repo = "github.com/sloisel/HPCLinearAlgebra.jl.git",
     devbranch = "main",
     push_preview = true,
 )

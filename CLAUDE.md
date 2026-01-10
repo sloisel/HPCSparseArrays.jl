@@ -50,10 +50,10 @@ GPU acceleration is supported via Metal.jl (macOS) or CUDA.jl (Linux/Windows) as
 
 ### Type Parameters
 
-- `VectorMPI{T,AV}` where `AV` is `Vector{T}` (CPU), `MtlVector{T}` (Metal), or `CuVector{T}` (CUDA)
-- `MatrixMPI{T,AM}` where `AM` is `Matrix{T}` (CPU), `MtlMatrix{T}` (Metal), or `CuMatrix{T}` (CUDA)
-- `SparseMatrixMPI{T,Ti,AV}` where `AV` is `Vector{T}` (CPU), `MtlVector{T}`, or `CuVector{T}` for the `nzval` array
-- Type aliases: `VectorMPI_CPU{T}`, `MatrixMPI_CPU{T}`, `SparseMatrixMPI_CPU{T,Ti}` for CPU-backed types
+- `HPCVector{T,AV}` where `AV` is `Vector{T}` (CPU), `MtlVector{T}` (Metal), or `CuVector{T}` (CUDA)
+- `HPCMatrix{T,AM}` where `AM` is `Matrix{T}` (CPU), `MtlMatrix{T}` (Metal), or `CuMatrix{T}` (CUDA)
+- `HPCSparseMatrix{T,Ti,AV}` where `AV` is `Vector{T}` (CPU), `MtlVector{T}`, or `CuVector{T}` for the `nzval` array
+- Type aliases: `HPCVector_CPU{T}`, `HPCMatrix_CPU{T}`, `HPCSparseMatrix_CPU{T,Ti}` for CPU-backed types
 
 ### Creating Zero Arrays
 
@@ -61,24 +61,24 @@ Use `Base.zeros` with the full parametric type or type alias:
 
 ```julia
 # CPU zero arrays
-v = zeros(VectorMPI{Float64,Vector{Float64}}, 100)
-v = zeros(VectorMPI_CPU{Float64}, 100)  # Equivalent using type alias
+v = zeros(HPCVector{Float64,Vector{Float64}}, 100)
+v = zeros(HPCVector_CPU{Float64}, 100)  # Equivalent using type alias
 
-A = zeros(MatrixMPI{Float64,Matrix{Float64}}, 50, 30)
-A = zeros(MatrixMPI_CPU{Float64}, 50, 30)
+A = zeros(HPCMatrix{Float64,Matrix{Float64}}, 50, 30)
+A = zeros(HPCMatrix_CPU{Float64}, 50, 30)
 
-S = zeros(SparseMatrixMPI{Float64,Int,Vector{Float64}}, 100, 100)
-S = zeros(SparseMatrixMPI_CPU{Float64,Int}, 100, 100)
+S = zeros(HPCSparseMatrix{Float64,Int,Vector{Float64}}, 100, 100)
+S = zeros(HPCSparseMatrix_CPU{Float64,Int}, 100, 100)
 
 # GPU zero arrays (requires Metal.jl or CUDA.jl loaded)
 using Metal
-v_gpu = zeros(VectorMPI{Float32,MtlVector{Float32}}, 100)
-A_gpu = zeros(MatrixMPI{Float32,MtlMatrix{Float32}}, 50, 30)
+v_gpu = zeros(HPCVector{Float32,MtlVector{Float32}}, 100)
+A_gpu = zeros(HPCMatrix{Float32,MtlMatrix{Float32}}, 50, 30)
 
 # Or with CUDA
 using CUDA
-v_gpu = zeros(VectorMPI{Float64,CuVector{Float64}}, 100)
-A_gpu = zeros(MatrixMPI{Float64,CuMatrix{Float64}}, 50, 30)
+v_gpu = zeros(HPCVector{Float64,CuVector{Float64}}, 100)
+A_gpu = zeros(HPCMatrix{Float64,CuMatrix{Float64}}, 50, 30)
 ```
 
 ### CPU Staging
@@ -103,9 +103,9 @@ Sparse matrices remain on CPU (Julia's `SparseMatrixCSC` doesn't support GPU arr
 
 ### Extension Files
 
-- `ext/LinearAlgebraMPIMetalExt.jl` - Metal extension with DeviceMetal backend support
-- `ext/LinearAlgebraMPICUDAExt.jl` - CUDA extension with DeviceCUDA backend support and cuDSS multi-GPU solver
-- Loaded automatically when `using Metal` or `using CUDA` before `using LinearAlgebraMPI`
+- `ext/HPCLinearAlgebraMetalExt.jl` - Metal extension with DeviceMetal backend support
+- `ext/HPCLinearAlgebraCUDAExt.jl` - CUDA extension with DeviceCUDA backend support and cuDSS multi-GPU solver
+- Loaded automatically when `using Metal` or `using CUDA` before `using HPCLinearAlgebra`
 - Use `to_backend(obj, target_backend)` to convert between backends
 
 ### CUDA-Specific: cuDSS Multi-GPU Solver
@@ -115,7 +115,7 @@ The CUDA extension includes `CuDSSFactorizationMPI` for distributed sparse direc
 ```julia
 using CUDA, MPI
 MPI.Init()
-using LinearAlgebraMPI
+using HPCLinearAlgebra
 
 # Each MPI rank should use a different GPU
 CUDA.device!(MPI.Comm_rank(MPI.COMM_WORLD) % length(CUDA.devices()))
@@ -183,7 +183,7 @@ end
 
 ## Architecture
 
-LinearAlgebraMPI implements distributed sparse and dense matrix operations using MPI for parallel computing across multiple ranks. Supports both `Float64` and `ComplexF64` element types.
+HPCLinearAlgebra implements distributed sparse and dense matrix operations using MPI for parallel computing across multiple ranks. Supports both `Float64` and `ComplexF64` element types.
 
 ### Core design principle
 
@@ -205,7 +205,7 @@ Many operations in this module are collective and should not be run on a subset 
 - `SparseMatrixCSC(A::SparseMatrixCSR)` converts CSR to CSC representing the **same** matrix
 - For `B = SparseMatrixCSR(A)`, `B[i,j] == A[i,j]` (same matrix, different storage)
 
-**SparseMatrixMPI{T,Ti,AV}**
+**HPCSparseMatrix{T,Ti,AV}**
 - Rows are partitioned across MPI ranks
 - Type parameters: `T` = element type, `Ti` = index type, `AV` = array type for values (`Vector{T}` or `MtlVector{T}`)
 - Local rows stored in CSR-like format with separate arrays:
@@ -221,7 +221,7 @@ Many operations in this module are collective and should not be run on a subset 
 - `cached_transpose`: Cached materialized transpose (invalidated on modification)
 - `cached_symmetric`: Cached result of `issymmetric` check
 
-**MatrixMPI{T,AM}**
+**HPCMatrix{T,AM}**
 - Distributed dense matrix partitioned by rows across MPI ranks
 - Type parameter `AM<:AbstractMatrix{T}`: `Matrix{T}` (CPU) or `MtlMatrix{T}` (GPU)
 - `A::AM`: Local rows stored directly (NOT transposed), size = `(local_nrows, ncols)`
@@ -229,7 +229,7 @@ Many operations in this module are collective and should not be run on a subset 
 - `col_partition`: Array of size `nranks + 1` defining column partition (always CPU)
 - `structural_hash`: Optional Blake3 hash (computed lazily)
 
-**VectorMPI{T,AV}**
+**HPCVector{T,AV}**
 - Distributed dense vector partitioned across MPI ranks
 - Type parameter `AV<:AbstractVector{T}`: `Vector{T}` (CPU) or `MtlVector{T}` (GPU)
 - `partition`: Array of size `nranks + 1` defining which elements each rank owns (always CPU)
@@ -238,7 +238,7 @@ Many operations in this module are collective and should not be run on a subset 
 - Can have any partition (not required to match matrix partitions)
 
 **MatrixPlan{T}**
-- Communication plan for gathering rows from another SparseMatrixMPI
+- Communication plan for gathering rows from another HPCSparseMatrix
 - Memoized based on structural hashes of A and B (see `_plan_cache`)
 - Pre-allocates all send/receive buffers for allocation-free `execute_plan!` calls
 
@@ -259,7 +259,7 @@ Many operations in this module are collective and should not be run on a subset 
 
 Factorization uses MUMPS (MUltifrontal Massively Parallel Solver) with distributed matrix input (ICNTL(18)=3).
 
-**MUMPSFactorizationMPI{Tin, AVin, Tinternal}** (internal type, not exported)
+**MUMPSFactorization{Tin, AVin, Tinternal}** (internal type, not exported)
 - Wraps a MUMPS object for distributed factorization
 - Type parameters: `Tin` = input element type, `AVin` = input array type, `Tinternal` = MUMPS-compatible type (Float64 or ComplexF64)
 - Created by `lu(A)` for general matrices or `ldlt(A)` for symmetric matrices
@@ -274,17 +274,17 @@ x = F \ b
 ### Local Constructors
 
 For efficient construction when data is already distributed:
-- `VectorMPI_local(v_local)`: Create from local vector portion
-- `SparseMatrixMPI_local(SparseMatrixCSR(local_csc))`: Create from local rows in CSR format
-- `SparseMatrixMPI_local(transpose(AT_local))`: Alternative using explicit transpose wrapper
-- `MatrixMPI_local(A_local)`: Create from local dense rows
+- `HPCVector_local(v_local)`: Create from local vector portion
+- `HPCSparseMatrix_local(SparseMatrixCSR(local_csc))`: Create from local rows in CSR format
+- `HPCSparseMatrix_local(transpose(AT_local))`: Alternative using explicit transpose wrapper
+- `HPCMatrix_local(A_local)`: Create from local dense rows
 
 These infer the global partition via MPI.Allgather of local sizes.
 
 When building from triplets (I, J, V), the efficient pattern is to build M^T directly as CSC by swapping indices, then wrap in lazy transpose for CSR:
 ```julia
 AT_local = sparse(local_J, local_I, local_V, ncols, local_nrows)  # M^T as CSC
-SparseMatrixMPI_local(transpose(AT_local))  # M in CSR format
+HPCSparseMatrix_local(transpose(AT_local))  # M in CSR format
 ```
 This avoids an unnecessary physical transpose operation.
 
@@ -297,7 +297,7 @@ This avoids an unnecessary physical transpose operation.
 
 ### Matrix-Vector Multiplication Flow
 
-For `y = A * x` where `A::SparseMatrixMPI` and `x::VectorMPI`:
+For `y = A * x` where `A::HPCSparseMatrix` and `x::HPCVector`:
 
 1. **Plan creation** (`VectorPlan` constructor): Uses `Alltoall` to exchange element request counts, then point-to-point to exchange indices
 2. **Value exchange** (`execute_plan!`): Point-to-point `Isend`/`Irecv` to gather `x[A.col_indices]` into a local `gathered` vector
@@ -308,25 +308,25 @@ Note: Uses `transpose()` (not adjoint `'`) to correctly handle complex values wi
 
 ### Vector Operations
 
-- `conj(v)` - Returns new VectorMPI with conjugated values (materialized)
+- `conj(v)` - Returns new HPCVector with conjugated values (materialized)
 - `transpose(v)` - Returns lazy `Transpose` wrapper
 - `v'` (adjoint) - Returns `transpose(conj(v))` where `conj(v)` is materialized
-- `transpose(v) * A` - Computes `transpose(transpose(A) * v)`, returns transposed VectorMPI
-- `v' * A` - Computes `transpose(transpose(A) * conj(v))`, returns transposed VectorMPI
+- `transpose(v) * A` - Computes `transpose(transpose(A) * v)`, returns transposed HPCVector
+- `v' * A` - Computes `transpose(transpose(A) * conj(v))`, returns transposed HPCVector
 - `u + v`, `u - v` - Automatic partition alignment if partitions differ
 
 ### Lazy Transpose
 
-`transpose(A)` returns `Transpose{T, SparseMatrixMPI{T,Ti,AV}}` (lazy wrapper). Materialization happens automatically when needed:
+`transpose(A)` returns `Transpose{T, HPCSparseMatrix{T,Ti,AV}}` (lazy wrapper). Materialization happens automatically when needed:
 - `transpose(A) * transpose(B)` → `transpose(B * A)` (stays lazy)
 - `transpose(A) * B` or `A * transpose(B)` → materializes via `TransposePlan`
-- `SparseMatrixMPI(transpose(A))` → explicitly materialize the transpose (cached bidirectionally)
+- `HPCSparseMatrix(transpose(A))` → explicitly materialize the transpose (cached bidirectionally)
 
 ### Indexing Operations
 
 All distributed types support getindex and setindex! with cross-rank communication:
-- `v[i]`, `v[i:j]`, `v[indices::VectorMPI]` for VectorMPI
-- `A[i,j]`, `A[i:j, k:l]`, `A[:, j]`, `A[rows::VectorMPI, cols]` for MatrixMPI and SparseMatrixMPI
+- `v[i]`, `v[i:j]`, `v[indices::HPCVector]` for HPCVector
+- `A[i,j]`, `A[i:j, k:l]`, `A[:, j]`, `A[rows::HPCVector, cols]` for HPCMatrix and HPCSparseMatrix
 - Setting values triggers structural modification for sparse matrices when inserting new nonzeros
 
 ### Block Operations

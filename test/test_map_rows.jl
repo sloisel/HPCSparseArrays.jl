@@ -13,7 +13,7 @@ end
 using MPI
 MPI.Init()
 
-using LinearAlgebraMPI
+using HPCLinearAlgebra
 using LinearAlgebra
 using StaticArrays
 using Test
@@ -38,34 +38,34 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     is_complex = T <: Complex
     Treal = real(T)
 
-    println(io0(), "[test] VectorMPI -> scalar ($T, $backend_name)")
+    println(io0(), "[test] HPCVector -> scalar ($T, $backend_name)")
 
-    v = VectorMPI(T.([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]), backend)
+    v = HPCVector(T.([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]), backend)
     result = map_rows(r -> r^2, v)
     expected = T.([1.0, 4.0, 9.0, 16.0, 25.0, 36.0, 49.0, 64.0])
     @test norm(Vector(result) - expected) < TOL
 
 
-    println(io0(), "[test] Two VectorMPIs -> scalar ($T, $backend_name)")
+    println(io0(), "[test] Two HPCVectors -> scalar ($T, $backend_name)")
 
-    u = VectorMPI(T.([1.0, 2.0, 3.0, 4.0]), backend)
-    v2 = VectorMPI(T.([4.0, 3.0, 2.0, 1.0]), backend)
+    u = HPCVector(T.([1.0, 2.0, 3.0, 4.0]), backend)
+    v2 = HPCVector(T.([4.0, 3.0, 2.0, 1.0]), backend)
     result2 = map_rows((a, b) -> a * b, u, v2)
     expected2 = T.([4.0, 6.0, 6.0, 4.0])
     @test norm(Vector(result2) - expected2) < TOL
 
 
-    println(io0(), "[test] MatrixMPI -> scalar row norms ($T, $backend_name)")
+    println(io0(), "[test] HPCMatrix -> scalar row norms ($T, $backend_name)")
 
-    A = MatrixMPI(T.([1.0 0.0 0.0; 0.0 2.0 0.0; 0.0 0.0 3.0; 1.0 1.0 1.0]), backend)
+    A = HPCMatrix(T.([1.0 0.0 0.0; 0.0 2.0 0.0; 0.0 0.0 3.0; 1.0 1.0 1.0]), backend)
     result3 = map_rows(r -> norm(r), A)
     expected3 = Treal.([1.0, 2.0, 3.0, sqrt(3.0)])
     @test norm(Vector(result3) - expected3) < TOL
 
 
-    println(io0(), "[test] f returns SVector -> MatrixMPI ($T, $backend_name)")
+    println(io0(), "[test] f returns SVector -> HPCMatrix ($T, $backend_name)")
 
-    A4 = MatrixMPI(T.([1.0 2.0; 3.0 4.0; 5.0 6.0]), backend)
+    A4 = HPCMatrix(T.([1.0 2.0; 3.0 4.0; 5.0 6.0]), backend)
     # Pre-compute constant SVector for GPU (capturing Type{T} is not isbits)
     const_sv = SVector{3,T}(T(1), T(2), T(3))
     result4 = map_rows(r -> const_sv, A4)
@@ -76,27 +76,27 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
 
     println(io0(), "[test] f returns SVector from row ($T, $backend_name)")
 
-    A5 = MatrixMPI(T.([1.0 2.0; 3.0 4.0; 5.0 6.0; 7.0 8.0]), backend)
+    A5 = HPCMatrix(T.([1.0 2.0; 3.0 4.0; 5.0 6.0; 7.0 8.0]), backend)
     result5 = map_rows(r -> SVector(sum(r), prod(r)), A5)
     expected5 = T.([3.0 2.0; 7.0 12.0; 11.0 30.0; 15.0 56.0])
     @test norm(Matrix(result5) - expected5) < TOL
     @test size(result5) == (4, 2)
 
 
-    println(io0(), "[test] MatrixMPI + VectorMPI -> scalar ($T, $backend_name)")
+    println(io0(), "[test] HPCMatrix + HPCVector -> scalar ($T, $backend_name)")
 
-    A6 = MatrixMPI(T.([1.0 2.0 3.0; 4.0 5.0 6.0; 7.0 8.0 9.0; 10.0 11.0 12.0]), backend)
-    w = VectorMPI(T.([1.0, 2.0, 3.0, 4.0]), backend)
+    A6 = HPCMatrix(T.([1.0 2.0 3.0; 4.0 5.0 6.0; 7.0 8.0 9.0; 10.0 11.0 12.0]), backend)
+    w = HPCVector(T.([1.0, 2.0, 3.0, 4.0]), backend)
     # Compute weighted row sums
     result6 = map_rows((row, wi) -> sum(row) * wi, A6, w)
     expected6 = T.([6.0 * 1.0, 15.0 * 2.0, 24.0 * 3.0, 33.0 * 4.0])
     @test norm(Vector(result6) - expected6) < TOL
 
 
-    println(io0(), "[test] Two MatrixMPIs -> scalar ($T, $backend_name)")
+    println(io0(), "[test] Two HPCMatrixs -> scalar ($T, $backend_name)")
 
-    A7 = MatrixMPI(T.([1.0 2.0; 3.0 4.0]), backend)
-    B7 = MatrixMPI(T.([10.0 20.0; 30.0 40.0]), backend)
+    A7 = HPCMatrix(T.([1.0 2.0; 3.0 4.0]), backend)
+    B7 = HPCMatrix(T.([10.0 20.0; 30.0 40.0]), backend)
     result7 = map_rows((a, b) -> dot(a, b), A7, B7)
     # Row 1: [1,2] · [10,20] = 10 + 40 = 50
     # Row 2: [3,4] · [30,40] = 90 + 160 = 250
@@ -106,8 +106,8 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
 
     println(io0(), "[test] Different partitions ($T, $backend_name)")
 
-    u8 = VectorMPI(T.([1.0, 2.0, 3.0, 4.0, 5.0, 6.0]), backend)
-    v8 = VectorMPI(T.([10.0, 20.0, 30.0, 40.0, 50.0, 60.0]), backend)
+    u8 = HPCVector(T.([1.0, 2.0, 3.0, 4.0, 5.0, 6.0]), backend)
+    v8 = HPCVector(T.([10.0, 20.0, 30.0, 40.0, 50.0, 60.0]), backend)
     result8 = map_rows((a, b) -> a + b, u8, v8)
     expected8 = T.([11.0, 22.0, 33.0, 44.0, 55.0, 66.0])
     @test norm(Vector(result8) - expected8) < TOL
@@ -116,7 +116,7 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     if is_complex
         println(io0(), "[test] Complex numbers ($T, $backend_name)")
 
-        v9 = VectorMPI(T[1.0+2.0im, 3.0+4.0im, 5.0+6.0im, 7.0+8.0im], backend)
+        v9 = HPCVector(T[1.0+2.0im, 3.0+4.0im, 5.0+6.0im, 7.0+8.0im], backend)
         result9 = map_rows(r -> abs2(r), v9)
         expected9 = Treal.([5.0, 25.0, 61.0, 113.0])
         @test norm(Vector(result9) - expected9) < TOL
@@ -124,7 +124,7 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
 
         println(io0(), "[test] Complex matrix -> SVector ($T, $backend_name)")
 
-        A10 = MatrixMPI(T[1.0+1.0im 2.0-1.0im; 3.0+2.0im 4.0-2.0im], backend)
+        A10 = HPCMatrix(T[1.0+1.0im 2.0-1.0im; 3.0+2.0im 4.0-2.0im], backend)
         result10 = map_rows(r -> SVector(real(r[1]), imag(r[2])), A10)
         expected10 = Treal.([1.0 -1.0; 3.0 -2.0])
         @test norm(Matrix(result10) - expected10) < TOL
@@ -133,7 +133,7 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
 
     println(io0(), "[test] Identity SVector transform ($T, $backend_name)")
 
-    A11 = MatrixMPI(T.([1.0 2.0 3.0; 4.0 5.0 6.0]), backend)
+    A11 = HPCMatrix(T.([1.0 2.0 3.0; 4.0 5.0 6.0]), backend)
     result11 = map_rows(r -> r, A11)  # r is already SVector
     @test norm(Matrix(result11) - Matrix(A11)) < TOL
 
@@ -141,7 +141,7 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     println(io0(), "[test] Row max ($T, $backend_name)")
 
     if !is_complex  # maximum only works on real types
-        A12 = MatrixMPI(T.([1.0 5.0 3.0; 7.0 2.0 4.0; 3.0 3.0 9.0]), backend)
+        A12 = HPCMatrix(T.([1.0 5.0 3.0; 7.0 2.0 4.0; 3.0 3.0 9.0]), backend)
         result12 = map_rows(r -> maximum(r), A12)
         expected12 = T.([5.0, 7.0, 9.0])
         @test norm(Vector(result12) - expected12) < TOL

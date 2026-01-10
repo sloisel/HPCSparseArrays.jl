@@ -6,7 +6,7 @@ module TestUtils
 using SparseArrays
 using MPI
 
-# Detect Metal availability BEFORE loading LinearAlgebraMPI
+# Detect Metal availability BEFORE loading HPCLinearAlgebra
 # (Metal must be loaded first for GPU detection to work)
 const METAL_AVAILABLE = try
     using Metal
@@ -19,7 +19,7 @@ if METAL_AVAILABLE
     @info "Metal is available for GPU tests"
 end
 
-# Detect CUDA availability BEFORE loading LinearAlgebraMPI
+# Detect CUDA availability BEFORE loading HPCLinearAlgebra
 # (CUDA/NCCL/CUDSS_jll must be loaded first for GPU extension to work)
 const CUDA_AVAILABLE = try
     using CUDA
@@ -34,26 +34,26 @@ if CUDA_AVAILABLE
     @info "CUDA is available for GPU tests"
 end
 
-# Import LinearAlgebraMPI after GPU checks
-using LinearAlgebraMPI
+# Import HPCLinearAlgebra after GPU checks
+using HPCLinearAlgebra
 
 # ============================================================================
 # Backend configurations for parameterized testing
 # ============================================================================
 
-# Create backends (must be done after MPI is initialized in tests)
+# Backend getters - return pre-constructed singletons (available after MPI.Init)
 function get_cpu_backend()
-    LinearAlgebraMPI.backend_cpu_mpi(MPI.COMM_WORLD)
+    HPCLinearAlgebra.BACKEND_CPU_MPI
 end
 
 function get_metal_backend()
     @assert METAL_AVAILABLE "Metal is not available"
-    LinearAlgebraMPI.backend_metal_mpi(MPI.COMM_WORLD)
+    HPCLinearAlgebra.backend_metal_mpi(MPI.COMM_WORLD)  # Metal still uses function with comm
 end
 
 function get_cuda_backend()
     @assert CUDA_AVAILABLE "CUDA is not available"
-    LinearAlgebraMPI.backend_cuda_mpi(MPI.COMM_WORLD)
+    HPCLinearAlgebra.backend_cuda_mpi()  # Zero-arg returns singleton
 end
 
 # Backend configurations: (ScalarType, backend_getter, backend_name)
@@ -199,21 +199,21 @@ Use with `to_backend(x, cpu_version(x.backend))` to convert GPU data to CPU for 
 Note: Always uses SolverMUMPS since GPU solvers (cuDSS) don't work on CPU.
 The solver choice only matters for lu()/ldlt(), not for data comparison.
 """
-function cpu_version(backend::LinearAlgebraMPI.HPCBackend)
-    LinearAlgebraMPI.HPCBackend(
-        LinearAlgebraMPI.DeviceCPU(), backend.comm, LinearAlgebraMPI.SolverMUMPS()
+function cpu_version(backend::HPCLinearAlgebra.HPCBackend)
+    HPCLinearAlgebra.HPCBackend(
+        HPCLinearAlgebra.DeviceCPU(), backend.comm, HPCLinearAlgebra.SolverMUMPS()
     )
 end
 
 """
-    local_values(v::VectorMPI)
+    local_values(v::HPCVector)
 
 Get local values as a CPU array for comparison.
 Works for both CPU and GPU vectors by checking the backend device type.
 """
-function local_values(v::VectorMPI)
+function local_values(v::HPCVector)
     # Check if data is on GPU by looking at backend device type
-    if v.backend.device isa LinearAlgebraMPI.DeviceCPU
+    if v.backend.device isa HPCLinearAlgebra.DeviceCPU
         return v.v
     else
         # GPU case: convert to Array
@@ -275,11 +275,11 @@ Example:
         result = assert_type(A * x, VT)  # Assert exact type match
     end
 """
-function expected_types(::Type{T}, backend::LinearAlgebraMPI.HPCBackend) where T
+function expected_types(::Type{T}, backend::HPCLinearAlgebra.HPCBackend) where T
     BK = typeof(backend)
-    (VectorMPI{T, BK},
-     SparseMatrixMPI{T, Int, BK},
-     MatrixMPI{T, BK})
+    (HPCVector{T, BK},
+     HPCSparseMatrix{T, Int, BK},
+     HPCMatrix{T, BK})
 end
 
 export METAL_AVAILABLE, CUDA_AVAILABLE, CPU_CONFIGS, GPU_CONFIGS, ALL_CONFIGS, CPU_ONLY_CONFIGS

@@ -13,7 +13,7 @@ end
 using MPI
 MPI.Init()
 
-using LinearAlgebraMPI
+using HPCLinearAlgebra
 using SparseArrays
 using LinearAlgebra: norm
 using Test
@@ -111,9 +111,9 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     ref = cat(A, B, C; dims=1)
 
     # MPI version
-    Adist = SparseMatrixMPI(A, backend)
-    Bdist = SparseMatrixMPI(B, backend)
-    Cdist = SparseMatrixMPI(C, backend)
+    Adist = HPCSparseMatrix(A, backend)
+    Bdist = HPCSparseMatrix(B, backend)
+    Cdist = HPCSparseMatrix(C, backend)
 
     result_dist = assert_type(cat(Adist, Bdist, Cdist; dims=1), ST)
     result = SparseMatrixCSC(result_dist)
@@ -132,9 +132,9 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     ref = cat(A, B, C; dims=2)
 
     # MPI version
-    Adist = SparseMatrixMPI(A, backend)
-    Bdist = SparseMatrixMPI(B, backend)
-    Cdist = SparseMatrixMPI(C, backend)
+    Adist = HPCSparseMatrix(A, backend)
+    Bdist = HPCSparseMatrix(B, backend)
+    Cdist = HPCSparseMatrix(C, backend)
 
     result_dist = assert_type(cat(Adist, Bdist, Cdist; dims=2), ST)
     result = SparseMatrixCSC(result_dist)
@@ -155,10 +155,10 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     ref = [A B; C D]
 
     # MPI version (row-major order: A, B, C, D)
-    Adist = SparseMatrixMPI(A, backend)
-    Bdist = SparseMatrixMPI(B, backend)
-    Cdist = SparseMatrixMPI(C, backend)
-    Ddist = SparseMatrixMPI(D, backend)
+    Adist = HPCSparseMatrix(A, backend)
+    Bdist = HPCSparseMatrix(B, backend)
+    Cdist = HPCSparseMatrix(C, backend)
+    Ddist = HPCSparseMatrix(D, backend)
 
     result_dist = assert_type(cat(Adist, Bdist, Cdist, Ddist; dims=(2, 2)), ST)
     result = SparseMatrixCSC(result_dist)
@@ -183,12 +183,12 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     ref = [A B; C D; E F]
 
     # MPI version
-    Adist = SparseMatrixMPI(A, backend)
-    Bdist = SparseMatrixMPI(B, backend)
-    Cdist = SparseMatrixMPI(C, backend)
-    Ddist = SparseMatrixMPI(D, backend)
-    Edist = SparseMatrixMPI(E, backend)
-    Fdist = SparseMatrixMPI(F, backend)
+    Adist = HPCSparseMatrix(A, backend)
+    Bdist = HPCSparseMatrix(B, backend)
+    Cdist = HPCSparseMatrix(C, backend)
+    Ddist = HPCSparseMatrix(D, backend)
+    Edist = HPCSparseMatrix(E, backend)
+    Fdist = HPCSparseMatrix(F, backend)
 
     result_dist = assert_type(cat(Adist, Bdist, Cdist, Ddist, Edist, Fdist; dims=(3, 2)), ST)
     result = SparseMatrixCSC(result_dist)
@@ -212,12 +212,12 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     ref = [A B C; D E F]
 
     # MPI version
-    Adist = SparseMatrixMPI(A, backend)
-    Bdist = SparseMatrixMPI(B, backend)
-    Cdist = SparseMatrixMPI(C, backend)
-    Ddist = SparseMatrixMPI(D, backend)
-    Edist = SparseMatrixMPI(E, backend)
-    Fdist = SparseMatrixMPI(F, backend)
+    Adist = HPCSparseMatrix(A, backend)
+    Bdist = HPCSparseMatrix(B, backend)
+    Cdist = HPCSparseMatrix(C, backend)
+    Ddist = HPCSparseMatrix(D, backend)
+    Edist = HPCSparseMatrix(E, backend)
+    Fdist = HPCSparseMatrix(F, backend)
 
     result_dist = assert_type(cat(Adist, Bdist, Cdist, Ddist, Edist, Fdist; dims=(2, 3)), ST)
     result = SparseMatrixCSC(result_dist)
@@ -225,7 +225,7 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     @test norm(result - ref, Inf) < TOL
 
 
-    println(io0(), "[test] VectorMPI vcat ($T, $backend_name)")
+    println(io0(), "[test] HPCVector vcat ($T, $backend_name)")
 
     v1 = make_vector(T, 10)
     v2 = make_vector(T, 8) .* T(2)
@@ -233,9 +233,9 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
 
     ref = vcat(v1, v2, v3)
 
-    v1dist = VectorMPI(v1, backend)
-    v2dist = VectorMPI(v2, backend)
-    v3dist = VectorMPI(v3, backend)
+    v1dist = HPCVector(v1, backend)
+    v2dist = HPCVector(v2, backend)
+    v3dist = HPCVector(v3, backend)
 
     result_dist = assert_type(vcat(v1dist, v2dist, v3dist), VT)
     result = Vector(result_dist)
@@ -243,7 +243,7 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     @test norm(result - ref, Inf) < TOL
 
 
-    println(io0(), "[test] VectorMPI hcat ($T, $backend_name)")
+    println(io0(), "[test] HPCVector hcat ($T, $backend_name)")
 
     # Create vectors with same length
     v1 = make_vector(T, 10)
@@ -252,13 +252,13 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
 
     ref = hcat(v1, v2, v3)
 
-    v1dist = VectorMPI(v1, backend)
-    v2dist = VectorMPI(v2, backend)
-    v3dist = VectorMPI(v3, backend)
+    v1dist = HPCVector(v1, backend)
+    v2dist = HPCVector(v2, backend)
+    v3dist = HPCVector(v3, backend)
 
     result_dist = assert_type(hcat(v1dist, v2dist, v3dist), MT)
 
-    # Result should be MatrixMPI
+    # Result should be HPCMatrix
     @test size(result_dist) == (10, 3)
     result_full = Matrix(result_dist)
     @test norm(result_full - ref, Inf) < TOL
@@ -272,9 +272,9 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
 
     ref = blockdiag(A, B, C)
 
-    Adist = SparseMatrixMPI(A, backend)
-    Bdist = SparseMatrixMPI(B, backend)
-    Cdist = SparseMatrixMPI(C, backend)
+    Adist = HPCSparseMatrix(A, backend)
+    Bdist = HPCSparseMatrix(B, backend)
+    Cdist = HPCSparseMatrix(C, backend)
 
     result_dist = assert_type(blockdiag(Adist, Bdist, Cdist), ST)
     result = SparseMatrixCSC(result_dist)
@@ -283,7 +283,7 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     @test size(result) == (8 + 5 + 4, 6 + 7 + 3)
 
 
-    println(io0(), "[test] MatrixMPI vcat ($T, $backend_name)")
+    println(io0(), "[test] HPCMatrix vcat ($T, $backend_name)")
 
     # Create dense matrices to stack vertically
     A_dense = make_dense(T, 8, 10)
@@ -292,9 +292,9 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
 
     ref = vcat(A_dense, B_dense, C_dense)
 
-    Adist = MatrixMPI(A_dense, backend)
-    Bdist = MatrixMPI(B_dense, backend)
-    Cdist = MatrixMPI(C_dense, backend)
+    Adist = HPCMatrix(A_dense, backend)
+    Bdist = HPCMatrix(B_dense, backend)
+    Cdist = HPCMatrix(C_dense, backend)
 
     result_dist = assert_type(vcat(Adist, Bdist, Cdist), MT)
 
@@ -304,7 +304,7 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     @test norm(result_full - ref, Inf) < TOL
 
 
-    println(io0(), "[test] MatrixMPI hcat ($T, $backend_name)")
+    println(io0(), "[test] HPCMatrix hcat ($T, $backend_name)")
 
     # Create dense matrices to stack horizontally
     A_dense = make_dense(T, 10, 8)
@@ -313,9 +313,9 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
 
     ref = hcat(A_dense, B_dense, C_dense)
 
-    Adist = MatrixMPI(A_dense, backend)
-    Bdist = MatrixMPI(B_dense, backend)
-    Cdist = MatrixMPI(C_dense, backend)
+    Adist = HPCMatrix(A_dense, backend)
+    Bdist = HPCMatrix(B_dense, backend)
+    Cdist = HPCMatrix(C_dense, backend)
 
     result_dist = assert_type(hcat(Adist, Bdist, Cdist), MT)
 
@@ -324,7 +324,7 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     @test norm(result_full - ref, Inf) < TOL
 
 
-    println(io0(), "[test] MatrixMPI cat dims=(2,2) ($T, $backend_name)")
+    println(io0(), "[test] HPCMatrix cat dims=(2,2) ($T, $backend_name)")
 
     # Create 4 matrices for 2x2 block [A B; C D]
     A_dense = make_dense(T, 8, 6)
@@ -334,10 +334,10 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
 
     ref = [A_dense B_dense; C_dense D_dense]
 
-    Adist = MatrixMPI(A_dense, backend)
-    Bdist = MatrixMPI(B_dense, backend)
-    Cdist = MatrixMPI(C_dense, backend)
-    Ddist = MatrixMPI(D_dense, backend)
+    Adist = HPCMatrix(A_dense, backend)
+    Bdist = HPCMatrix(B_dense, backend)
+    Cdist = HPCMatrix(C_dense, backend)
+    Ddist = HPCMatrix(D_dense, backend)
 
     result_dist = assert_type(cat(Adist, Bdist, Cdist, Ddist; dims=(2, 2)), MT)
 
@@ -346,7 +346,7 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     @test norm(result_full - ref, Inf) < TOL
 
 
-    println(io0(), "[test] VectorMPI cat with tuple dims ($T, $backend_name)")
+    println(io0(), "[test] HPCVector cat with tuple dims ($T, $backend_name)")
 
     # Test dims=(n,1) same as vcat
     v1 = make_vector(T, 10)
@@ -355,9 +355,9 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
 
     ref = vcat(v1, v2, v3)
 
-    v1dist = VectorMPI(v1, backend)
-    v2dist = VectorMPI(v2, backend)
-    v3dist = VectorMPI(v3, backend)
+    v1dist = HPCVector(v1, backend)
+    v2dist = HPCVector(v2, backend)
+    v3dist = HPCVector(v3, backend)
 
     result_dist = assert_type(cat(v1dist, v2dist, v3dist; dims=(3, 1)), VT)
     result = Vector(result_dist)
@@ -369,9 +369,9 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     v2 = make_vector(T, 10) .* T(2)
     v3 = make_vector(T, 10) .* T(3)
 
-    v1dist = VectorMPI(v1, backend)
-    v2dist = VectorMPI(v2, backend)
-    v3dist = VectorMPI(v3, backend)
+    v1dist = HPCVector(v1, backend)
+    v2dist = HPCVector(v2, backend)
+    v3dist = HPCVector(v3, backend)
 
     result_dist = assert_type(cat(v1dist, v2dist, v3dist; dims=(1, 3)), MT)
 
@@ -379,7 +379,7 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
 
     # Test dims=(1,1) with single vector
     v_single = make_vector(T, 15)
-    v_single_dist = VectorMPI(v_single, backend)
+    v_single_dist = HPCVector(v_single, backend)
     result_single = assert_type(cat(v_single_dist; dims=(1, 1)), VT)
     result_gathered = Vector(result_single)
 

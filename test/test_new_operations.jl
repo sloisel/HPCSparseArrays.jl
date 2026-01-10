@@ -12,7 +12,7 @@ end
 using MPI
 MPI.Init()
 
-using LinearAlgebraMPI
+using HPCLinearAlgebra
 using LinearAlgebra
 using SparseArrays
 using Test
@@ -52,43 +52,43 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
         A_sparse_local_vals, n, n
     )
     A_sparse_local = A_sparse_local + transpose(A_sparse_local) + T(2) * I
-    A_sparse = SparseMatrixMPI(A_sparse_local, backend)
+    A_sparse = HPCSparseMatrix(A_sparse_local, backend)
 
     # Create a test dense matrix (n x m) with deterministic values
     B_dense_local = T.([Float64(i + j*0.1) for i in 1:n, j in 1:m])
-    B_dense = MatrixMPI(B_dense_local, backend)
+    B_dense = HPCMatrix(B_dense_local, backend)
 
     # Create a test dense matrix (m x n)
     C_dense_local = T.([Float64(i*0.1 + j) for i in 1:m, j in 1:n])
-    C_dense = MatrixMPI(C_dense_local, backend)
+    C_dense = HPCMatrix(C_dense_local, backend)
 
     # Create test vectors
     x_local = T.(Float64.(1:n) .+ 0.1)
-    x = VectorMPI(x_local, backend)
+    x = HPCVector(x_local, backend)
 
     y_local = T.(Float64.(n:-1:1) .+ 0.1)
-    y = VectorMPI(y_local, backend)
+    y = HPCVector(y_local, backend)
 
 
-    println(io0(), "[test] transpose(SparseMatrixMPI) * VectorMPI ($T, $backend_name)")
+    println(io0(), "[test] transpose(HPCSparseMatrix) * HPCVector ($T, $backend_name)")
     result1 = transpose(A_sparse) * x
     expected1 = transpose(A_sparse_local) * x_local
     @test assert_uniform(norm(Vector(result1) - expected1), name="trans_sparse_vec_err") < TOL
 
 
-    println(io0(), "[test] SparseMatrixMPI * MatrixMPI ($T, $backend_name)")
+    println(io0(), "[test] HPCSparseMatrix * HPCMatrix ($T, $backend_name)")
     result2 = A_sparse * B_dense
     expected2 = A_sparse_local * B_dense_local
     @test assert_uniform(norm(Matrix(result2) - expected2), name="sparse_dense_err") < TOL
 
 
-    println(io0(), "[test] transpose(SparseMatrixMPI) * MatrixMPI ($T, $backend_name)")
+    println(io0(), "[test] transpose(HPCSparseMatrix) * HPCMatrix ($T, $backend_name)")
     result3 = transpose(A_sparse) * B_dense
     expected3 = transpose(A_sparse_local) * B_dense_local
     @test norm(Matrix(result3) - expected3) < TOL
 
 
-    println(io0(), "[test] MatrixMPI * SparseMatrixMPI ($T, $backend_name)")
+    println(io0(), "[test] HPCMatrix * HPCSparseMatrix ($T, $backend_name)")
     # D_sparse is n x m, E_dense is m x n, so E_dense * D_sparse is m x m
     D_sparse_local_vals = T.([1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
     D_sparse_local = sparse(
@@ -96,31 +96,31 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
         [1, 2, 3, 4, 5, 6],
         D_sparse_local_vals, n, m
     )
-    D_sparse = SparseMatrixMPI(D_sparse_local, backend)
+    D_sparse = HPCSparseMatrix(D_sparse_local, backend)
 
     E_dense_local = T.([Float64(i*0.2 + j*0.3) for i in 1:m, j in 1:n])
-    E_dense = MatrixMPI(E_dense_local, backend)
+    E_dense = HPCMatrix(E_dense_local, backend)
 
     result4 = E_dense * D_sparse
     expected4 = E_dense_local * D_sparse_local
     @test norm(Matrix(result4) - expected4) < TOL
 
 
-    println(io0(), "[test] transpose(MatrixMPI) * MatrixMPI ($T, $backend_name)")
+    println(io0(), "[test] transpose(HPCMatrix) * HPCMatrix ($T, $backend_name)")
     # transpose(B_dense) is m x n, B_dense is n x m, so result is m x m
     result5 = transpose(B_dense) * B_dense
     expected5 = transpose(B_dense_local) * B_dense_local
     @test norm(Matrix(result5) - expected5) < TOL
 
 
-    println(io0(), "[test] transpose(MatrixMPI) * SparseMatrixMPI ($T, $backend_name)")
+    println(io0(), "[test] transpose(HPCMatrix) * HPCSparseMatrix ($T, $backend_name)")
     # transpose(B_dense) is m x n, A_sparse is n x n
     result6 = transpose(B_dense) * A_sparse
     expected6 = transpose(B_dense_local) * A_sparse_local
     @test norm(Matrix(result6) - expected6) < TOL
 
 
-    println(io0(), "[test] MatrixMPI column indexing ($T, $backend_name)")
+    println(io0(), "[test] HPCMatrix column indexing ($T, $backend_name)")
     for k in 1:m
         result7 = B_dense[:, k]
         expected7 = B_dense_local[:, k]
@@ -128,7 +128,7 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     end
 
 
-    println(io0(), "[test] SparseMatrixMPI column indexing ($T, $backend_name)")
+    println(io0(), "[test] HPCSparseMatrix column indexing ($T, $backend_name)")
     for k in 1:n
         result8 = A_sparse[:, k]
         expected8 = Vector(A_sparse_local[:, k])
@@ -136,7 +136,7 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     end
 
 
-    println(io0(), "[test] dot(VectorMPI, VectorMPI) ($T, $backend_name)")
+    println(io0(), "[test] dot(HPCVector, HPCVector) ($T, $backend_name)")
     result9 = assert_uniform(dot(x, y), name="dot_xy")
     expected9 = dot(x_local, y_local)
     @test abs(result9 - expected9) < TOL

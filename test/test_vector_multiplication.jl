@@ -13,7 +13,7 @@ end
 using MPI
 MPI.Init()
 
-using LinearAlgebraMPI
+using HPCLinearAlgebra
 using SparseArrays
 using LinearAlgebra
 using Test
@@ -46,8 +46,8 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     x_global = TestUtils.test_vector(T, n)
 
     # Create distributed versions
-    Adist = SparseMatrixMPI(A, backend)
-    xdist = VectorMPI(x_global, backend)
+    Adist = HPCSparseMatrix(A, backend)
+    xdist = HPCVector(x_global, backend)
 
     # Compute distributed product
     ydist = assert_type(Adist * xdist, VT)
@@ -71,11 +71,11 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     A = TestUtils.tridiagonal_matrix(T, n)
     x_global = TestUtils.test_vector(T, n)
 
-    Adist = SparseMatrixMPI(A, backend)
-    xdist = VectorMPI(x_global, backend)
+    Adist = HPCSparseMatrix(A, backend)
+    xdist = HPCVector(x_global, backend)
 
     # Create output vector with matching partition
-    ydist = VectorMPI(zeros(T, n), backend)
+    ydist = HPCVector(zeros(T, n), backend)
 
     # In-place multiplication
     LinearAlgebra.mul!(ydist, Adist, xdist)
@@ -103,8 +103,8 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
 
     x_global = TestUtils.test_vector(T, k)
 
-    Adist = SparseMatrixMPI(A, backend)
-    xdist = VectorMPI(x_global, backend)
+    Adist = HPCSparseMatrix(A, backend)
+    xdist = HPCVector(x_global, backend)
 
     ydist = assert_type(Adist * xdist, VT)
     y_ref = A * x_global
@@ -126,8 +126,8 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
         A = TestUtils.tridiagonal_matrix(T, n)
         x_global = TestUtils.test_vector(T, n)
 
-        Adist = SparseMatrixMPI(A, backend)
-        xdist = VectorMPI(x_global, backend)
+        Adist = HPCSparseMatrix(A, backend)
+        xdist = HPCVector(x_global, backend)
 
         # Test conj(v)
         xconj = assert_type(conj(xdist), VT)
@@ -164,7 +164,7 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
 
     n = 10
     x_global = TestUtils.test_vector(T, n)
-    xdist = VectorMPI(x_global, backend)
+    xdist = HPCVector(x_global, backend)
 
     # For GPU, norm requires CPU conversion
     xdist_cpu = to_backend(xdist, cpu_backend)
@@ -200,7 +200,7 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     n = 8
     # Use real values for reductions (prod can overflow with complex)
     x_global_real = real(T).(collect(1.0:n))
-    xdist = VectorMPI(x_global_real, backend)
+    xdist = HPCVector(x_global_real, backend)
     xdist_cpu = to_backend(xdist, cpu_backend)
 
     # sum
@@ -229,8 +229,8 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     n = 8
     u_global, v_global = TestUtils.test_vector_pair(T, n)
 
-    udist = VectorMPI(u_global, backend)
-    vdist = VectorMPI(v_global, backend)
+    udist = HPCVector(u_global, backend)
+    vdist = HPCVector(v_global, backend)
 
     my_start = udist.partition[rank+1]
     my_end = udist.partition[rank+2] - 1
@@ -261,7 +261,7 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
 
     n = 8
     v_global = TestUtils.test_vector(T, n)
-    vdist = VectorMPI(v_global, backend)
+    vdist = HPCVector(v_global, backend)
     a = T <: Complex ? T(3.5 + 0.5im) : T(3.5)
 
     my_start = vdist.partition[rank+1]
@@ -319,19 +319,19 @@ if nranks < 2
     @test true  # Pass trivially
 else
     # Clear cache to avoid interference from previous tests
-    LinearAlgebraMPI.clear_plan_cache!()
+    HPCLinearAlgebra.clear_plan_cache!()
 
     # Use Float64 for this test (partition logic is type-independent)
     T = Float64
     TOL = TestUtils.tolerance(T)
-    backend = backend_cpu_mpi(comm)
+    backend = BACKEND_CPU_MPI
 
     # Use a size that works well with nranks
     n = 3 * nranks
     u_global, v_global = TestUtils.test_vector_pair(T, n)
 
     # Create u with default partition
-    udist = VectorMPI(u_global, backend)
+    udist = HPCVector(u_global, backend)
 
     # Create v with a different (custom) partition
     custom_partition = Vector{Int}(undef, nranks + 1)
@@ -345,9 +345,9 @@ else
     end
     custom_partition[end] = n + 1
 
-    v_hash = LinearAlgebraMPI.compute_partition_hash(custom_partition)
+    v_hash = HPCLinearAlgebra.compute_partition_hash(custom_partition)
     local_v_range = custom_partition[rank+1]:(custom_partition[rank+2]-1)
-    vdist = VectorMPI{T}(v_hash, copy(custom_partition), v_global[local_v_range], backend)
+    vdist = HPCVector{T}(v_hash, copy(custom_partition), v_global[local_v_range], backend)
 
     # Verify partitions are different
     @test udist.partition != vdist.partition
@@ -388,12 +388,12 @@ println(io0(), "[test] Vector size and eltype")
 
 n = 8
 v_global = collect(1.0:n)
-vdist = VectorMPI(v_global, backend_cpu_mpi(comm))
+vdist = HPCVector(v_global, BACKEND_CPU_MPI)
 
 @test assert_uniform(length(vdist), name="length") == n
 @test assert_uniform(size(vdist, 1), name="size1") == n
 @test eltype(vdist) == Float64
-@test eltype(VectorMPI{ComplexF64}) == ComplexF64
+@test eltype(HPCVector{ComplexF64}) == ComplexF64
 
 
 end  # QuietTestSet

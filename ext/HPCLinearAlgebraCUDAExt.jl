@@ -1,17 +1,17 @@
 """
-    LinearAlgebraMPICUDAExt
+    HPCLinearAlgebraCUDAExt
 
-Extension module for CUDA GPU support in LinearAlgebraMPI.
+Extension module for CUDA GPU support in HPCLinearAlgebra.
 Provides:
 - DeviceCUDA backend support for CuArray-backed distributed arrays
 - cuDSS sparse direct solver with NCCL backend for multi-GPU factorization
 
-Requires: `using CUDA, NCCL_jll, CUDSS_jll` before loading LinearAlgebraMPI.
+Requires: `using CUDA, NCCL_jll, CUDSS_jll` before loading HPCLinearAlgebra.
 (Uses NCCL_jll directly instead of NCCL.jl to avoid finalizer-induced MPI desync.)
 """
-module LinearAlgebraMPICUDAExt
+module HPCLinearAlgebraCUDAExt
 
-using LinearAlgebraMPI
+using HPCLinearAlgebra
 using CUDA
 using NCCL_jll
 using CUDSS_jll
@@ -25,36 +25,99 @@ using LinearAlgebra
 # ============================================================================
 
 # Import backend types
-using LinearAlgebraMPI: HPCBackend, DeviceCPU, DeviceCUDA, DeviceMetal,
+using HPCLinearAlgebra: HPCBackend, DeviceCPU, DeviceCUDA, DeviceMetal,
                         CommSerial, CommMPI, AbstractComm, AbstractDevice,
                         SolverMUMPS, AbstractSolverCuDSS,
                         comm_rank, comm_size, comm_barrier
 
 # Type aliases for convenience
-const CuBackend{C,S} = LinearAlgebraMPI.HPCBackend{LinearAlgebraMPI.DeviceCUDA, C, S}
-const CPUBackend{C,S} = LinearAlgebraMPI.HPCBackend{LinearAlgebraMPI.DeviceCPU, C, S}
+const CuBackend{C,S} = HPCLinearAlgebra.HPCBackend{HPCLinearAlgebra.DeviceCUDA, C, S}
+const CPUBackend{C,S} = HPCLinearAlgebra.HPCBackend{HPCLinearAlgebra.DeviceCPU, C, S}
+
+# ============================================================================
+# cuDSS Solver Types
+# ============================================================================
 
 """
+    SolverCuDSS <: AbstractSolverCuDSS
+
+cuDSS sparse direct solver for CUDA GPUs.
+- With CommSerial: Single-GPU cuDSS
+- With CommMPI: Multi-GPU Multi-Node (MGMN) cuDSS with NCCL backend
+"""
+struct SolverCuDSS <: HPCLinearAlgebra.AbstractSolverCuDSS end
+
+# ============================================================================
+# Pre-constructed Backend Constants
+# ============================================================================
+#
+# These are defined before the factory functions so they can be referenced.
+
+"""
+    BACKEND_CUDA_SERIAL
+
+Pre-constructed CUDA backend with serial communication and cuDSS solver.
+Use this for single-GPU computations without MPI.
+
+Access via `backend_cuda_serial()` after loading CUDA.
+"""
+const BACKEND_CUDA_SERIAL = HPCLinearAlgebra.HPCBackend(DeviceCUDA(), CommSerial(), SolverCuDSS())
+
+"""
+    BACKEND_CUDA_MPI
+
+Pre-constructed CUDA backend with MPI communication (using COMM_WORLD) and cuDSS solver.
+Uses NCCL for inter-GPU communication in multi-GPU mode.
+
+Note: While this constant is created at module load time, actual MPI/NCCL operations
+will only work after MPI.Init() has been called.
+
+Access via `backend_cuda_mpi()` after loading CUDA.
+"""
+const BACKEND_CUDA_MPI = HPCLinearAlgebra.HPCBackend(DeviceCUDA(), CommMPI(MPI.COMM_WORLD), SolverCuDSS())
+
+# ============================================================================
+# Backend Factory Functions
+# ============================================================================
+
+"""
+    backend_cuda_serial() -> HPCBackend
+
+Return the pre-constructed CUDA backend with serial communication and cuDSS solver.
+"""
+function HPCLinearAlgebra.backend_cuda_serial()
+    return BACKEND_CUDA_SERIAL
+end
+
+"""
+    backend_cuda_mpi() -> HPCBackend
     backend_cuda_mpi(comm::MPI.Comm) -> HPCBackend
 
-Create a CUDA GPU backend with MPI communication and MUMPS solver.
-For cuDSS solver support, use backend_cuda_cudss_mpi instead.
+Return a CUDA GPU backend with MPI communication and cuDSS solver (MGMN mode).
+
+The zero-argument form returns the pre-constructed backend (using COMM_WORLD).
+The one-argument form creates a new backend with the specified communicator.
 """
-function LinearAlgebraMPI.backend_cuda_mpi(comm)
-    return LinearAlgebraMPI.HPCBackend(DeviceCUDA(), CommMPI(comm), SolverMUMPS())
+function HPCLinearAlgebra.backend_cuda_mpi()
+    return BACKEND_CUDA_MPI
 end
+
+function HPCLinearAlgebra.backend_cuda_mpi(comm)
+    return HPCLinearAlgebra.HPCBackend(DeviceCUDA(), CommMPI(comm), SolverCuDSS())
+end
+
 
 # ============================================================================
 # _convert_array methods for CUDA
 # ============================================================================
 
 # CPU → CUDA: copy to GPU
-LinearAlgebraMPI._convert_array(v::Vector, ::LinearAlgebraMPI.DeviceCUDA) = CuVector(v)
-LinearAlgebraMPI._convert_array(A::Matrix, ::LinearAlgebraMPI.DeviceCUDA) = CuMatrix(A)
+HPCLinearAlgebra._convert_array(v::Vector, ::HPCLinearAlgebra.DeviceCUDA) = CuVector(v)
+HPCLinearAlgebra._convert_array(A::Matrix, ::HPCLinearAlgebra.DeviceCUDA) = CuMatrix(A)
 
 # CUDA → CUDA: identity (no copy)
-LinearAlgebraMPI._convert_array(v::CuVector, ::LinearAlgebraMPI.DeviceCUDA) = v
-LinearAlgebraMPI._convert_array(A::CuMatrix, ::LinearAlgebraMPI.DeviceCUDA) = A
+HPCLinearAlgebra._convert_array(v::CuVector, ::HPCLinearAlgebra.DeviceCUDA) = v
+HPCLinearAlgebra._convert_array(A::CuMatrix, ::HPCLinearAlgebra.DeviceCUDA) = A
 
 # ============================================================================
 # Backend helper functions
@@ -64,9 +127,9 @@ LinearAlgebraMPI._convert_array(A::CuMatrix, ::LinearAlgebraMPI.DeviceCUDA) = A
     _zeros_device(::DeviceCUDA, ::Type{T}, dims...) where T
 
 Create a zero CuVector/CuMatrix of the specified dimensions on CUDA device.
-Used by Base.zeros(VectorMPI, backend, n) etc.
+Used by Base.zeros(HPCVector, backend, n) etc.
 """
-LinearAlgebraMPI._zeros_device(::LinearAlgebraMPI.DeviceCUDA, ::Type{T}, dims...) where T = CUDA.zeros(T, dims...)
+HPCLinearAlgebra._zeros_device(::HPCLinearAlgebra.DeviceCUDA, ::Type{T}, dims...) where T = CUDA.zeros(T, dims...)
 
 """
     _index_array_type(::DeviceCUDA, ::Type{Ti}) where Ti
@@ -74,15 +137,15 @@ LinearAlgebraMPI._zeros_device(::LinearAlgebraMPI.DeviceCUDA, ::Type{T}, dims...
 Map DeviceCUDA to CuVector{Ti} index array type.
 Used by MatrixPlan to store symbolic index arrays on GPU.
 """
-LinearAlgebraMPI._index_array_type(::LinearAlgebraMPI.DeviceCUDA, ::Type{Ti}) where Ti = CuVector{Ti}
+HPCLinearAlgebra._index_array_type(::HPCLinearAlgebra.DeviceCUDA, ::Type{Ti}) where Ti = CuVector{Ti}
 
 """
     _to_target_device(v::Vector{Ti}, ::DeviceCUDA) where Ti
 
 Convert a CPU index vector to CUDA GPU.
-Used by SparseMatrixMPI constructors to create GPU structure arrays.
+Used by HPCSparseMatrix constructors to create GPU structure arrays.
 """
-LinearAlgebraMPI._to_target_device(v::Vector{Ti}, ::LinearAlgebraMPI.DeviceCUDA) where Ti = CuVector(v)
+HPCLinearAlgebra._to_target_device(v::Vector{Ti}, ::HPCLinearAlgebra.DeviceCUDA) where Ti = CuVector(v)
 
 """
     _array_to_device(v::Vector{T}, ::DeviceCUDA) where T
@@ -90,20 +153,20 @@ LinearAlgebraMPI._to_target_device(v::Vector{Ti}, ::LinearAlgebraMPI.DeviceCUDA)
 Convert a CPU vector to a CUDA GPU vector.
 Used by MUMPS factorization for round-trip GPU conversion during solve.
 """
-function LinearAlgebraMPI._array_to_device(v::Vector{T}, ::LinearAlgebraMPI.DeviceCUDA) where T
+function HPCLinearAlgebra._array_to_device(v::Vector{T}, ::HPCLinearAlgebra.DeviceCUDA) where T
     return CuVector(v)
 end
 
 """
-    _convert_vector_to_device(v::LinearAlgebraMPI.VectorMPI, ::DeviceCUDA)
+    _convert_vector_to_device(v::HPCLinearAlgebra.HPCVector, ::DeviceCUDA)
 
-Convert a VectorMPI to CUDA GPU device.
+Convert a HPCVector to CUDA GPU device.
 Used by MUMPS factorization for GPU reconstruction after solve.
 """
-function LinearAlgebraMPI._convert_vector_to_device(v::LinearAlgebraMPI.VectorMPI, device::LinearAlgebraMPI.DeviceCUDA)
+function HPCLinearAlgebra._convert_vector_to_device(v::HPCLinearAlgebra.HPCVector, device::HPCLinearAlgebra.DeviceCUDA)
     # Create CUDA backend preserving comm and solver
-    cuda_backend = LinearAlgebraMPI.HPCBackend(device, v.backend.comm, v.backend.solver)
-    return LinearAlgebraMPI.to_backend(v, cuda_backend)
+    cuda_backend = HPCLinearAlgebra.HPCBackend(device, v.backend.comm, v.backend.solver)
+    return HPCLinearAlgebra.to_backend(v, cuda_backend)
 end
 
 # ============================================================================
@@ -451,7 +514,7 @@ Resources:
 - handle, config: Global (cached per-process, not destroyed)
 - data, matrix, solution, rhs: Per-factorization (destroyed in finalize!)
 """
-mutable struct CuDSSFactorizationMPI{T, B<:LinearAlgebraMPI.HPCBackend}
+mutable struct CuDSSFactorizationMPI{T, B<:HPCLinearAlgebra.HPCBackend}
     # cuDSS handles (global, NOT owned - do not destroy)
     handle::cudssHandle_t
     config::cudssConfig_t
@@ -486,7 +549,7 @@ end
 # ============================================================================
 
 """
-    lu(A::SparseMatrixMPI{T,Ti,<:CuBackend})
+    lu(A::HPCSparseMatrix{T,Ti,<:CuBackend})
 
 Compute LU factorization of a GPU sparse matrix using cuDSS.
 Returns a CuDSSFactorizationMPI that can be used with `F \\ b`.
@@ -495,12 +558,12 @@ If a previous factorization with the same sparsity structure exists,
 the cached analysis (permutation + elimination tree) is reused,
 skipping the expensive reordering phase.
 """
-function LinearAlgebra.lu(A::LinearAlgebraMPI.SparseMatrixMPI{T,Ti,<:CuBackend}) where {T,Ti}
+function LinearAlgebra.lu(A::HPCLinearAlgebra.HPCSparseMatrix{T,Ti,<:CuBackend}) where {T,Ti}
     return _create_cudss_factorization(A, false)
 end
 
 """
-    ldlt(A::SparseMatrixMPI{T,Ti,<:CuBackend})
+    ldlt(A::HPCSparseMatrix{T,Ti,<:CuBackend})
 
 Compute LDLT factorization of a symmetric positive definite GPU sparse matrix.
 Returns a CuDSSFactorizationMPI that can be used with `F \\ b`.
@@ -508,14 +571,14 @@ Returns a CuDSSFactorizationMPI that can be used with `F \\ b`.
 If a previous factorization with the same sparsity structure exists,
 the cached analysis (permutation + elimination tree) is reused.
 """
-function LinearAlgebra.ldlt(A::LinearAlgebraMPI.SparseMatrixMPI{T,Ti,<:CuBackend}) where {T,Ti}
+function LinearAlgebra.ldlt(A::HPCLinearAlgebra.HPCSparseMatrix{T,Ti,<:CuBackend}) where {T,Ti}
     return _create_cudss_factorization(A, true)
 end
 
 """
 Internal: Create cuDSS factorization with analysis caching.
 """
-function _create_cudss_factorization(A::LinearAlgebraMPI.SparseMatrixMPI{T,Ti,B}, symmetric::Bool) where {T,Ti,B}
+function _create_cudss_factorization(A::HPCLinearAlgebra.HPCSparseMatrix{T,Ti,B}, symmetric::Bool) where {T,Ti,B}
     comm = A.backend.comm
     rank = comm_rank(comm)
     nranks = comm_size(comm)
@@ -529,7 +592,7 @@ function _create_cudss_factorization(A::LinearAlgebraMPI.SparseMatrixMPI{T,Ti,B}
     CUDA.device!(gpu_id)
 
     # Ensure structural hash exists
-    structural_hash = LinearAlgebraMPI._ensure_hash(A)
+    structural_hash = HPCLinearAlgebra._ensure_hash(A)
     cache_key = (structural_hash, symmetric, T)
 
     # Get matrix dimensions
@@ -548,7 +611,7 @@ function _create_cudss_factorization(A::LinearAlgebraMPI.SparseMatrixMPI{T,Ti,B}
     col_indices_gpu = CuVector{Int32}(col_indices_global_cpu)
 
     # Values
-    values_cpu = LinearAlgebraMPI._ensure_cpu(A.nzval)
+    values_cpu = HPCLinearAlgebra._ensure_cpu(A.nzval)
     values_gpu = CuVector{T}(values_cpu)
     nnz_local = length(values_gpu)
 
@@ -632,16 +695,16 @@ function _create_cudss_factorization(A::LinearAlgebraMPI.SparseMatrixMPI{T,Ti,B}
 end
 
 # Helper to extract MPI.Comm from AbstractComm for NCCL bootstrapping
-_get_mpi_comm_for_nccl(c::LinearAlgebraMPI.CommMPI) = c.comm
-_get_mpi_comm_for_nccl(::LinearAlgebraMPI.CommSerial) = error("cuDSS MGMN mode requires MPI communication (CommMPI), not CommSerial")
+_get_mpi_comm_for_nccl(c::HPCLinearAlgebra.CommMPI) = c.comm
+_get_mpi_comm_for_nccl(::HPCLinearAlgebra.CommSerial) = error("cuDSS MGMN mode requires MPI communication (CommMPI), not CommSerial")
 
 """
-    solve(F::CuDSSFactorizationMPI{T,B}, b::VectorMPI{T,<:CuBackend}) where {T,B}
+    solve(F::CuDSSFactorizationMPI{T,B}, b::HPCVector{T,<:CuBackend}) where {T,B}
 
 Solve the linear system using the cuDSS factorization.
 This is solve-only - no refactorization is performed.
 """
-function LinearAlgebraMPI.solve(F::CuDSSFactorizationMPI{T,B}, b::LinearAlgebraMPI.VectorMPI{T,<:CuBackend}) where {T,B}
+function HPCLinearAlgebra.solve(F::CuDSSFactorizationMPI{T,B}, b::HPCLinearAlgebra.HPCVector{T,<:CuBackend}) where {T,B}
     comm = F.backend.comm
 
     # Copy b directly to RHS buffer (GPU to GPU)
@@ -653,16 +716,16 @@ function LinearAlgebraMPI.solve(F::CuDSSFactorizationMPI{T,B}, b::LinearAlgebraM
     comm_barrier(comm)
 
     # Return GPU vector (copy from internal buffer) with backend
-    return LinearAlgebraMPI.VectorMPI{T,B}(b.structural_hash, b.partition, copy(F.x_gpu), F.backend)
+    return HPCLinearAlgebra.HPCVector{T,B}(b.structural_hash, b.partition, copy(F.x_gpu), F.backend)
 end
 
 """
-    \\(F::CuDSSFactorizationMPI{T,B}, b::VectorMPI{T,<:CuBackend}) where {T,B}
+    \\(F::CuDSSFactorizationMPI{T,B}, b::HPCVector{T,<:CuBackend}) where {T,B}
 
 Solve the linear system using backslash notation (solve-only, no refactorization).
 """
-function Base.:\(F::CuDSSFactorizationMPI{T,B}, b::LinearAlgebraMPI.VectorMPI{T,<:CuBackend}) where {T,B}
-    return LinearAlgebraMPI.solve(F, b)
+function Base.:\(F::CuDSSFactorizationMPI{T,B}, b::HPCLinearAlgebra.HPCVector{T,<:CuBackend}) where {T,B}
+    return HPCLinearAlgebra.solve(F, b)
 end
 
 """
@@ -672,7 +735,7 @@ Destroy per-factorization cuDSS resources. Must be called collectively on all ra
 Only destroys: data (L/U factors), matrix wrappers.
 Does NOT destroy: handle, config (global, cached per-process).
 """
-function LinearAlgebraMPI.finalize!(F::CuDSSFactorizationMPI)
+function HPCLinearAlgebra.finalize!(F::CuDSSFactorizationMPI)
     comm = F.backend.comm
     CUDA.synchronize()
     comm_barrier(comm)
@@ -717,19 +780,19 @@ end
 # 3. The cudss matrix wrapper points to our values buffer - we update it in place
 
 """
-    _refactorize_and_solve!(F::CuDSSFactorizationMPI{T,B}, A::SparseMatrixMPI{T,Ti,B}, b::VectorMPI{T,B}) where {T,Ti,B}
+    _refactorize_and_solve!(F::CuDSSFactorizationMPI{T,B}, A::HPCSparseMatrix{T,Ti,B}, b::HPCVector{T,B}) where {T,Ti,B}
 
 Update the values in a cached factorization, refactorize (skip analysis), and solve.
 Returns the solution vector.
 """
 function _refactorize_and_solve!(F::CuDSSFactorizationMPI{T,B},
-                                  A::LinearAlgebraMPI.SparseMatrixMPI{T,Ti,B},
-                                  b::LinearAlgebraMPI.VectorMPI{T,B}) where {T,Ti,B<:CuBackend}
+                                  A::HPCLinearAlgebra.HPCSparseMatrix{T,Ti,B},
+                                  b::HPCLinearAlgebra.HPCVector{T,B}) where {T,Ti,B<:CuBackend}
     comm = F.backend.comm
 
     # Update values in the GPU buffer (the cudss matrix wrapper points to this)
     # A.colval contains local indices, A.nzval contains values
-    values_cpu = LinearAlgebraMPI._ensure_cpu(A.nzval)
+    values_cpu = HPCLinearAlgebra._ensure_cpu(A.nzval)
     copyto!(F.values, values_cpu)
 
     # Copy RHS to buffer
@@ -749,11 +812,11 @@ function _refactorize_and_solve!(F::CuDSSFactorizationMPI{T,B},
     comm_barrier(comm)
 
     # Return GPU vector (copy from internal buffer) with backend
-    return LinearAlgebraMPI.VectorMPI{T, B}(b.structural_hash, b.partition, copy(F.x_gpu), b.backend)
+    return HPCLinearAlgebra.HPCVector{T, B}(b.structural_hash, b.partition, copy(F.x_gpu), b.backend)
 end
 
 """
-    \\(A::SparseMatrixMPI{T,Ti,B}, b::VectorMPI{T,B}) where {T,Ti,B<:CuBackend}
+    \\(A::HPCSparseMatrix{T,Ti,B}, b::HPCVector{T,B}) where {T,Ti,B<:CuBackend}
 
 Solve A*x = b using cuDSS with analysis caching.
 
@@ -762,9 +825,9 @@ Subsequent calls with same pattern: refactorize only (skip expensive analysis).
 
 The cuDSS data object is cached globally and reused - never destroyed.
 """
-function Base.:\(A::LinearAlgebraMPI.SparseMatrixMPI{T,Ti,B},
-                 b::LinearAlgebraMPI.VectorMPI{T,B}) where {T,Ti,B<:CuBackend}
-    structural_hash = LinearAlgebraMPI._ensure_hash(A)
+function Base.:\(A::HPCLinearAlgebra.HPCSparseMatrix{T,Ti,B},
+                 b::HPCLinearAlgebra.HPCVector{T,B}) where {T,Ti,B<:CuBackend}
+    structural_hash = HPCLinearAlgebra._ensure_hash(A)
     cache_key = (structural_hash, false, T)  # false = not symmetric (LU)
 
     if haskey(_cudss_backslash_cache, cache_key)
@@ -783,19 +846,19 @@ function Base.:\(A::LinearAlgebraMPI.SparseMatrixMPI{T,Ti,B},
         CUDA.synchronize()
         comm_barrier(comm)
 
-        return LinearAlgebraMPI.VectorMPI{T, B}(b.structural_hash, b.partition, copy(F.x_gpu), b.backend)
+        return HPCLinearAlgebra.HPCVector{T, B}(b.structural_hash, b.partition, copy(F.x_gpu), b.backend)
     end
 end
 
 """
-    \\(A::Symmetric{T,<:SparseMatrixMPI{T,Ti,B}}, b::VectorMPI{T,B}) where {T,Ti,B<:CuBackend}
+    \\(A::Symmetric{T,<:HPCSparseMatrix{T,Ti,B}}, b::HPCVector{T,B}) where {T,Ti,B<:CuBackend}
 
 Solve A*x = b for a symmetric matrix using LDLT with analysis caching.
 """
-function Base.:\(A::Symmetric{T,<:LinearAlgebraMPI.SparseMatrixMPI{T,Ti,B}},
-                 b::LinearAlgebraMPI.VectorMPI{T,B}) where {T,Ti,B<:CuBackend}
+function Base.:\(A::Symmetric{T,<:HPCLinearAlgebra.HPCSparseMatrix{T,Ti,B}},
+                 b::HPCLinearAlgebra.HPCVector{T,B}) where {T,Ti,B<:CuBackend}
     A_inner = parent(A)
-    structural_hash = LinearAlgebraMPI._ensure_hash(A_inner)
+    structural_hash = HPCLinearAlgebra._ensure_hash(A_inner)
     cache_key = (structural_hash, true, T)  # true = symmetric (LDLT)
 
     if haskey(_cudss_backslash_cache, cache_key)
@@ -814,7 +877,7 @@ function Base.:\(A::Symmetric{T,<:LinearAlgebraMPI.SparseMatrixMPI{T,Ti,B}},
         CUDA.synchronize()
         comm_barrier(comm)
 
-        return LinearAlgebraMPI.VectorMPI{T, B}(b.structural_hash, b.partition, copy(F.x_gpu), b.backend)
+        return HPCLinearAlgebra.HPCVector{T, B}(b.structural_hash, b.partition, copy(F.x_gpu), b.backend)
     end
 end
 
@@ -829,7 +892,7 @@ using StaticArrays
 
 GPU-accelerated row-wise map for CUDA arrays.
 """
-function LinearAlgebraMPI._map_rows_gpu_kernel(f, arg1::CuMatrix{T}, rest::CuMatrix...) where T
+function HPCLinearAlgebra._map_rows_gpu_kernel(f, arg1::CuMatrix{T}, rest::CuMatrix...) where T
     n = size(arg1, 1)
 
     # Get output size by evaluating f on first row

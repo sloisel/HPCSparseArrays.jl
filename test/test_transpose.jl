@@ -13,7 +13,7 @@ end
 using MPI
 MPI.Init()
 
-using LinearAlgebraMPI
+using HPCLinearAlgebra
 using SparseArrays
 using LinearAlgebra: norm
 using Test
@@ -42,11 +42,11 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     V = T <: Complex ? T.(1:length(I_idx)) .+ im .* T.(length(I_idx):-1:1) : T.(1:length(I_idx))
     A = sparse(I_idx, J_idx, V, m, n)
 
-    Adist = SparseMatrixMPI(A, backend)
-    plan = LinearAlgebraMPI.TransposePlan(Adist)
-    ATdist = assert_type(LinearAlgebraMPI.execute_plan!(plan, Adist), ST)
+    Adist = HPCSparseMatrix(A, backend)
+    plan = HPCLinearAlgebra.TransposePlan(Adist)
+    ATdist = assert_type(HPCLinearAlgebra.execute_plan!(plan, Adist), ST)
     AT_ref = sparse(transpose(A))
-    AT_ref_dist = SparseMatrixMPI(AT_ref, backend)
+    AT_ref_dist = HPCSparseMatrix(AT_ref, backend)
 
     ATdist_cpu = to_backend(ATdist, cpu_backend)
     AT_ref_dist_cpu = to_backend(AT_ref_dist, cpu_backend)
@@ -67,11 +67,11 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     end
     A2 = sparse(I_idx2, J_idx2, V2, n2, n2)
 
-    Adist2 = SparseMatrixMPI(A2, backend)
-    plan2 = LinearAlgebraMPI.TransposePlan(Adist2)
-    ATdist2 = assert_type(LinearAlgebraMPI.execute_plan!(plan2, Adist2), ST)
+    Adist2 = HPCSparseMatrix(A2, backend)
+    plan2 = HPCLinearAlgebra.TransposePlan(Adist2)
+    ATdist2 = assert_type(HPCLinearAlgebra.execute_plan!(plan2, Adist2), ST)
     AT_ref2 = sparse(transpose(A2))
-    AT_ref_dist2 = SparseMatrixMPI(AT_ref2, backend)
+    AT_ref_dist2 = HPCSparseMatrix(AT_ref2, backend)
 
     ATdist2_cpu = to_backend(ATdist2, cpu_backend)
     AT_ref_dist2_cpu = to_backend(AT_ref_dist2, cpu_backend)

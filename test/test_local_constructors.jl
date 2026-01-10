@@ -1,4 +1,4 @@
-# Tests for local constructors: VectorMPI_local, MatrixMPI_local, SparseMatrixMPI_local
+# Tests for local constructors: HPCVector_local, HPCMatrix_local, HPCSparseMatrix_local
 # Parameterized over scalar types and backends (CPU and GPU)
 
 # Check Metal availability BEFORE loading MPI
@@ -12,7 +12,7 @@ end
 using MPI
 MPI.Init()
 
-using LinearAlgebraMPI
+using HPCLinearAlgebra
 using SparseArrays
 using LinearAlgebra
 using Test
@@ -34,16 +34,16 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     backend = get_backend()
     VT, ST, MT = TestUtils.expected_types(T, backend)
 
-    println(io0(), "[test] VectorMPI_local basic ($T, $backend_name)")
+    println(io0(), "[test] HPCVector_local basic ($T, $backend_name)")
 
-    # Test VectorMPI_local: each rank provides different-sized local parts
+    # Test HPCVector_local: each rank provides different-sized local parts
     # Create local vectors that, when concatenated, form [1, 2, 3, ..., 10]
     local_sizes = [div(10, nranks) + (r <= mod(10, nranks) ? 1 : 0) for r in 1:nranks]
     global_start = sum(local_sizes[1:rank]) + 1
     global_end = sum(local_sizes[1:rank+1])
     v_local = T.(collect(global_start:global_end))
 
-    v_mpi = assert_type(VectorMPI_local(v_local, backend), VT)
+    v_mpi = assert_type(HPCVector_local(v_local, backend), VT)
     v_global = Vector(v_mpi)
 
     # All ranks should have the same global vector
@@ -51,24 +51,24 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     @test length(v_mpi) == 10
 
 
-    println(io0(), "[test] VectorMPI_local roundtrip consistency ($T, $backend_name)")
+    println(io0(), "[test] HPCVector_local roundtrip consistency ($T, $backend_name)")
 
-    # Test that VectorMPI_local produces same result as VectorMPI for default partition
+    # Test that HPCVector_local produces same result as HPCVector for default partition
     v_original = T.([1.5, -2.3, 3.7, 4.1, -5.9, 6.2, 7.8, -8.4])
-    v_from_global = assert_type(VectorMPI(v_original, backend), VT)
+    v_from_global = assert_type(HPCVector(v_original, backend), VT)
 
-    # Extract local part (need CPU array for VectorMPI_local)
+    # Extract local part (need CPU array for HPCVector_local)
     v_local_extract = Array(v_from_global.v)
-    v_from_local = assert_type(VectorMPI_local(v_local_extract, backend), VT)
+    v_from_local = assert_type(HPCVector_local(v_local_extract, backend), VT)
     v_back = Vector(v_from_local)
 
     @test norm(v_back - v_original) < TOL
     @test v_from_local.partition == v_from_global.partition
 
 
-    println(io0(), "[test] MatrixMPI_local basic ($T, $backend_name)")
+    println(io0(), "[test] HPCMatrix_local basic ($T, $backend_name)")
 
-    # Test MatrixMPI_local: each rank provides some rows of a matrix
+    # Test HPCMatrix_local: each rank provides some rows of a matrix
     # Create a 10x4 matrix distributed across ranks
     m_global = 10
     n_cols = 4
@@ -78,7 +78,7 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
 
     # Create deterministic local matrix based on global row indices
     M_local = T.([Float64(i + j*0.1) for i in row_start:row_end, j in 1:n_cols])
-    M_mpi = assert_type(MatrixMPI_local(M_local, backend), MT)
+    M_mpi = assert_type(HPCMatrix_local(M_local, backend), MT)
 
     # Verify size
     @test size(M_mpi) == (m_global, n_cols)
@@ -89,28 +89,28 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     @test norm(M_gathered - M_expected) < TOL
 
 
-    println(io0(), "[test] MatrixMPI_local roundtrip consistency ($T, $backend_name)")
+    println(io0(), "[test] HPCMatrix_local roundtrip consistency ($T, $backend_name)")
 
-    # Test that MatrixMPI_local produces same result as MatrixMPI for default partition
+    # Test that HPCMatrix_local produces same result as HPCMatrix for default partition
     M_original = T.([1.1 2.2 3.3;
                      4.4 5.5 6.6;
                      7.7 8.8 9.9;
                      10.0 11.1 12.2;
                      13.3 14.4 15.5])
-    M_from_global = assert_type(MatrixMPI(M_original, backend), MT)
+    M_from_global = assert_type(HPCMatrix(M_original, backend), MT)
 
-    # Extract local part (need CPU array for MatrixMPI_local)
+    # Extract local part (need CPU array for HPCMatrix_local)
     M_local_extract = Array(M_from_global.A)
-    M_from_local = assert_type(MatrixMPI_local(M_local_extract, backend), MT)
+    M_from_local = assert_type(HPCMatrix_local(M_local_extract, backend), MT)
     M_back = Matrix(M_from_local)
 
     @test norm(M_back - M_original) < TOL
     @test M_from_local.row_partition == M_from_global.row_partition
 
 
-    println(io0(), "[test] SparseMatrixMPI_local basic ($T, $backend_name)")
+    println(io0(), "[test] HPCSparseMatrix_local basic ($T, $backend_name)")
 
-    # Test SparseMatrixMPI_local: each rank provides local rows
+    # Test HPCSparseMatrix_local: each rank provides local rows
     # Create a 12x8 sparse matrix with known structure
     m_sparse = 12
     n_sparse = 8
@@ -143,11 +143,11 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     local_csc = sparse(J_local, I_local, V_local, n_sparse, local_sparse_nrows)
     local_transpose = transpose(local_csc)
 
-    S_mpi = assert_type(SparseMatrixMPI_local(local_transpose, backend), ST)
+    S_mpi = assert_type(HPCSparseMatrix_local(local_transpose, backend), ST)
     @test size(S_mpi) == (m_sparse, n_sparse)
 
 
-    println(io0(), "[test] SparseMatrixMPI_local roundtrip consistency ($T, $backend_name)")
+    println(io0(), "[test] HPCSparseMatrix_local roundtrip consistency ($T, $backend_name)")
 
     # Test roundtrip: global -> partition -> local -> rebuild
     # Use a deterministic sparse matrix
@@ -156,7 +156,7 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     V_orig = T.([1.1, 2.2, 3.3, 4.4, 5.5, 6.6, 7.7, 8.8, 9.9, 10.0, 11.1, 12.2])
     S_original = sparse(I_orig, J_orig, V_orig, 12, 10)
 
-    S_from_global = assert_type(SparseMatrixMPI(S_original, backend), ST)
+    S_from_global = assert_type(HPCSparseMatrix(S_original, backend), ST)
 
     # Extract local part - using explicit CSR arrays (nzval needs CPU conversion)
     col_indices = S_from_global.col_indices
@@ -172,14 +172,14 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     )
 
     # Rebuild from local
-    S_from_local = assert_type(SparseMatrixMPI_local(transpose(AT_uncompressed), backend), ST)
+    S_from_local = assert_type(HPCSparseMatrix_local(transpose(AT_uncompressed), backend), ST)
     S_back = SparseMatrixCSC(S_from_local)
 
     @test norm(S_back - S_original, Inf) < TOL
     @test S_from_local.row_partition == S_from_global.row_partition
 
 
-    println(io0(), "[test] MatrixMPI_local * VectorMPI_local ($T, $backend_name)")
+    println(io0(), "[test] HPCMatrix_local * HPCVector_local ($T, $backend_name)")
 
     # Test that locally constructed matrices work with operations
     # Create compatible matrix and vector
@@ -190,14 +190,14 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     op_row_end = sum(op_row_sizes[1:rank+1])
 
     A_local_op = T.([Float64(i + j*0.1) for i in op_row_start:op_row_end, j in 1:n_op])
-    A_mpi_op = assert_type(MatrixMPI_local(A_local_op, backend), MT)
+    A_mpi_op = assert_type(HPCMatrix_local(A_local_op, backend), MT)
 
     # Create vector partition that matches columns
     v_op_sizes = [div(n_op, nranks) + (r <= mod(n_op, nranks) ? 1 : 0) for r in 1:nranks]
     v_op_start = sum(v_op_sizes[1:rank]) + 1
     v_op_end = sum(v_op_sizes[1:rank+1])
     v_local_op = T.(collect(v_op_start:v_op_end))
-    v_mpi_op = assert_type(VectorMPI_local(v_local_op, backend), VT)
+    v_mpi_op = assert_type(HPCVector_local(v_local_op, backend), VT)
 
     # Compute A * v
     y_mpi = assert_type(A_mpi_op * v_mpi_op, VT)
@@ -211,7 +211,7 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     @test norm(y_result - y_expected) < TOL
 
 
-    println(io0(), "[test] SparseMatrixMPI_local * VectorMPI_local ($T, $backend_name)")
+    println(io0(), "[test] HPCSparseMatrix_local * HPCVector_local ($T, $backend_name)")
 
     # Test sparse matrix-vector multiplication with local constructors
     I_sp = [1, 2, 3, 4, 5, 6, 1, 3, 5, 7, 9]
@@ -219,9 +219,9 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     V_sp = T.([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 0.5, 0.5, 0.5, 0.5, 0.5])
     S_sp_global = sparse(I_sp, J_sp, V_sp, 10, 8)
 
-    S_sp_mpi = assert_type(SparseMatrixMPI(S_sp_global, backend), ST)
+    S_sp_mpi = assert_type(HPCSparseMatrix(S_sp_global, backend), ST)
     v_sp_global = T.(1:8)
-    v_sp_mpi = assert_type(VectorMPI(v_sp_global, backend), VT)
+    v_sp_mpi = assert_type(HPCVector(v_sp_global, backend), VT)
 
     # Compute result
     y_sp = assert_type(S_sp_mpi * v_sp_mpi, VT)

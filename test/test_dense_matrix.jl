@@ -1,4 +1,4 @@
-# MPI test for dense matrix (MatrixMPI) operations
+# MPI test for dense matrix (HPCMatrix) operations
 # This file is executed under mpiexec by runtests.jl
 # Parameterized over scalar types and backends (CPU and GPU)
 
@@ -13,7 +13,7 @@ end
 using MPI
 MPI.Init()
 
-using LinearAlgebraMPI
+using HPCLinearAlgebra
 using LinearAlgebra
 using Test
 
@@ -27,8 +27,8 @@ comm = MPI.COMM_WORLD
 rank = MPI.Comm_rank(comm)
 nranks = MPI.Comm_size(comm)
 
-# Helper function to gather a MatrixMPI back to a global matrix for testing
-function gather_matrix(A::MatrixMPI{T}) where T
+# Helper function to gather a HPCMatrix back to a global matrix for testing
+function gather_matrix(A::HPCMatrix{T}) where T
     m = A.row_partition[end] - 1
     n = size(A.A, 2)
     counts = Int32[A.row_partition[r+1] - A.row_partition[r] for r in 1:nranks]
@@ -52,12 +52,12 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     cpu_backend = TestUtils.cpu_version(backend)
     VT, ST, MT = TestUtils.expected_types(T, backend)
 
-    println(io0(), "[test] MatrixMPI construction ($T, $backend_name)")
+    println(io0(), "[test] HPCMatrix construction ($T, $backend_name)")
 
     m, n = 8, 6
     A = TestUtils.dense_matrix(T, m, n)
 
-    Adist = MatrixMPI(A, backend)
+    Adist = HPCMatrix(A, backend)
 
     @test assert_uniform(size(Adist, 1), name="size1") == m
     @test assert_uniform(size(Adist, 2), name="size2") == n
@@ -72,14 +72,14 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     @test err < TOL
 
 
-    println(io0(), "[test] MatrixMPI * VectorMPI ($T, $backend_name)")
+    println(io0(), "[test] HPCMatrix * HPCVector ($T, $backend_name)")
 
     m, n = 8, 6
     A = TestUtils.dense_matrix(T, m, n)
     x_global = TestUtils.test_vector(T, n)
 
-    Adist = MatrixMPI(A, backend)
-    xdist = VectorMPI(x_global, backend)
+    Adist = HPCMatrix(A, backend)
+    xdist = HPCVector(x_global, backend)
 
     ydist = assert_type(Adist * xdist, VT)
     y_ref = A * x_global
@@ -93,15 +93,15 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     @test err < TOL
 
 
-    println(io0(), "[test] MatrixMPI mul! in-place ($T, $backend_name)")
+    println(io0(), "[test] HPCMatrix mul! in-place ($T, $backend_name)")
 
     m, n = 8, 6
     A = TestUtils.dense_matrix(T, m, n)
     x_global = TestUtils.test_vector(T, n)
 
-    Adist = MatrixMPI(A, backend)
-    xdist = VectorMPI(x_global, backend)
-    ydist = VectorMPI(zeros(T, m), backend)
+    Adist = HPCMatrix(A, backend)
+    xdist = HPCVector(x_global, backend)
+    ydist = HPCVector(zeros(T, m), backend)
 
     LinearAlgebra.mul!(ydist, Adist, xdist)
     y_ref = A * x_global
@@ -115,14 +115,14 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     @test err < TOL
 
 
-    println(io0(), "[test] transpose(MatrixMPI) * VectorMPI ($T, $backend_name)")
+    println(io0(), "[test] transpose(HPCMatrix) * HPCVector ($T, $backend_name)")
 
     m, n = 8, 6
     A = TestUtils.dense_matrix(T, m, n)
     x_global = TestUtils.test_vector(T, m)
 
-    Adist = MatrixMPI(A, backend)
-    xdist = VectorMPI(x_global, backend)
+    Adist = HPCMatrix(A, backend)
+    xdist = HPCVector(x_global, backend)
 
     # transpose(A) * x
     ydist = assert_type(transpose(Adist) * xdist, VT)
@@ -139,14 +139,14 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
 
     # Adjoint tests only meaningful for complex
     if T <: Complex
-        println(io0(), "[test] adjoint(MatrixMPI) * VectorMPI ($T, $backend_name)")
+        println(io0(), "[test] adjoint(HPCMatrix) * HPCVector ($T, $backend_name)")
 
         m, n = 8, 6
         A = TestUtils.dense_matrix(T, m, n)
         x_global = TestUtils.test_vector(T, m)
 
-        Adist = MatrixMPI(A, backend)
-        xdist = VectorMPI(x_global, backend)
+        Adist = HPCMatrix(A, backend)
+        xdist = HPCVector(x_global, backend)
 
         # adjoint(A) * x
         ydist = assert_type(adjoint(Adist) * xdist, VT)
@@ -162,14 +162,14 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     end
 
 
-    println(io0(), "[test] transpose(VectorMPI) * MatrixMPI ($T, $backend_name)")
+    println(io0(), "[test] transpose(HPCVector) * HPCMatrix ($T, $backend_name)")
 
     m, n = 8, 6
     A = TestUtils.dense_matrix(T, m, n)
     x_global = TestUtils.test_vector(T, m)
 
-    Adist = MatrixMPI(A, backend)
-    xdist = VectorMPI(x_global, backend)
+    Adist = HPCMatrix(A, backend)
+    xdist = HPCVector(x_global, backend)
 
     # transpose(v) * A
     yt = transpose(xdist) * Adist
@@ -184,14 +184,14 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     @test err < TOL
 
 
-    println(io0(), "[test] VectorMPI' * MatrixMPI ($T, $backend_name)")
+    println(io0(), "[test] HPCVector' * HPCMatrix ($T, $backend_name)")
 
     m, n = 8, 6
     A = TestUtils.dense_matrix(T, m, n)
     x_global = TestUtils.test_vector(T, m)
 
-    Adist = MatrixMPI(A, backend)
-    xdist = VectorMPI(x_global, backend)
+    Adist = HPCMatrix(A, backend)
+    xdist = HPCVector(x_global, backend)
 
     # v' * A
     yt = xdist' * Adist
@@ -206,12 +206,12 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     @test err < TOL
 
 
-    println(io0(), "[test] MatrixMPI transpose materialization ($T, $backend_name)")
+    println(io0(), "[test] HPCMatrix transpose materialization ($T, $backend_name)")
 
     m, n = 8, 6
     A = TestUtils.dense_matrix(T, m, n)
 
-    Adist = MatrixMPI(A, backend)
+    Adist = HPCMatrix(A, backend)
     At_dist = assert_type(copy(transpose(Adist)), MT)
 
     At_ref = transpose(A)
@@ -227,12 +227,12 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
 
 
     if T <: Complex
-        println(io0(), "[test] MatrixMPI adjoint materialization ($T, $backend_name)")
+        println(io0(), "[test] HPCMatrix adjoint materialization ($T, $backend_name)")
 
         m, n = 8, 6
         A = TestUtils.dense_matrix(T, m, n)
 
-        Adist = MatrixMPI(A, backend)
+        Adist = HPCMatrix(A, backend)
         Ah_dist = assert_type(copy(adjoint(Adist)), MT)
 
         Ah_ref = adjoint(A)
@@ -248,13 +248,13 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     end
 
 
-    println(io0(), "[test] MatrixMPI scalar multiplication ($T, $backend_name)")
+    println(io0(), "[test] HPCMatrix scalar multiplication ($T, $backend_name)")
 
     m, n = 8, 6
     A = TestUtils.dense_matrix(T, m, n)
     a = T <: Complex ? T(3.5 + 0.5im) : T(3.5)
 
-    Adist = MatrixMPI(A, backend)
+    Adist = HPCMatrix(A, backend)
 
     my_start = Adist.row_partition[rank+1]
     my_end = Adist.row_partition[rank+2] - 1
@@ -282,12 +282,12 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
 
 
     if T <: Complex
-        println(io0(), "[test] MatrixMPI conj ($T, $backend_name)")
+        println(io0(), "[test] HPCMatrix conj ($T, $backend_name)")
 
         m, n = 8, 6
         A = TestUtils.dense_matrix(T, m, n)
 
-        Adist = MatrixMPI(A, backend)
+        Adist = HPCMatrix(A, backend)
         Aconj_dist = assert_type(conj(Adist), MT)
 
         Aconj_ref = conj.(A)
@@ -301,12 +301,12 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     end
 
 
-    println(io0(), "[test] MatrixMPI norms ($T, $backend_name)")
+    println(io0(), "[test] HPCMatrix norms ($T, $backend_name)")
 
     m, n = 8, 6
     A = TestUtils.dense_matrix(real(T), m, n)  # Use real type for norm tests
 
-    Adist = MatrixMPI(A, backend)
+    Adist = HPCMatrix(A, backend)
     Adist_cpu = to_backend(Adist, cpu_backend)
 
     # Frobenius norm (2-norm)
@@ -325,12 +325,12 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     @test abs(norminf - norminf_ref) < TOL
 
 
-    println(io0(), "[test] MatrixMPI operator norms ($T, $backend_name)")
+    println(io0(), "[test] HPCMatrix operator norms ($T, $backend_name)")
 
     m, n = 8, 6
     A = TestUtils.dense_matrix(real(T), m, n)
 
-    Adist = MatrixMPI(A, backend)
+    Adist = HPCMatrix(A, backend)
     Adist_cpu = to_backend(Adist, cpu_backend)
 
     # 1-norm (max column sum)
@@ -344,14 +344,14 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     @test abs(opnorminf - opnorminf_ref) < TOL
 
 
-    println(io0(), "[test] Square MatrixMPI operations ($T, $backend_name)")
+    println(io0(), "[test] Square HPCMatrix operations ($T, $backend_name)")
 
     n = 8
     A = TestUtils.dense_matrix(T, n, n)
     x_global = TestUtils.test_vector(T, n)
 
-    Adist = MatrixMPI(A, backend)
-    xdist = VectorMPI(x_global, backend)
+    Adist = HPCMatrix(A, backend)
+    xdist = HPCVector(x_global, backend)
 
     # A * x
     ydist = assert_type(Adist * xdist, VT)
@@ -386,7 +386,7 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     m, n = 8, 5
     A = TestUtils.dense_matrix(real(T), m, n)
 
-    Adist = MatrixMPI(A, backend)
+    Adist = HPCMatrix(A, backend)
 
     # Function that transforms each row: 5 elements -> 3 elements
     f_row = x -> [norm(x), maximum(x), sum(x)]
@@ -406,7 +406,7 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     m, n = 8, 5
     A = TestUtils.dense_matrix(real(T), m, n)
 
-    Adist = MatrixMPI(A, backend)
+    Adist = HPCMatrix(A, backend)
 
     # Function that transforms each column: 8 elements -> 2 elements
     f_col = x -> [norm(x), maximum(x)]
@@ -426,7 +426,7 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     m, n = 8, 5
     A = TestUtils.dense_matrix(real(T), m, n)
 
-    Adist = MatrixMPI(A, backend)
+    Adist = HPCMatrix(A, backend)
 
     f_partition = x -> [norm(x), maximum(x)]
     Bdist = mapslices(f_partition, Adist; dims=2)

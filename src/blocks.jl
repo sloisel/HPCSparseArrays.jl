@@ -2,16 +2,16 @@
 # Block Matrix Primitives - cat, hcat, vcat for distributed matrices
 # ============================================================================
 
-# Note: uniform_partition is defined in LinearAlgebraMPI.jl (included before this file)
+# Note: uniform_partition is defined in HPCLinearAlgebra.jl (included before this file)
 
 # ============================================================================
-# Core cat implementation for SparseMatrixMPI
+# Core cat implementation for HPCSparseMatrix
 # ============================================================================
 
 """
-    Base.cat(As::SparseMatrixMPI...; dims)
+    Base.cat(As::HPCSparseMatrix...; dims)
 
-Concatenate SparseMatrixMPI matrices.
+Concatenate HPCSparseMatrix matrices.
 
 # Arguments
 - `dims::Integer`: Concatenate along dimension `dims` (1=vertical, 2=horizontal)
@@ -27,7 +27,7 @@ cat(A, B, C, D; dims=(2,2)) # 2×2 block matrix [A B; C D]
 This is a distributed implementation that only gathers the rows each rank needs
 for its local output, rather than gathering all data to all ranks.
 """
-function Base.cat(As::SparseMatrixMPI{T,Ti,Bk}...; dims) where {T,Ti,Bk<:HPCBackend}
+function Base.cat(As::HPCSparseMatrix{T,Ti,Bk}...; dims) where {T,Ti,Bk<:HPCBackend}
     isempty(As) && error("cat requires at least one matrix")
     length(As) == 1 && return copy(As[1])
 
@@ -143,7 +143,7 @@ function Base.cat(As::SparseMatrixMPI{T,Ti,Bk}...; dims) where {T,Ti,Bk<:HPCBack
         SparseMatrixCSC(total_cols, local_nrows, ones(Int, local_nrows + 1), Int[], T[]) :
         sparse(local_J, local_I, local_V, total_cols, local_nrows)
 
-    result = SparseMatrixMPI_local(transpose(AT_local), backend)
+    result = HPCSparseMatrix_local(transpose(AT_local), backend)
 
     # Convert to GPU if inputs were GPU (GPU→CPU for MPI, then CPU→GPU for result)
     device = backend.device
@@ -151,7 +151,7 @@ function Base.cat(As::SparseMatrixMPI{T,Ti,Bk}...; dims) where {T,Ti,Bk<:HPCBack
         nzval_target = copyto!(similar(As[1].nzval, length(result.nzval)), result.nzval)
         rowptr_target = _to_target_device(result.rowptr, device)
         colval_target = _to_target_device(result.colval, device)
-        return SparseMatrixMPI{T,Ti,Bk}(
+        return HPCSparseMatrix{T,Ti,Bk}(
             result.structural_hash, result.row_partition, result.col_partition, result.col_indices,
             result.rowptr, result.colval, nzval_target, result.nrows_local, result.ncols_compressed,
             nothing, result.cached_symmetric, rowptr_target, colval_target, backend)
@@ -164,32 +164,32 @@ end
 # ============================================================================
 
 """
-    Base.hcat(As::SparseMatrixMPI...)
+    Base.hcat(As::HPCSparseMatrix...)
 
-Horizontally concatenate SparseMatrixMPI matrices. Equivalent to `cat(As...; dims=2)`.
+Horizontally concatenate HPCSparseMatrix matrices. Equivalent to `cat(As...; dims=2)`.
 """
-Base.hcat(As::SparseMatrixMPI...) = cat(As...; dims=2)
+Base.hcat(As::HPCSparseMatrix...) = cat(As...; dims=2)
 
 """
-    Base.vcat(As::SparseMatrixMPI...)
+    Base.vcat(As::HPCSparseMatrix...)
 
-Vertically concatenate SparseMatrixMPI matrices. Equivalent to `cat(As...; dims=1)`.
+Vertically concatenate HPCSparseMatrix matrices. Equivalent to `cat(As...; dims=1)`.
 """
-Base.vcat(As::SparseMatrixMPI...) = cat(As...; dims=1)
+Base.vcat(As::HPCSparseMatrix...) = cat(As...; dims=1)
 
 # ============================================================================
-# cat for MatrixMPI (dense)
+# cat for HPCMatrix (dense)
 # ============================================================================
 
 """
-    Base.cat(As::MatrixMPI...; dims)
+    Base.cat(As::HPCMatrix...; dims)
 
-Concatenate MatrixMPI matrices. Same interface as SparseMatrixMPI version.
+Concatenate HPCMatrix matrices. Same interface as HPCSparseMatrix version.
 
 This is a distributed implementation that only gathers the rows each rank needs
 for its local output, rather than gathering all data to all ranks.
 """
-function Base.cat(As::MatrixMPI{T,B}...; dims) where {T, B<:HPCBackend}
+function Base.cat(As::HPCMatrix{T,B}...; dims) where {T, B<:HPCBackend}
     isempty(As) && error("cat requires at least one matrix")
     length(As) == 1 && return copy(As[1])
 
@@ -289,32 +289,32 @@ function Base.cat(As::MatrixMPI{T,B}...; dims) where {T, B<:HPCBackend}
         end
     end
 
-    # Step 4: Create MatrixMPI from local data
-    result = MatrixMPI_local(local_matrix, backend)
+    # Step 4: Create HPCMatrix from local data
+    result = HPCMatrix_local(local_matrix, backend)
 
     # Convert to GPU if inputs were GPU (check if backend device is not CPU)
     if !(backend.device isa DeviceCPU)
         local_matrix_gpu = copyto!(similar(As[1].A, local_nrows, total_cols), local_matrix)
-        return MatrixMPI{T,B}(result.structural_hash, result.row_partition, result.col_partition, local_matrix_gpu, backend)
+        return HPCMatrix{T,B}(result.structural_hash, result.row_partition, result.col_partition, local_matrix_gpu, backend)
     end
     return result
 end
 
-Base.hcat(As::MatrixMPI...) = cat(As...; dims=2)
-Base.vcat(As::MatrixMPI...) = cat(As...; dims=1)
+Base.hcat(As::HPCMatrix...) = cat(As...; dims=2)
+Base.vcat(As::HPCMatrix...) = cat(As...; dims=1)
 
 # ============================================================================
-# cat for VectorMPI
+# cat for HPCVector
 # ============================================================================
 
 """
-    Base.cat(vs::VectorMPI...; dims)
+    Base.cat(vs::HPCVector...; dims)
 
-Concatenate VectorMPI vectors.
-- `dims=1`: vertical concatenation (produces longer VectorMPI)
-- `dims=2`: horizontal concatenation (produces MatrixMPI with vectors as columns)
+Concatenate HPCVector vectors.
+- `dims=1`: vertical concatenation (produces longer HPCVector)
+- `dims=2`: horizontal concatenation (produces HPCMatrix with vectors as columns)
 """
-function Base.cat(vs::VectorMPI{T,AV}...; dims) where {T,AV}
+function Base.cat(vs::HPCVector{T,AV}...; dims) where {T,AV}
     isempty(vs) && error("cat requires at least one vector")
 
     if dims isa Integer
@@ -323,7 +323,7 @@ function Base.cat(vs::VectorMPI{T,AV}...; dims) where {T,AV}
         elseif dims == 2
             return _hcat_vectors(vs...)
         else
-            error("For VectorMPI, only dims=1 or dims=2 supported")
+            error("For HPCVector, only dims=1 or dims=2 supported")
         end
     elseif dims isa Tuple{Integer, Integer}
         if dims == (1, 1) && length(vs) == 1
@@ -335,7 +335,7 @@ function Base.cat(vs::VectorMPI{T,AV}...; dims) where {T,AV}
             # Single column of vectors -> vcat
             return _vcat_vectors(vs...)
         else
-            error("VectorMPI cat with dims=$dims not supported (vectors are 1D)")
+            error("HPCVector cat with dims=$dims not supported (vectors are 1D)")
         end
     else
         error("dims must be Integer or Tuple{Integer,Integer}")
@@ -366,15 +366,15 @@ function _vcat_target_partition(output_partition::Vector{Int}, offset::Int, vec_
 end
 
 """
-    _vcat_vectors(vs::VectorMPI{T}...) where T
+    _vcat_vectors(vs::HPCVector{T}...) where T
 
-Vertically concatenate VectorMPI vectors.
+Vertically concatenate HPCVector vectors.
 
 Uses `repartition` to redistribute each input vector's elements to the ranks that
 need them for the output. This provides plan caching and a fast path when partitions
 already align (no communication needed).
 """
-function _vcat_vectors(vs::VectorMPI{T,B}...) where {T, B<:HPCBackend}
+function _vcat_vectors(vs::HPCVector{T,B}...) where {T, B<:HPCBackend}
     length(vs) == 1 && return copy(vs[1])
 
     backend = vs[1].backend
@@ -425,10 +425,10 @@ function _vcat_vectors(vs::VectorMPI{T,B}...) where {T, B<:HPCBackend}
         end
     end
 
-    return VectorMPI_local(local_v, backend)
+    return HPCVector_local(local_v, backend)
 end
 
-function _hcat_vectors(vs::VectorMPI{T,B}...) where {T, B<:HPCBackend}
+function _hcat_vectors(vs::HPCVector{T,B}...) where {T, B<:HPCBackend}
     backend = vs[1].backend
     comm = backend.comm
     nranks = comm_size(comm)
@@ -451,18 +451,18 @@ function _hcat_vectors(vs::VectorMPI{T,B}...) where {T, B<:HPCBackend}
     # Compute structural hash
     structural_hash = compute_dense_structural_hash(row_partition, col_partition, size(local_matrix), comm)
 
-    return MatrixMPI{T,B}(structural_hash, row_partition, col_partition, local_matrix, backend)
+    return HPCMatrix{T,B}(structural_hash, row_partition, col_partition, local_matrix, backend)
 end
 
-Base.hcat(vs::VectorMPI...) = cat(vs...; dims=2)
-Base.vcat(vs::VectorMPI...) = cat(vs...; dims=1)
+Base.hcat(vs::HPCVector...) = cat(vs...; dims=2)
+Base.vcat(vs::HPCVector...) = cat(vs...; dims=1)
 
 # ============================================================================
-# blockdiag for SparseMatrixMPI
+# blockdiag for HPCSparseMatrix
 # ============================================================================
 
 """
-    blockdiag(As::SparseMatrixMPI...)
+    blockdiag(As::HPCSparseMatrix...)
 
 Create a block diagonal matrix from the input matrices.
 
@@ -472,12 +472,12 @@ blockdiag(A, B, C) = [A 0 0]
                      [0 0 C]
 ```
 
-Returns a SparseMatrixMPI.
+Returns a HPCSparseMatrix.
 
 This is a distributed implementation that only gathers the rows each rank needs
 for its local output, rather than gathering all data to all ranks.
 """
-function blockdiag(As::SparseMatrixMPI{T,Ti,Bk}...) where {T,Ti,Bk<:HPCBackend}
+function blockdiag(As::HPCSparseMatrix{T,Ti,Bk}...) where {T,Ti,Bk<:HPCBackend}
     isempty(As) && error("blockdiag requires at least one matrix")
     length(As) == 1 && return copy(As[1])
 
@@ -553,14 +553,14 @@ function blockdiag(As::SparseMatrixMPI{T,Ti,Bk}...) where {T,Ti,Bk<:HPCBackend}
         SparseMatrixCSC(total_cols, local_nrows, ones(Int, local_nrows + 1), Int[], T[]) :
         sparse(local_J, local_I, local_V, total_cols, local_nrows)
 
-    result = SparseMatrixMPI_local(transpose(AT_local), backend)
+    result = HPCSparseMatrix_local(transpose(AT_local), backend)
 
     # Convert to GPU if inputs were GPU (GPU→CPU for MPI, then CPU→GPU for result)
     if !(device isa DeviceCPU)
         nzval_target = copyto!(similar(As[1].nzval, length(result.nzval)), result.nzval)
         rowptr_target = _to_target_device(result.rowptr, device)
         colval_target = _to_target_device(result.colval, device)
-        return SparseMatrixMPI{T,Ti,Bk}(
+        return HPCSparseMatrix{T,Ti,Bk}(
             result.structural_hash, result.row_partition, result.col_partition, result.col_indices,
             result.rowptr, result.colval, nzval_target, result.nrows_local, result.ncols_compressed,
             nothing, result.cached_symmetric, rowptr_target, colval_target, backend)

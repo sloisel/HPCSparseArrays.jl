@@ -1,24 +1,24 @@
 ```@meta
-CurrentModule = LinearAlgebraMPI
+CurrentModule = HPCLinearAlgebra
 ```
 
 ```@eval
 using Markdown
 using Pkg
-using LinearAlgebraMPI
-v = string(pkgversion(LinearAlgebraMPI))
-md"# LinearAlgebraMPI.jl $v"
+using HPCLinearAlgebra
+v = string(pkgversion(HPCLinearAlgebra))
+md"# HPCLinearAlgebra.jl $v"
 ```
 
 **Pure Julia distributed linear algebra with MPI.**
 
 ## Overview
 
-LinearAlgebraMPI.jl provides distributed matrix and vector types for parallel computing with MPI. It offers a pure Julia implementation of distributed linear algebra, with MUMPS for sparse direct solves.
+HPCLinearAlgebra.jl provides distributed matrix and vector types for parallel computing with MPI. It offers a pure Julia implementation of distributed linear algebra, with MUMPS for sparse direct solves.
 
 ## Key Features
 
-- **Distributed Types**: `VectorMPI`, `MatrixMPI`, and `SparseMatrixMPI` for row-partitioned distributed storage
+- **Distributed Types**: `HPCVector`, `HPCMatrix`, and `HPCSparseMatrix` for row-partitioned distributed storage
 - **MUMPS Solver**: Direct solves using MUMPS for sparse linear systems
 - **Row-wise Operations**: `map_rows` for efficient distributed row operations
 - **Seamless Integration**: Works with standard Julia linear algebra operations
@@ -28,19 +28,19 @@ LinearAlgebraMPI.jl provides distributed matrix and vector types for parallel co
 
 ```julia
 using MPI
-using LinearAlgebraMPI
+using HPCLinearAlgebra
 MPI.Init()
 using SparseArrays
 
 # Create distributed sparse matrix
-A = SparseMatrixMPI{Float64}(sprandn(100, 100, 0.1) + 10I)
-b = VectorMPI(randn(100))
+A = HPCSparseMatrix{Float64}(sprandn(100, 100, 0.1) + 10I)
+b = HPCVector(randn(100))
 
 # Solve linear system
 x = A \ b
 
 # Row-wise operations
-norms = map_rows(row -> norm(row), MatrixMPI(randn(50, 10)))
+norms = map_rows(row -> norm(row), HPCMatrix(randn(50, 10)))
 
 println(io0(), "Solution computed!")
 ```
@@ -60,7 +60,7 @@ Depth = 2
 
 ## Related Packages
 
-- **[MultiGridBarrierMPI.jl](https://github.com/sloisel/MultiGridBarrierMPI.jl)**: Multigrid barrier methods using LinearAlgebraMPI
+- **[MultiGridBarrierMPI.jl](https://github.com/sloisel/MultiGridBarrierMPI.jl)**: Multigrid barrier methods using HPCLinearAlgebra
 - **[MultiGridBarrier.jl](https://github.com/sloisel/MultiGridBarrier.jl)**: Core multigrid barrier method implementation
 - **MPI.jl**: Julia MPI bindings
 

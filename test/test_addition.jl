@@ -13,7 +13,7 @@ end
 using MPI
 MPI.Init()
 
-using LinearAlgebraMPI
+using HPCLinearAlgebra
 using SparseArrays
 using LinearAlgebra: norm
 using Test
@@ -50,11 +50,11 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     end
     B = sparse(I_B, J_B, V_B, n, n)
 
-    Adist = SparseMatrixMPI(A, backend)
-    Bdist = SparseMatrixMPI(B, backend)
+    Adist = HPCSparseMatrix(A, backend)
+    Bdist = HPCSparseMatrix(B, backend)
     Cdist = assert_type(Adist + Bdist, ST)
     C_ref = A + B
-    C_ref_dist = SparseMatrixMPI(C_ref, backend)
+    C_ref_dist = HPCSparseMatrix(C_ref, backend)
 
     Cdist_cpu = to_backend(Cdist, cpu_backend)
     C_ref_dist_cpu = to_backend(C_ref_dist, cpu_backend)
@@ -82,11 +82,11 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     end
     B2 = sparse(I_B, J_B, V_B2, n, n)
 
-    Adist2 = SparseMatrixMPI(A2, backend)
-    Bdist2 = SparseMatrixMPI(B2, backend)
+    Adist2 = HPCSparseMatrix(A2, backend)
+    Bdist2 = HPCSparseMatrix(B2, backend)
     Cdist2 = assert_type(Adist2 - Bdist2, ST)
     C_ref2 = A2 - B2
-    C_ref_dist2 = SparseMatrixMPI(C_ref2, backend)
+    C_ref_dist2 = HPCSparseMatrix(C_ref2, backend)
 
     Cdist2_cpu = to_backend(Cdist2, cpu_backend)
     C_ref_dist2_cpu = to_backend(C_ref_dist2, cpu_backend)
@@ -106,11 +106,11 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     V_B3 = T <: Complex ? T.(9:-1:1) .+ im .* T.(1:9) : T.(9:-1:1)
     B3 = sparse(I_B3, J_B3, V_B3, n, n)
 
-    Adist3 = SparseMatrixMPI(A3, backend)
-    Bdist3 = SparseMatrixMPI(B3, backend)
+    Adist3 = HPCSparseMatrix(A3, backend)
+    Bdist3 = HPCSparseMatrix(B3, backend)
     Cdist3 = assert_type(Adist3 + Bdist3, ST)
     C_ref3 = A3 + B3
-    C_ref_dist3 = SparseMatrixMPI(C_ref3, backend)
+    C_ref_dist3 = HPCSparseMatrix(C_ref3, backend)
 
     Cdist3_cpu = to_backend(Cdist3, cpu_backend)
     C_ref_dist3_cpu = to_backend(C_ref_dist3, cpu_backend)
@@ -132,7 +132,7 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     # Test that repeating the same subtraction uses the cached plan
     Ddist = assert_type(Adist3 - Bdist3, ST)
     D_ref = A3 - B3
-    D_ref_dist = SparseMatrixMPI(D_ref, backend)
+    D_ref_dist = HPCSparseMatrix(D_ref, backend)
     D_ref_dist_cpu = to_backend(D_ref_dist, cpu_backend)
     Ddist_cpu = to_backend(Ddist, cpu_backend)
     err_sub1 = assert_uniform(norm(Ddist_cpu - D_ref_dist_cpu, Inf), name="cached_sub_err1")
