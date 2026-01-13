@@ -30,7 +30,7 @@ ts = @testset QuietTestSet "Addition" begin
 
 for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     TOL = TestUtils.tolerance(T)
-    backend = get_backend()
+    backend = get_backend(T)
     cpu_backend = TestUtils.cpu_version(backend)
     VT, ST, MT = TestUtils.expected_types(T, backend)
 

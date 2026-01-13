@@ -17,6 +17,7 @@ nranks = MPI.Comm_size(comm)
 
 # Create default CPU backend
 backend = BACKEND_CPU_MPI
+backend_int = backend_cpu_mpi(Int)  # Int backend for index vectors
 
 # Create deterministic test data (same on all ranks)
 n = 12
@@ -154,7 +155,7 @@ w2 = v[3:8]
 
 println(io0(), "[test] HPCVector getindex with HPCVector indices")
 
-idx = HPCVector([3, 1, 5, 2, 6, 4], backend)
+idx = HPCVector([3, 1, 5, 2, 6, 4], backend_int)
 result = v[idx]
 @test result.partition == idx.partition
 @test length(result) == length(idx)
@@ -163,7 +164,7 @@ result = v[idx]
 println(io0(), "[test] HPCVector setindex! with HPCVector indices")
 
 v_modify = HPCVector(copy(v_global), backend)
-idx_set = HPCVector([2, 4, 6], backend)
+idx_set = HPCVector([2, 4, 6], backend_int)
 src_values = HPCVector([20.0, 40.0, 60.0], backend)
 v_modify[idx_set] = src_values
 @test length(v_modify) == n
@@ -171,8 +172,8 @@ v_modify[idx_set] = src_values
 
 println(io0(), "[test] HPCMatrix getindex with HPCVector indices")
 
-row_idx = HPCVector([2, 5, 1, 4], backend)
-col_idx = HPCVector([3, 1], backend)
+row_idx = HPCVector([2, 5, 1, 4], backend_int)
+col_idx = HPCVector([3, 1], backend_int)
 result_dense = M[row_idx, col_idx]
 @test size(result_dense) == (4, 2)
 
@@ -180,8 +181,8 @@ result_dense = M[row_idx, col_idx]
 println(io0(), "[test] HPCMatrix setindex! with HPCVector indices")
 
 M_modify = HPCMatrix(zeros(6, 4), backend)
-row_idx_set = HPCVector([1, 3, 5], backend)
-col_idx_set = HPCVector([2, 4], backend)
+row_idx_set = HPCVector([1, 3, 5], backend_int)
+col_idx_set = HPCVector([2, 4], backend_int)
 src_dense = HPCMatrix(ones(3, 2) * 7.0, backend)
 M_modify[row_idx_set, col_idx_set] = src_dense
 @test size(M_modify) == (6, 4)
@@ -189,8 +190,8 @@ M_modify[row_idx_set, col_idx_set] = src_dense
 
 println(io0(), "[test] HPCSparseMatrix getindex with HPCVector indices")
 
-row_idx_sparse = HPCVector([2, 4, 1], backend)
-col_idx_sparse = HPCVector([1, 3, 5], backend)
+row_idx_sparse = HPCVector([2, 4, 1], backend_int)
+col_idx_sparse = HPCVector([1, 3, 5], backend_int)
 result_sparse = A[row_idx_sparse, col_idx_sparse]
 @test result_sparse isa HPCMatrix
 @test size(result_sparse) == (3, 3)
@@ -199,8 +200,8 @@ result_sparse = A[row_idx_sparse, col_idx_sparse]
 println(io0(), "[test] HPCSparseMatrix setindex! with HPCVector indices")
 
 A_modify = HPCSparseMatrix(spzeros(6, 6), backend)
-row_idx_set = HPCVector([1, 3, 5], backend)
-col_idx_set = HPCVector([2, 4], backend)
+row_idx_set = HPCVector([1, 3, 5], backend_int)
+col_idx_set = HPCVector([2, 4], backend_int)
 src = HPCMatrix(ones(3, 2) * 9.0, backend)
 A_modify[row_idx_set, col_idx_set] = src
 @test size(A_modify) == (6, 6)
@@ -212,35 +213,35 @@ A_modify[row_idx_set, col_idx_set] = src
 
 println(io0(), "[test] HPCMatrix getindex with HPCVector rows and range columns")
 
-row_idx = HPCVector([2, 5, 8], backend)
+row_idx = HPCVector([2, 5, 8], backend_int)
 M_mix = M[row_idx, 3:7]
 @test size(M_mix) == (3, 5)
 
 
 println(io0(), "[test] HPCMatrix getindex with range rows and HPCVector columns")
 
-col_idx = HPCVector([1, 4, 7, 10], backend)
+col_idx = HPCVector([1, 4, 7, 10], backend_int)
 M_mix2 = M[2:5, col_idx]
 @test size(M_mix2) == (4, 4)
 
 
 println(io0(), "[test] HPCMatrix getindex with HPCVector rows and Colon")
 
-row_idx = HPCVector([1, 6, n], backend)
+row_idx = HPCVector([1, 6, n], backend_int)
 M_colon = M[row_idx, :]
 @test size(M_colon) == (3, n)
 
 
 println(io0(), "[test] HPCMatrix getindex with Colon and HPCVector columns")
 
-col_idx = HPCVector([2, 5, 8, 11], backend)
+col_idx = HPCVector([2, 5, 8, 11], backend_int)
 M_colon2 = M[:, col_idx]
 @test size(M_colon2) == (n, 4)
 
 
 println(io0(), "[test] HPCMatrix getindex with HPCVector rows and Int column")
 
-row_idx = HPCVector([1, 4, 7, 10], backend)
+row_idx = HPCVector([1, 4, 7, 10], backend_int)
 M_int_col = M[row_idx, 5]
 @test M_int_col isa HPCVector
 @test length(M_int_col) == 4
@@ -248,7 +249,7 @@ M_int_col = M[row_idx, 5]
 
 println(io0(), "[test] HPCMatrix getindex with Int row and HPCVector columns")
 
-col_idx = HPCVector([2, 4, 6, 8], backend)
+col_idx = HPCVector([2, 4, 6, 8], backend_int)
 M_int_row = M[3, col_idx]
 @test M_int_row isa HPCVector
 @test length(M_int_row) == 4
@@ -256,21 +257,21 @@ M_int_row = M[3, col_idx]
 
 println(io0(), "[test] HPCSparseMatrix getindex with HPCVector rows and range columns")
 
-row_idx = HPCVector([1, 3, 5, 7], backend)
+row_idx = HPCVector([1, 3, 5, 7], backend_int)
 A_mix = A[row_idx, 2:6]
 @test size(A_mix) == (4, 5)
 
 
 println(io0(), "[test] HPCSparseMatrix getindex with range rows and HPCVector columns")
 
-col_idx = HPCVector([1, 3, 5, 7], backend)
+col_idx = HPCVector([1, 3, 5, 7], backend_int)
 A_mix2 = A[2:5, col_idx]
 @test size(A_mix2) == (4, 4)
 
 
 println(io0(), "[test] HPCSparseMatrix getindex with HPCVector rows and Int column")
 
-row_idx = HPCVector([1, 3, 5, 7], backend)
+row_idx = HPCVector([1, 3, 5, 7], backend_int)
 A_int_col = A[row_idx, 3]
 @test A_int_col isa HPCVector
 @test length(A_int_col) == 4
@@ -278,7 +279,7 @@ A_int_col = A[row_idx, 3]
 
 println(io0(), "[test] HPCSparseMatrix getindex with Int row and HPCVector columns")
 
-col_idx = HPCVector([1, 2, 3, 4], backend)
+col_idx = HPCVector([1, 2, 3, 4], backend_int)
 A_int_row = A[2, col_idx]
 @test A_int_row isa HPCVector
 @test length(A_int_row) == 4
@@ -323,7 +324,7 @@ println(io0(), "[test] Empty ranges")
 println(io0(), "[test] HPCMatrix setindex! with HPCVector rows and range columns")
 
 M_setmix = HPCMatrix(zeros(n, n), backend)
-row_idx = HPCVector([1, 4, 7], backend)
+row_idx = HPCVector([1, 4, 7], backend_int)
 M_setmix[row_idx, 2:5] = HPCMatrix(ones(3, 4) * 55.0, backend)
 @test size(M_setmix) == (n, n)
 
@@ -331,7 +332,7 @@ M_setmix[row_idx, 2:5] = HPCMatrix(ones(3, 4) * 55.0, backend)
 println(io0(), "[test] HPCMatrix setindex! with range rows and HPCVector columns")
 
 M_setmix2 = HPCMatrix(zeros(n, n), backend)
-col_idx = HPCVector([1, 5, 9], backend)
+col_idx = HPCVector([1, 5, 9], backend_int)
 M_setmix2[2:4, col_idx] = HPCMatrix(ones(3, 3) * 66.0, backend)
 @test size(M_setmix2) == (n, n)
 
@@ -339,7 +340,7 @@ M_setmix2[2:4, col_idx] = HPCMatrix(ones(3, 3) * 66.0, backend)
 println(io0(), "[test] HPCSparseMatrix setindex! with HPCVector rows and range columns")
 
 A_setmix = HPCSparseMatrix(spzeros(n, n), backend)
-row_idx = HPCVector([1, 4, 7], backend)
+row_idx = HPCVector([1, 4, 7], backend_int)
 A_setmix[row_idx, 2:4] = HPCMatrix(ones(3, 3) * 77.0, backend)
 @test size(A_setmix) == (n, n)
 
@@ -347,7 +348,7 @@ A_setmix[row_idx, 2:4] = HPCMatrix(ones(3, 3) * 77.0, backend)
 println(io0(), "[test] HPCSparseMatrix setindex! with range rows and HPCVector columns")
 
 A_setmix2 = HPCSparseMatrix(spzeros(n, n), backend)
-col_idx = HPCVector([1, 5, 9], backend)
+col_idx = HPCVector([1, 5, 9], backend_int)
 A_setmix2[2:4, col_idx] = HPCMatrix(ones(3, 3) * 88.0, backend)
 @test size(A_setmix2) == (n, n)
 
@@ -355,7 +356,7 @@ A_setmix2[2:4, col_idx] = HPCMatrix(ones(3, 3) * 88.0, backend)
 println(io0(), "[test] HPCMatrix setindex! with HPCVector rows and Int column")
 
 M_setint = HPCMatrix(zeros(n, n), backend)
-row_idx = HPCVector([1, 3, 5, 7], backend)
+row_idx = HPCVector([1, 3, 5, 7], backend_int)
 src_col = HPCVector([10.0, 20.0, 30.0, 40.0], backend)
 M_setint[row_idx, 5] = src_col
 @test size(M_setint) == (n, n)
@@ -364,7 +365,7 @@ M_setint[row_idx, 5] = src_col
 println(io0(), "[test] HPCMatrix setindex! with Int row and HPCVector columns")
 
 M_setint2 = HPCMatrix(zeros(n, n), backend)
-col_idx = HPCVector([2, 4, 6, 8], backend)
+col_idx = HPCVector([2, 4, 6, 8], backend_int)
 src_row = HPCVector([100.0, 200.0, 300.0, 400.0], backend)
 M_setint2[3, col_idx] = src_row
 @test size(M_setint2) == (n, n)
@@ -373,7 +374,7 @@ M_setint2[3, col_idx] = src_row
 println(io0(), "[test] HPCSparseMatrix setindex! with HPCVector rows and Int column")
 
 A_setint = HPCSparseMatrix(spzeros(n, n), backend)
-row_idx = HPCVector([1, 3, 5, 7], backend)
+row_idx = HPCVector([1, 3, 5, 7], backend_int)
 src_col = HPCVector([10.0, 20.0, 30.0, 40.0], backend)
 A_setint[row_idx, 5] = src_col
 @test size(A_setint) == (n, n)
@@ -382,7 +383,7 @@ A_setint[row_idx, 5] = src_col
 println(io0(), "[test] HPCSparseMatrix setindex! with Int row and HPCVector columns")
 
 A_setint2 = HPCSparseMatrix(spzeros(n, n), backend)
-col_idx = HPCVector([2, 4, 6, 8], backend)
+col_idx = HPCVector([2, 4, 6, 8], backend_int)
 src_row = HPCVector([100.0, 200.0, 300.0, 400.0], backend)
 A_setint2[3, col_idx] = src_row
 @test size(A_setint2) == (n, n)

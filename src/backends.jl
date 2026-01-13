@@ -108,11 +108,14 @@ abstract type AbstractSolverCuDSS <: AbstractSolver end
 # ============================================================================
 
 """
-    HPCBackend{D<:AbstractDevice, C<:AbstractComm, S<:AbstractSolver}
+    HPCBackend{T, Ti<:Integer, D<:AbstractDevice, C<:AbstractComm, S<:AbstractSolver}
 
-Unified backend type that encapsulates device, communication, and solver configuration.
+Unified backend type that encapsulates element type, index type, device, communication,
+and solver configuration.
 
 # Type Parameters
+- `T`: Element type for array values (e.g., Float64, ComplexF64)
+- `Ti`: Index type for sparse matrix indices (e.g., Int32, Int64)
 - `D`: Device type (DeviceCPU, DeviceMetal, DeviceCUDA)
 - `C`: Communication type (CommSerial, CommMPI)
 - `S`: Solver type (SolverMUMPS, or cuDSS variants)
@@ -124,23 +127,49 @@ Unified backend type that encapsulates device, communication, and solver configu
 
 # Example
 ```julia
-# CPU with MPI and MUMPS
-backend = HPCBackend(DeviceCPU(), CommMPI(MPI.COMM_WORLD), SolverMUMPS())
+# CPU with MPI and MUMPS, Float64 values and Int32 indices
+backend = backend_cpu_mpi(Float64, Int32)
 
-# CPU serial (single process)
-backend = HPCBackend(DeviceCPU(), CommSerial(), SolverMUMPS())
+# CPU serial (single process) with default types (Float64, Int)
+backend = backend_cpu_serial()
 ```
 """
-struct HPCBackend{D<:AbstractDevice, C<:AbstractComm, S<:AbstractSolver}
+struct HPCBackend{T, Ti<:Integer, D<:AbstractDevice, C<:AbstractComm, S<:AbstractSolver}
     device::D
     comm::C
     solver::S
 end
 
+# ============================================================================
+# Type Extraction Helpers
+# ============================================================================
+
+"""
+    eltype_backend(::Type{<:HPCBackend{T}}) where T -> Type
+    eltype_backend(b::HPCBackend) -> Type
+
+Extract the element type T from an HPCBackend type or instance.
+"""
+eltype_backend(::Type{<:HPCBackend{T}}) where {T} = T
+eltype_backend(b::HPCBackend) = eltype_backend(typeof(b))
+
+"""
+    indextype_backend(::Type{<:HPCBackend{T,Ti}}) where {T,Ti} -> Type
+    indextype_backend(b::HPCBackend) -> Type
+
+Extract the index type Ti from an HPCBackend type or instance.
+"""
+indextype_backend(::Type{<:HPCBackend{T,Ti}}) where {T,Ti} = Ti
+indextype_backend(b::HPCBackend) = indextype_backend(typeof(b))
+
 # Type aliases for convenience
-const HPCBackendCPU{C,S} = HPCBackend{DeviceCPU,C,S}
-const HPCBackendMetal{C,S} = HPCBackend{DeviceMetal,C,S}
-const HPCBackendCUDA{C,S} = HPCBackend{DeviceCUDA,C,S}
+const HPCBackendCPU{T,Ti,C,S} = HPCBackend{T,Ti,DeviceCPU,C,S}
+const HPCBackendMetal{T,Ti,C,S} = HPCBackend{T,Ti,DeviceMetal,C,S}
+const HPCBackendCUDA{T,Ti,C,S} = HPCBackend{T,Ti,DeviceCUDA,C,S}
+
+# Common configuration aliases
+const HPCBackend_CPU_MPI{T,Ti} = HPCBackend{T,Ti,DeviceCPU,CommMPI,SolverMUMPS}
+const HPCBackend_CPU_Serial{T,Ti} = HPCBackend{T,Ti,DeviceCPU,CommSerial,SolverMUMPS}
 
 # ============================================================================
 # Device → Array Type Mapping
@@ -302,52 +331,78 @@ end
 # ============================================================================
 
 """
-    backend_cpu_serial() -> HPCBackend
+    backend_cpu_serial(::Type{T}=Float64, ::Type{Ti}=Int) where {T,Ti} -> HPCBackend
 
 Create a CPU backend with serial (single-process) communication and MUMPS solver.
+
+# Arguments
+- `T`: Element type for array values (default: Float64)
+- `Ti`: Index type for sparse matrix indices (default: Int)
+
+# Example
+```julia
+backend = backend_cpu_serial()                    # Float64, Int
+backend = backend_cpu_serial(Float32, Int32)      # Float32, Int32
+```
 """
-function backend_cpu_serial()
-    return HPCBackend(DeviceCPU(), CommSerial(), SolverMUMPS())
+function backend_cpu_serial(::Type{T}=Float64, ::Type{Ti}=Int) where {T,Ti<:Integer}
+    return HPCBackend{T,Ti,DeviceCPU,CommSerial,SolverMUMPS}(DeviceCPU(), CommSerial(), SolverMUMPS())
 end
 
 """
-    backend_cpu_mpi(comm::MPI.Comm) -> HPCBackend
+    backend_cpu_mpi(::Type{T}=Float64, ::Type{Ti}=Int; comm=MPI.COMM_WORLD) where {T,Ti} -> HPCBackend
 
 Create a CPU backend with MPI communication and MUMPS solver.
 
 # Arguments
-- `comm::MPI.Comm`: The MPI communicator to use.
+- `T`: Element type for array values (default: Float64)
+- `Ti`: Index type for sparse matrix indices (default: Int)
+- `comm`: MPI communicator (default: MPI.COMM_WORLD)
+
+# Example
+```julia
+backend = backend_cpu_mpi()                       # Float64, Int, COMM_WORLD
+backend = backend_cpu_mpi(Float64, Int32)         # Float64, Int32, COMM_WORLD
+backend = backend_cpu_mpi(Float64, Int32; comm=my_comm)  # Custom communicator
+```
 """
+function backend_cpu_mpi(::Type{T}=Float64, ::Type{Ti}=Int; comm::MPI.Comm=MPI.COMM_WORLD) where {T,Ti<:Integer}
+    return HPCBackend{T,Ti,DeviceCPU,CommMPI,SolverMUMPS}(DeviceCPU(), CommMPI(comm), SolverMUMPS())
+end
+
+# Legacy overload for backward compatibility (comm as positional argument)
 function backend_cpu_mpi(comm::MPI.Comm)
-    return HPCBackend(DeviceCPU(), CommMPI(comm), SolverMUMPS())
+    return backend_cpu_mpi(Float64, Int; comm=comm)
 end
 
 # ============================================================================
-# Pre-constructed Backend Constants
+# Pre-constructed Backend Constants (Deprecated)
 # ============================================================================
 #
-# These constants are available at module load time (before MPI.Init()).
-# MPI.COMM_WORLD is a static handle that can be stored before initialization;
-# the communicator is only used when actual MPI operations are performed.
+# These constants use default types (Float64, Int) for backward compatibility.
+# New code should use the factory functions with explicit type parameters.
 
 """
     BACKEND_CPU_SERIAL
 
-Pre-constructed CPU backend with serial (single-process) communication and MUMPS solver.
-Use this for non-MPI code or single-process testing.
+Pre-constructed CPU backend with serial communication, Float64 values, and Int indices.
+
+!!! warning "Deprecated"
+    Use `backend_cpu_serial(T, Ti)` instead for explicit type control.
 """
-const BACKEND_CPU_SERIAL = HPCBackend(DeviceCPU(), CommSerial(), SolverMUMPS())
+const BACKEND_CPU_SERIAL = HPCBackend{Float64,Int,DeviceCPU,CommSerial,SolverMUMPS}(
+    DeviceCPU(), CommSerial(), SolverMUMPS())
 
 """
     BACKEND_CPU_MPI
 
-Pre-constructed CPU backend with MPI communication (using COMM_WORLD) and MUMPS solver.
-This is the default backend for distributed CPU computations.
+Pre-constructed CPU backend with MPI communication, Float64 values, and Int indices.
 
-Note: While this constant is created at module load time, actual MPI operations
-will only work after MPI.Init() has been called.
+!!! warning "Deprecated"
+    Use `backend_cpu_mpi(T, Ti)` instead for explicit type control.
 """
-const BACKEND_CPU_MPI = HPCBackend(DeviceCPU(), CommMPI(MPI.COMM_WORLD), SolverMUMPS())
+const BACKEND_CPU_MPI = HPCBackend{Float64,Int,DeviceCPU,CommMPI,SolverMUMPS}(
+    DeviceCPU(), CommMPI(MPI.COMM_WORLD), SolverMUMPS())
 
 # GPU backend factory functions are defined in the extensions
 # These are placeholder declarations so extensions can add methods
@@ -406,4 +461,27 @@ function assert_backends_compatible(b1::HPCBackend, b2::HPCBackend)
     if !backends_compatible(b1, b2)
         error("Incompatible backends: $(typeof(b1)) vs $(typeof(b2))")
     end
+end
+
+"""
+    retype_backend(backend::HPCBackend, ::Type{Tnew}) -> HPCBackend
+
+Create a new backend with a different element type, preserving all other parameters.
+Useful for operations that change element type (e.g., abs on complex matrices returns real).
+
+# Arguments
+- `backend`: The original backend
+- `Tnew`: The new element type
+
+# Example
+```julia
+complex_backend = backend_cpu_mpi(ComplexF64)
+real_backend = retype_backend(complex_backend, Float64)
+```
+"""
+function retype_backend(backend::HPCBackend{T,Ti,D,C,S}, ::Type{Tnew}) where {T,Ti,D,C,S,Tnew}
+    if T === Tnew
+        return backend  # No change needed
+    end
+    return HPCBackend{Tnew,Ti,D,C,S}(backend.device, backend.comm, backend.solver)
 end

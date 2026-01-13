@@ -128,9 +128,9 @@ end
 const _plan_cache = Dict{Tuple{Blake3Hash,Blake3Hash,DataType,DataType,Type},Any}()
 
 # Cache for memoized VectorPlans (for A * x)
-# Key: (A_hash, x_hash, T, AV) - includes array type for GPU support
+# Key: (A_hash, x_hash, T, Ti, AV) - includes index type Ti and array type for GPU support
 # Uses Type instead of DataType to support GPU UnionAll types like MtlVector{Float32}
-const _vector_plan_cache = Dict{Tuple{Blake3Hash,Blake3Hash,Type,Type},Any}()
+const _vector_plan_cache = Dict{Tuple{Blake3Hash,Blake3Hash,Type,Type,Type},Any}()
 
 # Cache for memoized DenseMatrixVectorPlans (for HPCMatrix * HPCVector)
 # Key: (A_hash, x_hash, T, Backend) - uses backend type for GPU support
@@ -145,15 +145,15 @@ const _dense_transpose_plan_cache = Dict{Tuple{Blake3Hash,Type,Type},Any}()
 const _repartition_plan_cache = Dict{Any,Any}()
 
 # Cache for diagonal matrix structure
-# Key: vector's structural hash (which encodes its partition)
+# Key: (vector's structural hash, Ti type) - Ti is needed for index type
 # Value: DiagStructureCache with colptr, rowval, col_indices, and structural hash
-struct DiagStructureCache
-    colptr::Vector{Int}
-    rowval::Vector{Int}
-    col_indices::Vector{Int}
+struct DiagStructureCache{Ti<:Integer}
+    colptr::Vector{Ti}
+    rowval::Vector{Ti}
+    col_indices::Vector{Int}  # Global indices stay Int (row/col space indexing)
     structural_hash::Blake3Hash
 end
-const _diag_structure_cache = Dict{Blake3Hash,DiagStructureCache}()
+const _diag_structure_cache = Dict{Tuple{Blake3Hash,DataType},Any}()
 
 # Cache for memoized AdditionPlans (for A + B and A - B)
 # Key: (A_hash, B_hash, T, Ti, AV) - use full 256-bit hashes, includes array type for GPU support
@@ -200,6 +200,49 @@ function clear_plan_cache!()
     end
 end
 
+"""
+    cache_sizes() -> NamedTuple
+
+Return the sizes of all internal caches. Useful for debugging memory leaks.
+"""
+function cache_sizes()
+    mumps_size = isdefined(@__MODULE__, :_mumps_analysis_cache) ? length(_mumps_analysis_cache) : 0
+    dense_transpose_vector_size = isdefined(@__MODULE__, :_dense_transpose_vector_plan_cache) ? length(_dense_transpose_vector_plan_cache) : 0
+    return (
+        plan = length(_plan_cache),
+        vector_plan = length(_vector_plan_cache),
+        dense_vector_plan = length(_dense_vector_plan_cache),
+        dense_transpose_plan = length(_dense_transpose_plan_cache),
+        dense_transpose_vector_plan = dense_transpose_vector_size,
+        repartition_plan = length(_repartition_plan_cache),
+        diag_structure = length(_diag_structure_cache),
+        addition_plan = length(_addition_plan_cache),
+        identity_addition_plan = length(_identity_addition_plan_cache),
+        partition_hash = length(_partition_hash_cache),
+        mumps_analysis = mumps_size,
+    )
+end
+
+"""
+    check_cache_sizes!(; max_entries::Int=20, io::IO=stderr)
+
+Check that no cache exceeds `max_entries`. If any cache is too large,
+print a warning and return false. Otherwise return true.
+"""
+function check_cache_sizes!(; max_entries::Int=20, io::IO=stderr)
+    sizes = cache_sizes()
+    ok = true
+    for (name, sz) in pairs(sizes)
+        if sz > max_entries
+            println(io, "WARNING: Cache $name has $sz entries (max=$max_entries)")
+            ok = false
+        end
+    end
+    return ok
+end
+
+export cache_sizes, check_cache_sizes!
+
 # Cache for partition hashes: objectid(partition) -> Blake3Hash
 # This avoids recomputing hashes for the same partition vector
 const _partition_hash_cache = Dict{UInt, Blake3Hash}()
@@ -207,21 +250,12 @@ const _partition_hash_cache = Dict{UInt, Blake3Hash}()
 """
     compute_partition_hash(partition::Vector{Int}) -> Blake3Hash
 
-Compute a hash of a partition vector, using a cache to avoid recomputation.
-Since partition vectors are typically reused (e.g., A.row_partition used in
-many operations), caching based on object identity provides significant speedup.
+Compute a Blake3 hash of a partition vector's contents.
 """
 function compute_partition_hash(partition::Vector{Int})::Blake3Hash
-    oid = objectid(partition)
-    cached = get(_partition_hash_cache, oid, nothing)
-    if cached !== nothing
-        return cached
-    end
     ctx = Blake3Ctx()
     update!(ctx, reinterpret(UInt8, partition))
-    hash = Blake3Hash(digest(ctx))
-    _partition_hash_cache[oid] = hash
-    return hash
+    return Blake3Hash(digest(ctx))
 end
 
 """
@@ -584,59 +618,92 @@ function LinearAlgebra.issymmetric(A::HPCSparseMatrix{T}) where T
 end
 
 # ============================================================================
-# Direct Solve Interface (A \ b)
+# Direct Solve Interface (A \ b) with Backslash Caching
 # ============================================================================
+#
+# The backslash operator caches factorizations by structural hash.
+# On cache hit, we update values and refactorize (skip symbolic analysis).
+# On cache miss, we create a full factorization and cache it.
 
 """
-    Base.:\\(A::HPCSparseMatrix{T,Ti,HPCBackend{D,C,SolverMUMPS}}, b::HPCVector{T,HPCBackend{D,C,SolverMUMPS}}) where {T,Ti,D,C}
+    Base.:\\(A::HPCSparseMatrix{T,Ti,HPCBackend{T,Ti,D,C,SolverMUMPS}}, b::HPCVector{T,HPCBackend{T,Ti,D,C,SolverMUMPS}}) where {T,Ti,D,C}
 
 Solve A*x = b using LU factorization with MUMPS.
+
+Uses backslash caching: first call for a given sparsity pattern performs full
+analysis + factorization. Subsequent calls with the same pattern skip analysis
+and only refactorize (much faster).
+
 For symmetric matrices, use `Symmetric(A) \\ b` to use the faster LDLT factorization.
-For repeated solves, compute the factorization once with `lu(A)` or `ldlt(A)`.
+For repeated solves with the same values, compute factorization once with `lu(A)`.
 
 Note: This method is specific to MUMPS backends. GPU backends (cuDSS) have their own
 specialized backslash methods defined in the CUDA extension.
 """
-function Base.:\(A::HPCSparseMatrix{T,Ti,HPCBackend{D,C,SolverMUMPS}},
-                 b::HPCVector{T,HPCBackend{D,C,SolverMUMPS}}) where {T,Ti,D,C}
-    F = LinearAlgebra.lu(A)
-    x = F \ b
-    finalize!(F)
-    return x
+function Base.:\(A::HPCSparseMatrix{T,Ti,HPCBackend{T,Ti,D,C,SolverMUMPS}},
+                 b::HPCVector{T,HPCBackend{T,Ti,D,C,SolverMUMPS}}) where {T,Ti,D,C}
+    structural_hash = _ensure_hash(A)
+    cache_key = (structural_hash, false, T)  # false = not symmetric (LU)
+
+    if haskey(_mumps_backslash_cache, cache_key)
+        # Cache hit: refactorize and solve (skip analysis!)
+        F = _mumps_backslash_cache[cache_key]::MUMPSFactorization{T,HPCBackend{T,Ti,D,C,SolverMUMPS},_mumps_internal_type(T)}
+        return _refactorize_and_solve!(F, A, b)
+    else
+        # Cache miss: create full factorization and cache it
+        F = _create_fresh_mumps_factorization(A, false)
+        _mumps_backslash_cache[cache_key] = F
+        return solve(F, b)
+    end
 end
 
 """
-    Base.:\\(A::Symmetric{T,<:HPCSparseMatrix{T,Ti,HPCBackend{D,C,SolverMUMPS}}}, b::HPCVector{T,HPCBackend{D,C,SolverMUMPS}}) where {T,Ti,D,C}
+    Base.:\\(A::Symmetric{T,<:HPCSparseMatrix{T,Ti,HPCBackend{T,Ti,D,C,SolverMUMPS}}}, b::HPCVector{T,HPCBackend{T,Ti,D,C,SolverMUMPS}}) where {T,Ti,D,C}
 
-Solve A*x = b for a symmetric matrix using LDLT with MUMPS (no symmetry check needed).
+Solve A*x = b for a symmetric matrix using LDLT with MUMPS.
+
+Uses backslash caching: first call for a given sparsity pattern performs full
+analysis + factorization. Subsequent calls with the same pattern skip analysis
+and only refactorize (much faster).
+
 Use `Symmetric(A)` to wrap a known-symmetric matrix and skip the expensive symmetry check.
 
 Note: This method is specific to MUMPS backends. GPU backends (cuDSS) have their own
 specialized backslash methods defined in the CUDA extension.
 """
-function Base.:\(A::Symmetric{T,<:HPCSparseMatrix{T,Ti,HPCBackend{D,C,SolverMUMPS}}},
-                 b::HPCVector{T,HPCBackend{D,C,SolverMUMPS}}) where {T,Ti,D,C}
-    F = LinearAlgebra.ldlt(parent(A))
-    x = F \ b
-    finalize!(F)
-    return x
+function Base.:\(A::Symmetric{T,<:HPCSparseMatrix{T,Ti,HPCBackend{T,Ti,D,C,SolverMUMPS}}},
+                 b::HPCVector{T,HPCBackend{T,Ti,D,C,SolverMUMPS}}) where {T,Ti,D,C}
+    A_inner = parent(A)
+    structural_hash = _ensure_hash(A_inner)
+    cache_key = (structural_hash, true, T)  # true = symmetric (LDLT)
+
+    if haskey(_mumps_backslash_cache, cache_key)
+        # Cache hit: refactorize and solve (skip analysis!)
+        F = _mumps_backslash_cache[cache_key]::MUMPSFactorization{T,HPCBackend{T,Ti,D,C,SolverMUMPS},_mumps_internal_type(T)}
+        return _refactorize_and_solve!(F, A_inner, b)
+    else
+        # Cache miss: create full factorization and cache it
+        F = _create_fresh_mumps_factorization(A_inner, true)
+        _mumps_backslash_cache[cache_key] = F
+        return solve(F, b)
+    end
 end
 
 """
-    Base.:\\(At::Transpose{T,<:HPCSparseMatrix{T,Ti,HPCBackend{D,C,SolverMUMPS}}}, b::HPCVector{T,HPCBackend{D,C,SolverMUMPS}}) where {T,Ti,D,C}
+    Base.:\\(At::Transpose{T,<:HPCSparseMatrix{T,Ti,HPCBackend{T,Ti,D,C,SolverMUMPS}}}, b::HPCVector{T,HPCBackend{T,Ti,D,C,SolverMUMPS}}) where {T,Ti,D,C}
 
 Solve transpose(A)*x = b using LU factorization with MUMPS.
+
+Uses backslash caching on the materialized transpose.
 
 Note: This method is specific to MUMPS backends. GPU backends (cuDSS) have their own
 specialized backslash methods defined in the CUDA extension.
 """
-function Base.:\(At::Transpose{T,<:HPCSparseMatrix{T,Ti,HPCBackend{D,C,SolverMUMPS}}},
-                 b::HPCVector{T,HPCBackend{D,C,SolverMUMPS}}) where {T,Ti,D,C}
+function Base.:\(At::Transpose{T,<:HPCSparseMatrix{T,Ti,HPCBackend{T,Ti,D,C,SolverMUMPS}}},
+                 b::HPCVector{T,HPCBackend{T,Ti,D,C,SolverMUMPS}}) where {T,Ti,D,C}
+    # Materialize the transpose and use backslash caching on it
     A_t = HPCSparseMatrix(At)
-    F = LinearAlgebra.lu(A_t)
-    x = F \ b
-    finalize!(F)
-    return x
+    return A_t \ b
 end
 
 # ============================================================================
@@ -647,29 +714,29 @@ end
 # For row vectors: transpose(v) / A solves x * A = transpose(v)
 
 """
-    Base.:/(vt::Transpose{T,HPCVector{T,HPCBackend{D,C,SolverMUMPS}}}, A::HPCSparseMatrix{T,Ti,HPCBackend{D,C,SolverMUMPS}}) where {T,Ti,D,C}
+    Base.:/(vt::Transpose{T,HPCVector{T,HPCBackend{T,Ti,D,C,SolverMUMPS}}}, A::HPCSparseMatrix{T,Ti,HPCBackend{T,Ti,D,C,SolverMUMPS}}) where {T,Ti,D,C}
 
 Solve x * A = transpose(v), returning x as a transposed HPCVector.
 Equivalent to transpose(transpose(A) \\ v).
 
 Note: This method is specific to MUMPS backends.
 """
-function Base.:/(vt::Transpose{T,HPCVector{T,HPCBackend{D,C,SolverMUMPS}}},
-                 A::HPCSparseMatrix{T,Ti,HPCBackend{D,C,SolverMUMPS}}) where {T,Ti,D,C}
+function Base.:/(vt::Transpose{T,HPCVector{T,HPCBackend{T,Ti,D,C,SolverMUMPS}}},
+                 A::HPCSparseMatrix{T,Ti,HPCBackend{T,Ti,D,C,SolverMUMPS}}) where {T,Ti,D,C}
     v = vt.parent
     x = transpose(A) \ v
     return transpose(x)
 end
 
 """
-    Base.:/(vt::Transpose{T,HPCVector{T,HPCBackend{D,C,SolverMUMPS}}}, At::Transpose{T,<:HPCSparseMatrix{T,Ti,HPCBackend{D,C,SolverMUMPS}}}) where {T,Ti,D,C}
+    Base.:/(vt::Transpose{T,HPCVector{T,HPCBackend{T,Ti,D,C,SolverMUMPS}}}, At::Transpose{T,<:HPCSparseMatrix{T,Ti,HPCBackend{T,Ti,D,C,SolverMUMPS}}}) where {T,Ti,D,C}
 
 Solve x * transpose(A) = transpose(v), returning x as a transposed HPCVector.
 
 Note: This method is specific to MUMPS backends.
 """
-function Base.:/(vt::Transpose{T,HPCVector{T,HPCBackend{D,C,SolverMUMPS}}},
-                 At::Transpose{T,<:HPCSparseMatrix{T,Ti,HPCBackend{D,C,SolverMUMPS}}}) where {T,Ti,D,C}
+function Base.:/(vt::Transpose{T,HPCVector{T,HPCBackend{T,Ti,D,C,SolverMUMPS}}},
+                 At::Transpose{T,<:HPCSparseMatrix{T,Ti,HPCBackend{T,Ti,D,C,SolverMUMPS}}}) where {T,Ti,D,C}
     v = vt.parent
     A = At.parent
     x = A \ v
@@ -827,8 +894,8 @@ function SparseArrays.SparseMatrixCSC(A::HPCSparseMatrix{T,Ti,B}) where {T, Ti, 
     AT = _get_csc(A)  # underlying CSC storage
     local_nnz = nnz(AT)
 
-    local_I = Vector{Int}(undef, local_nnz)
-    local_J = Vector{Int}(undef, local_nnz)
+    local_I = Vector{Ti}(undef, local_nnz)
+    local_J = Vector{Ti}(undef, local_nnz)
     local_V = Vector{T}(undef, local_nnz)
 
     idx = 1
@@ -850,8 +917,8 @@ function SparseArrays.SparseMatrixCSC(A::HPCSparseMatrix{T,Ti,B}) where {T, Ti, 
     total_nnz = sum(all_counts)
 
     # Gather all triplets
-    global_I = Vector{Int}(undef, total_nnz)
-    global_J = Vector{Int}(undef, total_nnz)
+    global_I = Vector{Ti}(undef, total_nnz)
+    global_J = Vector{Ti}(undef, total_nnz)
     global_V = Vector{T}(undef, total_nnz)
 
     comm_allgatherv!(comm, local_I, MPI.VBuffer(global_I, all_counts))
@@ -1113,8 +1180,13 @@ function map_rows_gpu(f, A...)
         hash = compute_partition_hash(row_partition)
     end
 
-    # Get backend from first argument
-    backend = first_arg.backend
+    # Get backend from first argument, but adjust T to match result's element type
+    # (e.g., norm of ComplexF64 returns Float64)
+    orig_backend = first_arg.backend
+    result_T = eltype(local_result)
+    orig_Ti = indextype_backend(typeof(orig_backend))
+    result_backend = HPCBackend{result_T,orig_Ti,typeof(orig_backend.device),typeof(orig_backend.comm),typeof(orig_backend.solver)}(
+        orig_backend.device, orig_backend.comm, orig_backend.solver)
 
     if local_result isa AbstractMatrix
         return HPCMatrix(
@@ -1122,14 +1194,14 @@ function map_rows_gpu(f, A...)
             row_partition,
             [1, size(local_result, 2) + 1],  # Full columns on each rank
             local_result,
-            backend
+            result_backend
         )
     else
         return HPCVector(
             hash,
             row_partition,
             local_result,
-            backend
+            result_backend
         )
     end
 end
@@ -1155,9 +1227,12 @@ See also: [`map_rows_gpu`](@ref) for GPU-native version (requires isbits closure
 function map_rows(f, A...)
     isempty(A) && error("map_rows requires at least one argument")
 
-    # Get a CPU backend with same comm/solver as first arg
+    # Get a CPU backend with same T, Ti, comm, solver as first arg
     first_backend = A[1] isa HPCVector ? A[1].backend : A[1].backend
-    cpu_backend = HPCBackend(DeviceCPU(), first_backend.comm, first_backend.solver)
+    T = eltype_backend(typeof(first_backend))
+    Ti = indextype_backend(typeof(first_backend))
+    cpu_backend = HPCBackend{T,Ti,DeviceCPU,typeof(first_backend.comm),typeof(first_backend.solver)}(
+        DeviceCPU(), first_backend.comm, first_backend.solver)
 
     # Convert all args to CPU
     cpu_args = map(a -> to_backend(a, cpu_backend), A)
@@ -1165,8 +1240,12 @@ function map_rows(f, A...)
     # Apply function on CPU (handles arbitrary closures)
     result_cpu = map_rows_gpu(f, cpu_args...)
 
-    # Convert back to original backend
-    return to_backend(result_cpu, first_backend)
+    # Convert back to original device, but with result's element type
+    # (e.g., norm of ComplexF64 returns Float64)
+    result_T = eltype(result_cpu isa HPCVector ? result_cpu.v : result_cpu.A)
+    target_backend = HPCBackend{result_T,Ti,typeof(first_backend.device),typeof(first_backend.comm),typeof(first_backend.solver)}(
+        first_backend.device, first_backend.comm, first_backend.solver)
+    return to_backend(result_cpu, target_backend)
 end
 
 # ============================================================================
@@ -1213,8 +1292,10 @@ function vertex_indices(A::HPCVector{T,B}) where {T, B<:HPCBackend}
     # Create local indices as global row numbers for this rank
     local_indices = collect(start_idx:end_idx)
 
-    # Create CPU backend for initial construction
-    cpu_backend = HPCBackend(DeviceCPU(), A.backend.comm, A.backend.solver)
+    # Create CPU backend for initial construction (preserve T, Ti from source)
+    Ti = indextype_backend(B)
+    cpu_backend = HPCBackend{T,Ti,DeviceCPU,typeof(A.backend.comm),typeof(A.backend.solver)}(
+        DeviceCPU(), A.backend.comm, A.backend.solver)
     indices_cpu = HPCVector_local(local_indices, cpu_backend)
 
     # Convert to same device as A
@@ -1230,8 +1311,10 @@ function vertex_indices(A::HPCMatrix{T,B}) where {T, B<:HPCBackend}
     # Create local indices as global row numbers for this rank
     local_indices = collect(start_idx:end_idx)
 
-    # Create CPU backend for initial construction
-    cpu_backend = HPCBackend(DeviceCPU(), A.backend.comm, A.backend.solver)
+    # Create CPU backend for initial construction (preserve T, Ti from source)
+    Ti = indextype_backend(B)
+    cpu_backend = HPCBackend{T,Ti,DeviceCPU,typeof(A.backend.comm),typeof(A.backend.solver)}(
+        DeviceCPU(), A.backend.comm, A.backend.solver)
     indices_cpu = HPCVector_local(local_indices, cpu_backend)
 
     # Convert to same device as A

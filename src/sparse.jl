@@ -127,19 +127,19 @@ function compute_structural_hash(row_partition::Vector{Int}, col_indices::Vector
 end
 
 """
-    compress_AT(AT::SparseMatrixCSC{T,Ti}, col_indices::Vector{Int}) where {T,Ti}
+    compress_AT(AT::SparseMatrixCSC{T,Ti}, col_indices::Vector{<:Integer}) where {T,Ti}
 
 Compress AT from global column indices to local indices 1:length(col_indices).
 Returns a new SparseMatrixCSC with m = length(col_indices).
 
 The col_indices array provides the local→global mapping: col_indices[local_idx] = global_col.
 """
-function compress_AT(AT::SparseMatrixCSC{T,Ti}, col_indices::Vector{Int}) where {T,Ti}
+function compress_AT(AT::SparseMatrixCSC{T,Ti}, col_indices::Vector{<:Integer}) where {T,Ti}
     if isempty(col_indices)
-        return SparseMatrixCSC(0, AT.n, AT.colptr, Int[], T[])
+        return SparseMatrixCSC(0, AT.n, AT.colptr, Ti[], T[])
     end
     # col_indices is sorted, use binary search instead of Dict
-    compressed_rowval = [searchsortedfirst(col_indices, r) for r in AT.rowval]
+    compressed_rowval = Ti[searchsortedfirst(col_indices, r) for r in AT.rowval]
     return SparseMatrixCSC(length(col_indices), AT.n, AT.colptr, compressed_rowval, AT.nzval)
 end
 
@@ -149,11 +149,11 @@ end
 Optimized reindex using precomputed mapping vector.
 col_to_union_map[local_idx] gives the union index for local column index local_idx.
 """
-function reindex_to_union_cached(AT::SparseMatrixCSC{T,Ti}, col_to_union_map::Vector{Int}, union_size::Int) where {T,Ti}
+function reindex_to_union_cached(AT::SparseMatrixCSC{T,Ti}, col_to_union_map::Vector{<:Integer}, union_size::Int) where {T,Ti}
     if isempty(AT.rowval)
-        return SparseMatrixCSC(union_size, AT.n, AT.colptr, Int[], T[])
+        return SparseMatrixCSC(union_size, AT.n, AT.colptr, Ti[], T[])
     end
-    new_rowval = [col_to_union_map[r] for r in AT.rowval]
+    new_rowval = Ti[col_to_union_map[r] for r in AT.rowval]
     return SparseMatrixCSC(union_size, AT.n, AT.colptr, new_rowval, AT.nzval)
 end
 
@@ -163,11 +163,11 @@ end
 Optimized compress_AT using precomputed mapping vector.
 compress_map[global_idx] gives the local index for global column index global_idx.
 """
-function compress_AT_cached(AT::SparseMatrixCSC{T,Ti}, compress_map::Vector{Int}, local_size::Int) where {T,Ti}
+function compress_AT_cached(AT::SparseMatrixCSC{T,Ti}, compress_map::Vector{<:Integer}, local_size::Int) where {T,Ti}
     if isempty(AT.rowval)
-        return SparseMatrixCSC(local_size, AT.n, AT.colptr, Int[], T[])
+        return SparseMatrixCSC(local_size, AT.n, AT.colptr, Ti[], T[])
     end
-    compressed_rowval = [compress_map[r] for r in AT.rowval]
+    compressed_rowval = Ti[compress_map[r] for r in AT.rowval]
     return SparseMatrixCSC(local_size, AT.n, AT.colptr, compressed_rowval, AT.nzval)
 end
 
@@ -241,13 +241,13 @@ function _rebuild_AT_with_insertions(AT::SparseMatrixCSC{T,Ti}, col_indices::Vec
     end
 
     # Build colptr from cumulative counts
-    new_colptr = ones(Int, n_local_rows + 1)
+    new_colptr = ones(Ti, n_local_rows + 1)
     for j in 1:n_local_rows
         new_colptr[j+1] = new_colptr[j] + col_counts[j]
     end
 
     # Fill rowval and nzval
-    new_rowval = Vector{Int}(undef, nnz)
+    new_rowval = Vector{Ti}(undef, nnz)
     new_nzval = Vector{T}(undef, nnz)
     col_pos = copy(new_colptr[1:end-1])  # Current position in each column
 
@@ -316,7 +316,7 @@ Only `nzval` can live on GPU, with type determined by the backend device:
 
 Use `to_backend(A, target_backend)` to convert between backends.
 """
-mutable struct HPCSparseMatrix{T,Ti,B<:HPCBackend} <: AbstractMatrix{T}
+mutable struct HPCSparseMatrix{T,Ti,B<:HPCBackend{T,Ti}} <: AbstractMatrix{T}
     structural_hash::OptionalBlake3Hash
     row_partition::Vector{Int}      # Always CPU
     col_partition::Vector{Int}      # Always CPU
@@ -337,8 +337,8 @@ mutable struct HPCSparseMatrix{T,Ti,B<:HPCBackend} <: AbstractMatrix{T}
 end
 
 # Type aliases for common backend configurations
-const HPCSparseMatrix_CPU{T,Ti} = HPCSparseMatrix{T, Ti, HPCBackend{DeviceCPU, CommMPI, SolverMUMPS}}
-const HPCSparseMatrix_CPU_Serial{T,Ti} = HPCSparseMatrix{T, Ti, HPCBackend{DeviceCPU, CommSerial, SolverMUMPS}}
+const HPCSparseMatrix_CPU{T,Ti} = HPCSparseMatrix{T, Ti, HPCBackend_CPU_MPI{T,Ti}}
+const HPCSparseMatrix_CPU_Serial{T,Ti} = HPCSparseMatrix{T, Ti, HPCBackend_CPU_Serial{T,Ti}}
 
 """
     _get_csc(A::HPCSparseMatrix) -> SparseMatrixCSC
@@ -451,14 +451,27 @@ local_csc = sparse([1, 1, 2], [1, 2, 3], [1.0, 2.0, 3.0], 2, 3)  # 2 local rows,
 A = HPCSparseMatrix_local(SparseMatrixCSR(local_csc), backend)
 ```
 """
-function HPCSparseMatrix_local(A_local::SparseMatrixCSR{T,Ti}, backend::B;
-    col_partition::Vector{Int}=uniform_partition(A_local.parent.m, comm_size(backend.comm))) where {T,Ti,B<:HPCBackend}
+function HPCSparseMatrix_local(A_local::SparseMatrixCSR{T,Timat}, backend::B;
+    col_partition::Vector{Int}=uniform_partition(A_local.parent.m, comm_size(backend.comm))) where {T,Timat,B<:HPCBackend}
+    # Get Ti from backend, not from input matrix
+    Ti = indextype_backend(backend)
     comm = backend.comm
     nranks = comm_size(comm)
 
-    AT_local = A_local.parent  # The underlying CSC storage
-    local_nrows = AT_local.n   # Columns in CSC = rows in matrix
-    ncols_global = AT_local.m  # Rows in CSC = columns in matrix (global)
+    AT_local_orig = A_local.parent  # The underlying CSC storage
+    local_nrows = AT_local_orig.n   # Columns in CSC = rows in matrix
+    ncols_global = AT_local_orig.m  # Rows in CSC = columns in matrix (global)
+
+    # Convert index arrays to Ti if needed
+    if Timat === Ti
+        AT_local = AT_local_orig
+    else
+        AT_local = SparseMatrixCSC{T,Ti}(
+            AT_local_orig.m, AT_local_orig.n,
+            convert(Vector{Ti}, AT_local_orig.colptr),
+            convert(Vector{Ti}, AT_local_orig.rowval),
+            AT_local_orig.nzval)
+    end
 
     # Gather local row counts and column counts from all ranks
     local_info = Int32[local_nrows, ncols_global]
@@ -485,7 +498,7 @@ function HPCSparseMatrix_local(A_local::SparseMatrixCSR{T,Ti}, backend::B;
 
     # Identify which columns have nonzeros in our local part
     # AT_local.rowval contains global column indices
-    col_indices = isempty(AT_local.rowval) ? Int[] : unique(sort(AT_local.rowval))
+    col_indices = isempty(AT_local.rowval) ? Ti[] : unique!(sort(copy(AT_local.rowval)))
 
     # Compress AT_local: convert global column indices to local indices 1:length(col_indices)
     compressed_AT = compress_AT(AT_local, col_indices)
@@ -494,7 +507,9 @@ function HPCSparseMatrix_local(A_local::SparseMatrixCSR{T,Ti}, backend::B;
     # In CSC format: colptr→rowptr, rowval→colval, nzval stays the same
     rowptr = compressed_AT.colptr
     colval = compressed_AT.rowval
+
     nzval_cpu = compressed_AT.nzval
+
     nrows_local = local_nrows
     ncols_compressed = length(col_indices)
 
@@ -547,28 +562,6 @@ mutable struct MatrixPlan{T,Ti,AIV<:AbstractVector{Ti}}
     recv_offsets::Vector{Int}
     local_ranges::Vector{Tuple{UnitRange{Int},Int}}
     AT::SparseMatrixCSC{T,Ti}
-    # Cached hash for product result (computed lazily on first execution)
-    product_structural_hash::OptionalBlake3Hash
-    product_col_indices::Union{Nothing, Vector{Int}}
-    product_row_partition::Union{Nothing, Vector{Int}}
-    product_compress_map::Union{Nothing, Vector{Int}}  # global_col -> local_col mapping for compress_AT
-    # Symbolic multiplication data (computed lazily on first execution)
-    # For C = plan.AT * _get_csc(A), these indices satisfy:
-    # C.nzval[Ci[k]] += plan.AT.nzval[Ai[k]] * A.nzval[Bi[k]]
-    # Arrays are partitioned into layers where Ci values don't repeat within a layer,
-    # allowing parallel execution without atomics.
-    # AIV is the index array type (Vector{Ti} for CPU, MtlVector{Ti} for GPU)
-    sym_Ai::Union{Nothing, AIV}  # indices into plan.AT.nzval (on target backend)
-    sym_Bi::Union{Nothing, AIV}  # indices into A.nzval (on target backend)
-    sym_Ci::Union{Nothing, AIV}  # indices into result.nzval (on target backend)
-    sym_layer_starts::Union{Nothing, Vector{Ti}}  # layer_starts[l] = first index of layer l (always CPU for kernel control)
-    sym_colptr::Union{Nothing, Vector{Ti}}  # colptr for result (always CPU for result construction)
-    sym_rowval::Union{Nothing, Vector{Ti}}  # rowval for result (always CPU, compressed local indices)
-    # Cached GPU arrays for result construction (lazily populated on first GPU execution)
-    # These are fixed for the plan's structure and reused across executions.
-    cached_rowptr_target::Union{Nothing, AIV}  # GPU copy of sym_colptr (same size each time)
-    cached_colval_target::Union{Nothing, AIV}  # GPU copy of sym_rowval (same size each time)
-    cached_AT_nzval::Union{Nothing, AbstractVector{T}}  # GPU buffer for plan.AT.nzval (reused for copyto!)
 end
 
 """
@@ -733,8 +726,8 @@ function MatrixPlan(row_indices::Vector{Int}, B::HPCSparseMatrix{T,Ti,B_backend}
     end
 
     # Allocate AT structure
-    combined_colptr = Vector{Int}(undef, n_total_cols + 1)
-    combined_rowval = Vector{Int}(undef, total_nnz)
+    combined_colptr = Vector{Ti}(undef, n_total_cols + 1)
+    combined_rowval = Vector{Ti}(undef, total_nnz)
     combined_nzval = zeros(T, total_nnz)
 
     combined_colptr[1] = 1
@@ -852,10 +845,7 @@ function MatrixPlan(row_indices::Vector{Int}, B::HPCSparseMatrix{T,Ti,B_backend}
         rank_ids, send_ranges_vec, send_bufs, send_reqs,
         recv_rank_ids, recv_bufs, recv_reqs, recv_offsets_vec,
         local_ranges,
-        plan_AT,
-        nothing, nothing, nothing, nothing,  # product: hash, col_indices, row_partition, compress_map
-        nothing, nothing, nothing, nothing, nothing, nothing,  # symbolic multiply: Ai, Bi, Ci, layer_starts, colptr, rowval
-        nothing, nothing, nothing  # cached GPU arrays: rowptr_target, colval_target, AT_nzval
+        plan_AT
     )
 end
 
@@ -924,10 +914,10 @@ end
                   target::Union{Nothing,AbstractVector{T}}=nothing) where {T,Ti,AIV,B_backend}
 
 Execute a communication plan to gather rows from B into target buffer.
-- Local data: copied directly from B.nzval to target (same backend, no CPU staging)
+- Local data: copied directly (same backend) or via CPU staging (GPU→CPU)
 - Remote data: staged through CPU for MPI, then copied to target
 
-If target is nothing, uses plan.AT.nzval (CPU) as the target.
+If target is nothing, uses plan.AT.nzval (always CPU) as the target.
 """
 function execute_plan!(plan::MatrixPlan{T,Ti,AIV}, B::HPCSparseMatrix{T,Ti,B_backend},
                        target::Union{Nothing,AbstractVector{T}}=nothing) where {T,Ti,AIV,B_backend<:HPCBackend}
@@ -936,11 +926,19 @@ function execute_plan!(plan::MatrixPlan{T,Ti,AIV}, B::HPCSparseMatrix{T,Ti,B_bac
     # Use plan.AT.nzval if no target specified
     dst = target === nothing ? plan.AT.nzval : target
 
-    # Step 1: Copy local values directly from B.nzval to target (same backend)
-    # Use view broadcast which is faster than copyto! on GPU
+    # Step 1: Copy local values from B.nzval to target
+    # When dst is CPU (plan.AT.nzval) but B is GPU, we need CPU staging
+    is_cpu_dst = dst isa Vector
     for (src_range, dst_off) in plan.local_ranges
         n = length(src_range)
-        view(dst, dst_off:dst_off+n-1) .= view(B.nzval, src_range)
+        if is_cpu_dst
+            # CPU destination: use _copy_range_to_cpu which handles GPU→CPU
+            buf = _copy_range_to_cpu(B.nzval, src_range)
+            dst[dst_off:dst_off+n-1] .= buf
+        else
+            # GPU destination: use view broadcast (same backend)
+            view(dst, dst_off:dst_off+n-1) .= view(B.nzval, src_range)
+        end
     end
 
     # Step 2: Fill send buffers (CPU) and send to ranks that requested from us
@@ -978,355 +976,86 @@ function execute_plan!(plan::MatrixPlan{T,Ti,AIV}, B::HPCSparseMatrix{T,Ti,B_bac
 
     return plan.AT
 end
-"""
-    _compute_symbolic_multiply!(plan::MatrixPlan{T,Ti}, A_parent::SparseMatrixCSC{T,Ti}) where {T,Ti}
-
-Compute the symbolic multiplication for C = plan.AT * A_parent.
-Stores in plan: sym_Ai, sym_Bi, sym_Ci, sym_colptr, sym_rowval.
-
-For CSC multiplication C = plan.AT * A_parent where:
-- plan.AT has shape (m, k)
-- A_parent has shape (k, n)
-- C has shape (m, n)
-
-For each column j of C (1 to n):
-  For each nonzero A_parent[p, j] at position p:
-    For each nonzero plan.AT[i, p] in column p:
-      C[i, j] += plan.AT[i, p] * A_parent[p, j]
-"""
-function _compute_symbolic_multiply!(plan::MatrixPlan{T,Ti,AIV}, A_parent::SparseMatrixCSC{T,Ti}) where {T,Ti,AIV}
-    AT = plan.AT  # shape (m, k)
-    B = A_parent  # shape (k, n), we call it B for clarity in the multiply
-
-    m = AT.m
-    n = B.n
-
-    # First pass: compute symbolic structure of C
-    # For each column j, collect unique row indices that will have nonzeros
-
-    # Use a temporary array to mark which rows have nonzeros in current column
-    row_marker = zeros(Ti, m)  # 0 means not present, >0 means present
-    marker_val = Ti(0)
-
-    # Count nnz per column and collect row indices
-    col_nnz = zeros(Ti, n)
-    all_row_indices = Vector{Ti}[]  # row indices for each column
-
-    for j in 1:n
-        marker_val += 1
-        row_indices_j = Ti[]
-
-        # For each nonzero B[p, j]
-        for bp in B.colptr[j]:(B.colptr[j+1]-1)
-            p = B.rowval[bp]  # column index in AT
-
-            # For each nonzero AT[i, p]
-            for ap in AT.colptr[p]:(AT.colptr[p+1]-1)
-                i = AT.rowval[ap]
-
-                # Mark row i if not already marked for this column
-                if row_marker[i] != marker_val
-                    row_marker[i] = marker_val
-                    push!(row_indices_j, i)
-                end
-            end
-        end
-
-        # Sort row indices for CSC format
-        sort!(row_indices_j)
-        push!(all_row_indices, row_indices_j)
-        col_nnz[j] = length(row_indices_j)
-    end
-
-    # Build colptr
-    colptr = Vector{Ti}(undef, n + 1)
-    colptr[1] = 1
-    for j in 1:n
-        colptr[j+1] = colptr[j] + col_nnz[j]
-    end
-    nnz_C = colptr[n+1] - 1
-
-    # Build rowval
-    rowval = Vector{Ti}(undef, nnz_C)
-    idx = 1
-    for j in 1:n
-        for i in all_row_indices[j]
-            rowval[idx] = i
-            idx += 1
-        end
-    end
-
-    # Build row_to_idx mapping for each column (to find C[i,j] index quickly)
-    # For column j, row_to_idx[i] = index into C.nzval, or 0 if not present
-    row_to_idx = zeros(Ti, m)
-
-    # Second pass: compute index triplets (Ai, Bi, Ci)
-    Ai = Ti[]
-    Bi = Ti[]
-    Ci = Ti[]
-
-    for j in 1:n
-        # Build row_to_idx for this column
-        for idx in colptr[j]:(colptr[j+1]-1)
-            row_to_idx[rowval[idx]] = idx
-        end
-
-        # For each nonzero B[p, j]
-        for bp in B.colptr[j]:(B.colptr[j+1]-1)
-            p = B.rowval[bp]
-
-            # For each nonzero AT[i, p]
-            for ap in AT.colptr[p]:(AT.colptr[p+1]-1)
-                i = AT.rowval[ap]
-                c_idx = row_to_idx[i]
-
-                push!(Ai, ap)
-                push!(Bi, bp)
-                push!(Ci, c_idx)
-            end
-        end
-
-        # Clear row_to_idx for this column
-        for idx in colptr[j]:(colptr[j+1]-1)
-            row_to_idx[rowval[idx]] = 0
-        end
-    end
-
-    # Partition into layers where Ci values don't repeat within a layer.
-    # This allows parallel execution without atomics.
-    if isempty(Ci)
-        layer_starts = Ti[1]
-    else
-        # Assign each triplet to a layer using greedy coloring
-        # layer_of[k] = which layer triplet k belongs to
-        n_triplets = length(Ci)
-        layer_of = zeros(Ti, n_triplets)
-
-        # For each output position, track which layer it was last used in
-        # (0 means not used yet)
-        last_layer_used = zeros(Ti, nnz_C)
-        num_layers = Ti(0)
-
-        for k in 1:n_triplets
-            c = Ci[k]
-            # Find smallest layer where c hasn't been used
-            # Since last_layer_used[c] is the last layer where c appeared,
-            # we need layer = last_layer_used[c] + 1
-            layer = last_layer_used[c] + 1
-            layer_of[k] = layer
-            last_layer_used[c] = layer
-            num_layers = max(num_layers, layer)
-        end
-
-        # Reorder triplets by layer
-        # First, count how many triplets in each layer
-        layer_counts = zeros(Ti, num_layers)
-        for k in 1:n_triplets
-            layer_counts[layer_of[k]] += 1
-        end
-
-        # Compute layer_starts (cumulative sum)
-        layer_starts = Vector{Ti}(undef, num_layers + 1)
-        layer_starts[1] = 1
-        for l in 1:num_layers
-            layer_starts[l+1] = layer_starts[l] + layer_counts[l]
-        end
-
-        # Build reordered arrays
-        # next_pos[l] = next position to write for layer l
-        next_pos = copy(layer_starts[1:num_layers])
-
-        Ai_sorted = Vector{Ti}(undef, n_triplets)
-        Bi_sorted = Vector{Ti}(undef, n_triplets)
-        Ci_sorted = Vector{Ti}(undef, n_triplets)
-
-        for k in 1:n_triplets
-            l = layer_of[k]
-            pos = next_pos[l]
-            Ai_sorted[pos] = Ai[k]
-            Bi_sorted[pos] = Bi[k]
-            Ci_sorted[pos] = Ci[k]
-            next_pos[l] += 1
-        end
-
-        Ai = Ai_sorted
-        Bi = Bi_sorted
-        Ci = Ci_sorted
-    end
-
-    # Store in plan, converting to target backend (AIV)
-    # For CPU (AIV=Vector{Ti}), this is a no-op
-    # For GPU (AIV=MtlVector{Ti}), this copies to GPU
-    plan.sym_Ai = AIV(Ai)
-    plan.sym_Bi = AIV(Bi)
-    plan.sym_Ci = AIV(Ci)
-    plan.sym_layer_starts = layer_starts
-    plan.sym_colptr = colptr
-    plan.sym_rowval = rowval
-
-    return nothing
-end
-
-# ============================================================================
-# Unified Symbolic Multiply Kernel (KernelAbstractions - works on CPU and GPU)
-# ============================================================================
-
-"""
-    _symbolic_multiply_layer_kernel!
-
-KernelAbstractions kernel for one layer of symbolic sparse matrix multiplication.
-Within each layer, Ci values are unique, so no atomics are needed.
-C.nzval[Ci[k]] += AT_nzval[Ai[k]] * B_nzval[Bi[k]] for k in layer_start:(layer_end-1)
-"""
-@kernel function _symbolic_multiply_layer_kernel!(C_nzval, @Const(Ai), @Const(Bi), @Const(Ci),
-                                                   @Const(AT_nzval), @Const(B_nzval),
-                                                   layer_start::Int, layer_size::Int)
-    idx = @index(Global)
-    if idx <= layer_size
-        k = layer_start + idx - 1
-        @inbounds C_nzval[Ci[k]] += AT_nzval[Ai[k]] * B_nzval[Bi[k]]
-    end
-end
-
-"""
-    _execute_symbolic_multiply!(nzval, plan, AT_nzval, B_nzval)
-
-Unified symbolic multiplication using layer-based parallelism.
-The triplets (Ai, Bi, Ci) are partitioned into layers where Ci values
-don't repeat within a layer, allowing parallel execution without atomics.
-Each layer is processed with a parallel KernelAbstractions kernel.
-
-Works on both CPU and GPU with the same code path.
-"""
-function _execute_symbolic_multiply!(nzval::AbstractVector{T}, plan::MatrixPlan{T,Ti,AIV},
-                                      AT_nzval::AbstractVector{T}, B_nzval::AbstractVector{T}) where {T,Ti,AIV}
-    # Zero the output
-    fill!(nzval, zero(T))
-
-    Ai = plan.sym_Ai
-    Bi = plan.sym_Bi
-    Ci = plan.sym_Ci
-    layer_starts = plan.sym_layer_starts
-
-    if isempty(Ai)
-        return nzval
-    end
-
-    backend = KernelAbstractions.get_backend(nzval)
-
-    # Index arrays are already on the target backend (converted in _compute_symbolic_multiply!)
-    # No adapt() needed - use directly
-
-    # Process each layer (layers are processed sequentially, elements within layer in parallel)
-    num_layers = length(layer_starts) - 1
-    kernel = _symbolic_multiply_layer_kernel!(backend)
-
-    for l in 1:num_layers
-        layer_start = Int(layer_starts[l])
-        layer_end = Int(layer_starts[l + 1])
-        layer_size = layer_end - layer_start
-
-        if layer_size > 0
-            kernel(nzval, Ai, Bi, Ci, AT_nzval, B_nzval,
-                   layer_start, layer_size; ndrange=layer_size)
-        end
-    end
-
-    # No sync here - GPU maintains execution order on same command queue.
-    # Sync happens later when data is needed for MPI or CPU operations.
-    return nzval
-end
 
 """
     Base.*(A::HPCSparseMatrix{T,Ti,AV}, B::HPCSparseMatrix{T,Ti,AV}) where {T,Ti,AV}
 
-Multiply two distributed sparse matrices A * B using symbolic multiplication.
+Multiply two distributed sparse matrices A * B using native Julia sparse multiply.
 
-Uses a unified KernelAbstractions kernel that works on both CPU and GPU.
-MPI communication always uses CPU staging, then data is adapted to the
-target backend (A.nzval's backend) for the symbolic multiply computation.
+MPI communication gathers the required rows of B, then Julia's native
+SparseMatrixCSC multiplication computes the local result.
 
 Note: A and B must have the same storage type (both CPU or both GPU).
+For GPU backends, data is copied to CPU for the multiply, then back to GPU.
 """
 function Base.:*(A::HPCSparseMatrix{T,Ti,BK}, B::HPCSparseMatrix{T,Ti,BK}) where {T,Ti,BK}
     comm = A.backend.comm
 
-    # Get memoized communication plan
+    # Get memoized communication plan (handles MPI communication for gathering B rows)
     plan = MatrixPlan(A, B)
 
-    # Compute symbolic multiplication if not already cached
-    # C^T = B^T * A^T = plan.AT * _get_csc(A)
-    if plan.sym_Ai === nothing
-        _compute_symbolic_multiply!(plan, _get_csc(A))
+    # Gather B values into plan.AT
+    # execute_plan! fills plan.AT.nzval with the actual values from B
+    execute_plan!(plan, B)
 
-        # Compute col_indices and compress_map from symbolic rowval (global column indices)
-        if isempty(plan.sym_rowval)
-            result_col_indices = Int[]
-            compress_map = Int[]
-        else
-            result_col_indices = unique(sort(Int.(plan.sym_rowval)))
+    # Get local A as CSC (copies nzval to CPU if on GPU)
+    A_csc = _get_csc(A)
 
-            # Build compress_map: compress_map[global_col] = local_col
-            max_col = maximum(result_col_indices)
-            compress_map = zeros(Int, max_col)
-            for (local_idx, global_idx) in enumerate(result_col_indices)
-                compress_map[global_idx] = local_idx
-            end
+    # Native Julia sparse multiply: C^T = plan.AT * A^T
+    # plan.AT has the gathered rows of B (as CSC, representing B^T)
+    # A_csc is A^T (local part)
+    # Result CT is C^T (local part)
+    CT = plan.AT * A_csc
+
+    # Extract result structure
+    # CT is SparseMatrixCSC with:
+    #   CT.m = number of rows (= number of unique columns in result)
+    #   CT.n = number of columns (= number of local rows in result)
+    #   CT.colptr = row pointers for CSR of result
+    #   CT.rowval = global column indices
+    #   CT.nzval = values
+
+    nrows_local = CT.n
+
+    # Build col_indices from unique global column indices in CT.rowval
+    if isempty(CT.rowval)
+        result_col_indices = Int[]
+        compressed_rowval = Ti[]
+    else
+        result_col_indices = unique(sort(Int.(CT.rowval)))
+
+        # Build compress_map: compress_map[global_col] = local_col
+        max_col = maximum(result_col_indices)
+        compress_map = zeros(Int, max_col)
+        for (local_idx, global_idx) in enumerate(result_col_indices)
+            compress_map[global_idx] = local_idx
         end
 
-        # Cache col_indices and compress_map
-        plan.product_col_indices = result_col_indices
-        plan.product_compress_map = compress_map
-        plan.product_row_partition = A.row_partition
-
-        # Compress sym_rowval in place: convert global to local indices
-        for k in eachindex(plan.sym_rowval)
-            plan.sym_rowval[k] = compress_map[plan.sym_rowval[k]]
-        end
-
-        # Compute and cache structural hash
-        nnz_result = plan.sym_colptr[end] - 1
-        temp_nzval = Vector{T}(undef, nnz_result)
-        ncols_result = length(plan.sym_colptr) - 1
-        temp_csc = SparseMatrixCSC(length(result_col_indices), ncols_result,
-                                    plan.sym_colptr, plan.sym_rowval, temp_nzval)
-        plan.product_structural_hash = compute_structural_hash(A.row_partition, result_col_indices,
-                                                                temp_csc, comm)
+        # Compress rowval: convert global to local indices
+        compressed_rowval = Ti[compress_map[r] for r in CT.rowval]
     end
 
-    # Allocate result nzval on same backend as A
-    nnz_result = plan.sym_colptr[end] - 1
-    nzval = similar(A.nzval, nnz_result)
+    ncols_compressed = length(result_col_indices)
 
-    # Gather B values into cached_AT_nzval (target backend buffer)
-    # Local data: copied directly backend→backend (no CPU round-trip)
-    # Remote data: staged through CPU for MPI
-    if plan.cached_AT_nzval === nothing
-        plan.cached_AT_nzval = similar(A.nzval, length(plan.AT.nzval))
-    end
-    execute_plan!(plan, B, plan.cached_AT_nzval)
-    AT_nzval = plan.cached_AT_nzval
+    # Convert colptr to Ti
+    result_colptr = Ti.(CT.colptr)
 
-    # Execute symbolic multiplication (unified kernel)
-    _execute_symbolic_multiply!(nzval, plan, AT_nzval, A.nzval)
+    # Compute structural hash
+    temp_csc = SparseMatrixCSC(ncols_compressed, nrows_local, result_colptr, compressed_rowval, CT.nzval)
+    structural_hash = compute_structural_hash(A.row_partition, result_col_indices, temp_csc, comm)
 
-    # C = A * B has rows from A and columns from B
-    # Extract CSR components directly (rowptr=sym_colptr, colval=sym_rowval)
-    nrows_local = length(plan.sym_colptr) - 1
-    ncols_compressed = length(plan.product_col_indices)
+    # Convert nzval to target backend (no-op for CPU, copy for GPU)
+    nzval = _values_to_backend(CT.nzval, A.nzval)
 
-    # Cache structure arrays (unified: _to_target_device is no-op for CPU)
+    # Convert structure arrays to target backend
     device = A.backend.device
-    if plan.cached_rowptr_target === nothing
-        plan.cached_rowptr_target = _to_target_device(plan.sym_colptr, device)
-    end
-    if plan.cached_colval_target === nothing
-        plan.cached_colval_target = _to_target_device(plan.sym_rowval, device)
-    end
-    return HPCSparseMatrix{T,Ti,BK}(plan.product_structural_hash, A.row_partition, B.col_partition,
-        plan.product_col_indices, plan.sym_colptr, plan.sym_rowval, nzval,
+    rowptr_target = _to_target_device(result_colptr, device)
+    colval_target = _to_target_device(compressed_rowval, device)
+
+    return HPCSparseMatrix{T,Ti,BK}(structural_hash, A.row_partition, B.col_partition,
+        result_col_indices, result_colptr, compressed_rowval, nzval,
         nrows_local, ncols_compressed, nothing, nothing,
-        plan.cached_rowptr_target, plan.cached_colval_target, A.backend)
+        rowptr_target, colval_target, A.backend)
 end
 
 # Note: Mixed-backend matrix multiplication (different B1, B2) is not supported.
@@ -1927,8 +1656,8 @@ function TransposePlan(A::HPCSparseMatrix{T,Ti,B}) where {T,Ti,B<:HPCBackend}
 
     # Build CSC structure for result.AT
     # result.AT has dimensions (nrows_A, local_ncols)
-    colptr = zeros(Int, local_ncols + 1)
-    rowval = Vector{Int}(undef, length(entries))
+    colptr = zeros(Ti, local_ncols + 1)
+    rowval = Vector{Ti}(undef, length(entries))
     nzval = zeros(T, length(entries))
 
     # Count entries per column (store in colptr[col+1] for cumsum)
@@ -2174,13 +1903,13 @@ function VectorPlan(A::HPCSparseMatrix{T,Ti,B}, x::HPCVector{T,Bx}) where {T,Ti,
     struct_send_bufs = Dict{Int,Vector{Int}}()
     struct_send_reqs = []
     recv_rank_ids = Int[]
-    recv_perm_map = Dict{Int,Vector{Int}}()  # rank => dst indices in gathered
+    recv_perm_map = Dict{Int,Vector{Ti}}()  # rank => dst indices in gathered
 
     for r in 0:(nranks-1)
         if send_counts[r+1] > 0 && r != rank
             push!(recv_rank_ids, r)
             indices = [t[1] for t in needed_from[r+1]]
-            dst_indices = [t[2] for t in needed_from[r+1]]
+            dst_indices = Ti[t[2] for t in needed_from[r+1]]
             recv_perm_map[r] = dst_indices
             struct_send_bufs[r] = indices
             req = comm_isend(comm, indices, r, 20)
@@ -2207,20 +1936,20 @@ function VectorPlan(A::HPCSparseMatrix{T,Ti,B}, x::HPCVector{T,Bx}) where {T,Ti,
     comm_waitall(comm, struct_send_reqs)
 
     # Step 5: Convert received global indices to local indices for sending
-    send_indices_map = Dict{Int,Vector{Int}}()
+    send_indices_map = Dict{Int,Vector{Ti}}()
     for r in send_rank_ids
         global_indices = struct_recv_bufs[r]
-        local_indices = [idx - my_x_start + 1 for idx in global_indices]
+        local_indices = Ti[idx - my_x_start + 1 for idx in global_indices]
         send_indices_map[r] = local_indices
     end
 
     # Step 6: Handle local elements (elements we own)
-    local_src_indices = Int[]
-    local_dst_indices = Int[]
+    local_src_indices = Ti[]
+    local_dst_indices = Ti[]
     for (global_idx, dst_idx) in needed_from[rank+1]
-        local_idx = global_idx - my_x_start + 1
+        local_idx = Ti(global_idx - my_x_start + 1)
         push!(local_src_indices, local_idx)
-        push!(local_dst_indices, dst_idx)
+        push!(local_dst_indices, Ti(dst_idx))
     end
 
     # Step 7: Build final arrays and buffers
@@ -2244,7 +1973,7 @@ function VectorPlan(A::HPCSparseMatrix{T,Ti,B}, x::HPCVector{T,Bx}) where {T,Ti,
 
     # Determine the array type for VectorPlan based on input vector's storage
     AV = typeof(x.v)
-    return VectorPlan{T,AV}(
+    return VectorPlan{T,Ti,AV}(
         send_rank_ids, send_indices_final, send_bufs, send_reqs,
         recv_rank_ids, recv_bufs, recv_reqs, recv_perm_final,
         local_src_indices, local_dst_indices, gathered, gathered_cpu,
@@ -2262,9 +1991,9 @@ The plan is cached based on the structural hashes of A and x, plus the array typ
 """
 function get_vector_plan(A::HPCSparseMatrix{T,Ti}, x::HPCVector{T,B}) where {T,Ti,B<:HPCBackend}
     AV = typeof(x.v)  # Get actual array type from the vector
-    key = (_ensure_hash(A), x.structural_hash, T, AV)
+    key = (_ensure_hash(A), x.structural_hash, T, Ti, AV)
     if haskey(_vector_plan_cache, key)
-        return _vector_plan_cache[key]::VectorPlan{T,AV}
+        return _vector_plan_cache[key]::VectorPlan{T,Ti,AV}
     end
     plan = VectorPlan(A, x)
     _vector_plan_cache[key] = plan
@@ -2308,8 +2037,8 @@ function LinearAlgebra.mul!(y::HPCVector{T,AV}, A::HPCSparseMatrix{T,Ti}, x::HPC
 end
 
 # Helper to get CPU buffer for sparse multiply
-_gathered_cpu_buffer(plan::VectorPlan{T,Vector{T}}) where T = plan.gathered
-_gathered_cpu_buffer(plan::VectorPlan{T,AV}) where {T,AV} = plan.gathered_cpu
+_gathered_cpu_buffer(plan::VectorPlan{T,Ti,Vector{T}}) where {T,Ti} = plan.gathered
+_gathered_cpu_buffer(plan::VectorPlan{T,Ti,AV}) where {T,Ti,AV} = plan.gathered_cpu
 
 # Note: _create_output_like is defined in vectors.jl (shared by sparse and dense)
 
@@ -2706,7 +2435,7 @@ Uses MPI.Allreduce to sum local counts across all ranks.
 """
 function nnz(A::HPCSparseMatrix{T,Ti,B}) where {T,Ti,B}
     comm = A.backend.comm
-    local_nnz = length(A.nzval)
+    local_nnz = A.rowptr[end] - 1
     return comm_allreduce(comm, local_nnz, +)
 end
 
@@ -2771,9 +2500,14 @@ function _map_nzval(f, A::HPCSparseMatrix{T,Ti,B}) where {T,Ti,B<:HPCBackend}
     device = A.backend.device
     rowptr_target = _to_target_device(A.rowptr, device)
     colval_target = _to_target_device(A.colval, device)
-    return HPCSparseMatrix{RT,Ti,B}(A.structural_hash, A.row_partition, A.col_partition,
+
+    # Create backend with result element type (handles T -> real(T) for abs/abs2)
+    new_backend = retype_backend(A.backend, RT)
+    BNew = typeof(new_backend)
+
+    return HPCSparseMatrix{RT,Ti,BNew}(A.structural_hash, A.row_partition, A.col_partition,
         A.col_indices, A.rowptr, A.colval, new_nzval,
-        A.nrows_local, A.ncols_compressed, nothing, A.cached_symmetric, rowptr_target, colval_target, A.backend)
+        A.nrows_local, A.ncols_compressed, nothing, A.cached_symmetric, rowptr_target, colval_target, new_backend)
 end
 
 """
@@ -3150,7 +2884,7 @@ function triu(A::HPCSparseMatrix{T,Ti,B}, k::Integer=0) where {T,Ti,B}
     # Build new sparse structure keeping only upper triangular entries
     # Entry (i, j) is kept if j >= i + k, i.e., j - i >= k
 
-    new_colptr = Vector{Int}(undef, A.nrows_local + 1)
+    new_colptr = Vector{Ti}(undef, A.nrows_local + 1)
     new_colptr[1] = 1
 
     # First pass: count entries per column
@@ -3173,7 +2907,7 @@ function triu(A::HPCSparseMatrix{T,Ti,B}, k::Integer=0) where {T,Ti,B}
     end
 
     total_nnz = new_colptr[end] - 1
-    new_rowval = Vector{Int}(undef, total_nnz)
+    new_rowval = Vector{Ti}(undef, total_nnz)
     new_nzval_cpu = Vector{T}(undef, total_nnz)
 
     # Second pass: fill entries (keep local indices in new_rowval)
@@ -3195,13 +2929,13 @@ function triu(A::HPCSparseMatrix{T,Ti,B}, k::Integer=0) where {T,Ti,B}
     if isempty(new_rowval)
         new_col_indices = Int[]
         new_rowptr = new_colptr
-        new_colval = Int[]
+        new_colval = Ti[]
         new_nzval_final_cpu = T[]
     else
         local_used = unique(sort(new_rowval))
         new_col_indices = col_indices[local_used]  # convert to global
         # Compress: local_used is sorted, use binary search instead of Dict
-        compressed_rowval = [searchsortedfirst(local_used, r) for r in new_rowval]
+        compressed_rowval = Ti[searchsortedfirst(local_used, r) for r in new_rowval]
         new_rowptr = new_colptr
         new_colval = compressed_rowval
         new_nzval_final_cpu = new_nzval_cpu
@@ -3246,7 +2980,7 @@ function tril(A::HPCSparseMatrix{T,Ti,B}, k::Integer=0) where {T,Ti,B}
 
     # Keep entry (i, j) if j <= i + k
 
-    new_colptr = Vector{Int}(undef, A.nrows_local + 1)
+    new_colptr = Vector{Ti}(undef, A.nrows_local + 1)
     new_colptr[1] = 1
 
     nnz_per_col = zeros(Int, A.nrows_local)
@@ -3266,7 +3000,7 @@ function tril(A::HPCSparseMatrix{T,Ti,B}, k::Integer=0) where {T,Ti,B}
     end
 
     total_nnz = new_colptr[end] - 1
-    new_rowval = Vector{Int}(undef, total_nnz)
+    new_rowval = Vector{Ti}(undef, total_nnz)
     new_nzval_cpu = Vector{T}(undef, total_nnz)
 
     idx = 1
@@ -3287,13 +3021,13 @@ function tril(A::HPCSparseMatrix{T,Ti,B}, k::Integer=0) where {T,Ti,B}
     if isempty(new_rowval)
         new_col_indices = Int[]
         new_rowptr = new_colptr
-        new_colval = Int[]
+        new_colval = Ti[]
         new_nzval_final_cpu = T[]
     else
         local_used = unique(sort(new_rowval))
         new_col_indices = col_indices[local_used]  # convert to global
         # Compress: local_used is sorted, use binary search instead of Dict
-        compressed_rowval = [searchsortedfirst(local_used, r) for r in new_rowval]
+        compressed_rowval = Ti[searchsortedfirst(local_used, r) for r in new_rowval]
         new_rowptr = new_colptr
         new_colval = compressed_rowval
         new_nzval_final_cpu = new_nzval_cpu
@@ -3585,6 +3319,8 @@ function spdiagm(kv::Pair{<:Integer,<:HPCVector}...)
     T = eltype(first(kv)[2])
     first_v = first(kv)[2]
     AV = typeof(first_v.v)  # Capture array type (Vector or MtlVector)
+    B = typeof(backend)
+    Ti = indextype_backend(B)  # Get index type from backend
     for (_, v) in kv
         T = promote_type(T, eltype(v))
     end
@@ -3613,8 +3349,8 @@ function spdiagm(kv::Pair{<:Integer,<:HPCVector}...)
     end
 
     # Step 3: Build local triplets using vectorized operations
-    local_I = Int[]
-    local_J = Int[]
+    local_I = Ti[]
+    local_J = Ti[]
     local_V = T[]
 
     for (k, v) in kv
@@ -3658,26 +3394,25 @@ function spdiagm(kv::Pair{<:Integer,<:HPCVector}...)
                 v_indices = (valid_rows .+ k) .- my_v_start .+ 1
             end
 
-            append!(local_I, local_rows)
-            append!(local_J, valid_cols)
+            append!(local_I, Ti.(local_rows))
+            append!(local_J, Ti.(valid_cols))
             append!(local_V, v_cpu[v_indices])
         end
     end
 
     # Step 4: Build M^T directly as CSC (swap I↔J), then wrap in lazy transpose for CSR
     AT_local = isempty(local_I) ?
-        SparseMatrixCSC(n, local_nrows, ones(Int, local_nrows + 1), Int[], T[]) :
+        SparseMatrixCSC(n, local_nrows, ones(Ti, local_nrows + 1), Ti[], T[]) :
         sparse(local_J, local_I, local_V, n, local_nrows)
 
     # Build CPU result first
     result_cpu = HPCSparseMatrix_local(transpose(AT_local), backend)
 
     # Convert nzval to match input array type if GPU
-    B = typeof(backend)
     if AV !== Vector{T}
         result_nzval = similar(first_v.v, length(result_cpu.nzval))
         copyto!(result_nzval, result_cpu.nzval)
-        return HPCSparseMatrix{T,Int,B}(
+        return HPCSparseMatrix{T,Ti,B}(
             result_cpu.structural_hash, result_cpu.row_partition, result_cpu.col_partition,
             result_cpu.col_indices, result_cpu.rowptr, result_cpu.colval, result_nzval,
             result_cpu.nrows_local, result_cpu.ncols_compressed, nothing, nothing,
@@ -3719,6 +3454,8 @@ function spdiagm(m::Integer, n::Integer, kv::Pair{<:Integer,<:HPCVector}...)
     T = eltype(first(kv)[2])
     first_v = first(kv)[2]
     AV = typeof(first_v.v)  # Capture array type (Vector or MtlVector)
+    B = typeof(backend)
+    Ti = indextype_backend(B)  # Get index type from backend
     for (_, v) in kv
         T = promote_type(T, eltype(v))
     end
@@ -3742,8 +3479,8 @@ function spdiagm(m::Integer, n::Integer, kv::Pair{<:Integer,<:HPCVector}...)
     end
 
     # Step 3: Build local triplets
-    local_I = Int[]
-    local_J = Int[]
+    local_I = Ti[]
+    local_J = Ti[]
     local_V = T[]
 
     for (k, v) in kv
@@ -3765,8 +3502,8 @@ function spdiagm(m::Integer, n::Integer, kv::Pair{<:Integer,<:HPCVector}...)
 
             if 1 <= vec_idx <= vec_len && 1 <= col <= n && 1 <= global_row <= m
                 local_v_idx = vec_idx - my_v_start + 1
-                push!(local_I, local_row_idx)
-                push!(local_J, col)
+                push!(local_I, Ti(local_row_idx))
+                push!(local_J, Ti(col))
                 push!(local_V, v_cpu[local_v_idx])
             end
         end
@@ -3774,18 +3511,17 @@ function spdiagm(m::Integer, n::Integer, kv::Pair{<:Integer,<:HPCVector}...)
 
     # Step 4: Build M^T directly as CSC (swap I↔J), then wrap in lazy transpose for CSR
     AT_local = isempty(local_I) ?
-        SparseMatrixCSC(n, local_nrows, ones(Int, local_nrows + 1), Int[], T[]) :
+        SparseMatrixCSC(n, local_nrows, ones(Ti, local_nrows + 1), Ti[], T[]) :
         sparse(local_J, local_I, local_V, n, local_nrows)
 
     # Build CPU result first
     result_cpu = HPCSparseMatrix_local(transpose(AT_local), backend)
 
     # Convert nzval to match input array type if GPU
-    B = typeof(backend)
     if AV !== Vector{T}
         result_nzval = similar(first_v.v, length(result_cpu.nzval))
         copyto!(result_nzval, result_cpu.nzval)
-        return HPCSparseMatrix{T,Int,B}(
+        return HPCSparseMatrix{T,Ti,B}(
             result_cpu.structural_hash, result_cpu.row_partition, result_cpu.col_partition,
             result_cpu.col_indices, result_cpu.rowptr, result_cpu.colval, result_nzval,
             result_cpu.nrows_local, result_cpu.ncols_compressed, nothing, nothing,
@@ -3813,16 +3549,20 @@ function spdiagm(v::HPCVector{T,B}) where {T,B}
     rank = comm_rank(comm)
     local_n = length(v.v)
 
+    # Get index type from backend
+    Ti = indextype_backend(B)
+
     vec_hash = v.structural_hash
     row_partition = v.partition  # Use same partition as input vector
     col_partition = v.partition  # Square matrix, same column partition
 
-    if haskey(_diag_structure_cache, vec_hash)
+    cache_key = (vec_hash, Ti)
+    if haskey(_diag_structure_cache, cache_key)
         # Reuse cached structure - use new explicit arrays constructor
-        cache = _diag_structure_cache[vec_hash]
+        cache = _diag_structure_cache[cache_key]
         nzval = copy(v.v)  # Preserves GPU/CPU type
         # Match input array type
-        return HPCSparseMatrix{T,Int,B}(cache.structural_hash, row_partition, col_partition,
+        return HPCSparseMatrix{T,Ti,B}(cache.structural_hash, row_partition, col_partition,
                                        cache.col_indices, cache.colptr, cache.rowval, nzval,
                                        local_n, length(cache.col_indices), nothing, true, cache.colptr, cache.rowval, backend)
     end
@@ -3832,8 +3572,8 @@ function spdiagm(v::HPCVector{T,B}) where {T,B}
     # colval contains LOCAL column indices (1:ncols_compressed)
     # col_indices maps local column index -> global column index
     my_start = v.partition[rank+1]
-    rowptr = collect(1:(local_n+1))  # Each row has exactly 1 entry
-    colval = collect(1:local_n)  # LOCAL column indices (compressed)
+    rowptr = collect(Ti, 1:(local_n+1))  # Each row has exactly 1 entry
+    colval = collect(Ti, 1:local_n)  # LOCAL column indices (compressed)
     nzval = copy(v.v)  # Preserves GPU/CPU type
 
     # col_indices maps local column index -> global column index
@@ -3841,11 +3581,11 @@ function spdiagm(v::HPCVector{T,B}) where {T,B}
 
     # Compute and cache the structure
     diag_hash = compute_structural_hash(row_partition, col_indices, rowptr, colval, comm)
-    _diag_structure_cache[vec_hash] = DiagStructureCache(rowptr, colval, col_indices, diag_hash)
+    _diag_structure_cache[cache_key] = DiagStructureCache{Ti}(rowptr, colval, col_indices, diag_hash)
 
     # Diagonal matrices are always symmetric
     # Match input array type
-    return HPCSparseMatrix{T,Int,B}(diag_hash, row_partition, col_partition, col_indices,
+    return HPCSparseMatrix{T,Ti,B}(diag_hash, row_partition, col_partition, col_indices,
                                rowptr, colval, nzval, local_n, length(col_indices), nothing, true, rowptr, colval, backend)
 end
 
@@ -4572,15 +4312,15 @@ function SparseRepartitionPlan(A::HPCSparseMatrix{T,Ti,B}, p::Vector{Int}) where
     result_col_indices = sort(collect(all_global_cols))
 
     # Build compress_map: global_col -> local_col
-    compress_map = zeros(Int, isempty(result_col_indices) ? 0 : maximum(result_col_indices))
+    compress_map = zeros(Ti, isempty(result_col_indices) ? 0 : maximum(result_col_indices))
     for (local_idx, global_idx) in enumerate(result_col_indices)
         compress_map[global_idx] = local_idx
     end
 
     # Build result_AT structure
-    result_colptr = Vector{Int}(undef, result_local_nrows + 1)
+    result_colptr = Vector{Ti}(undef, result_local_nrows + 1)
     result_colptr[1] = 1
-    result_rowval = Int[]
+    result_rowval = Ti[]
     result_nzval = Vector{T}()  # Will be filled during execute_plan!
 
     # Track value offsets for each data source

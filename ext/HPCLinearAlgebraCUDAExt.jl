@@ -28,11 +28,12 @@ using LinearAlgebra
 using HPCLinearAlgebra: HPCBackend, DeviceCPU, DeviceCUDA, DeviceMetal,
                         CommSerial, CommMPI, AbstractComm, AbstractDevice,
                         SolverMUMPS, AbstractSolverCuDSS,
-                        comm_rank, comm_size
+                        comm_rank, comm_size,
+                        eltype_backend, indextype_backend
 
-# Type aliases for convenience
-const CuBackend{C,S} = HPCLinearAlgebra.HPCBackend{HPCLinearAlgebra.DeviceCUDA, C, S}
-const CPUBackend{C,S} = HPCLinearAlgebra.HPCBackend{HPCLinearAlgebra.DeviceCPU, C, S}
+# Type aliases for convenience (with T and Ti type parameters)
+const CuBackend{T,Ti,C,S} = HPCLinearAlgebra.HPCBackend{T, Ti, HPCLinearAlgebra.DeviceCUDA, C, S}
+const CPUBackend{T,Ti,C,S} = HPCLinearAlgebra.HPCBackend{T, Ti, HPCLinearAlgebra.DeviceCPU, C, S}
 
 # ============================================================================
 # cuDSS Solver Types
@@ -48,65 +49,75 @@ cuDSS sparse direct solver for CUDA GPUs.
 struct SolverCuDSS <: HPCLinearAlgebra.AbstractSolverCuDSS end
 
 # Type alias for cuDSS-specific backends (constrains solver type to SolverCuDSS)
-const CuDSSBackend{C} = HPCLinearAlgebra.HPCBackend{HPCLinearAlgebra.DeviceCUDA, C, SolverCuDSS}
+const CuDSSBackend{T,Ti,C} = HPCLinearAlgebra.HPCBackend{T, Ti, HPCLinearAlgebra.DeviceCUDA, C, SolverCuDSS}
 
 # ============================================================================
-# Pre-constructed Backend Constants
+# Pre-constructed Backend Constants (Deprecated)
 # ============================================================================
 #
-# These are defined before the factory functions so they can be referenced.
+# These use default types (Float64, Int) for backward compatibility.
+# New code should use the factory functions with explicit type parameters.
 
 """
     BACKEND_CUDA_SERIAL
 
 Pre-constructed CUDA backend with serial communication and cuDSS solver.
-Use this for single-GPU computations without MPI.
+Uses Float64 element type and Int index type.
 
-Access via `backend_cuda_serial()` after loading CUDA.
+!!! warning "Deprecated"
+    Use `backend_cuda_serial(T, Ti)` instead for explicit type control.
 """
-const BACKEND_CUDA_SERIAL = HPCLinearAlgebra.HPCBackend(DeviceCUDA(), CommSerial(), SolverCuDSS())
+const BACKEND_CUDA_SERIAL = HPCLinearAlgebra.HPCBackend{Float64,Int,DeviceCUDA,CommSerial,SolverCuDSS}(
+    DeviceCUDA(), CommSerial(), SolverCuDSS())
 
 """
     BACKEND_CUDA_MPI
 
 Pre-constructed CUDA backend with MPI communication (using COMM_WORLD) and cuDSS solver.
-Uses NCCL for inter-GPU communication in multi-GPU mode.
+Uses Float64 element type and Int index type.
 
-Note: While this constant is created at module load time, actual MPI/NCCL operations
-will only work after MPI.Init() has been called.
-
-Access via `backend_cuda_mpi()` after loading CUDA.
+!!! warning "Deprecated"
+    Use `backend_cuda_mpi(T, Ti)` instead for explicit type control.
 """
-const BACKEND_CUDA_MPI = HPCLinearAlgebra.HPCBackend(DeviceCUDA(), CommMPI(MPI.COMM_WORLD), SolverCuDSS())
+const BACKEND_CUDA_MPI = HPCLinearAlgebra.HPCBackend{Float64,Int,DeviceCUDA,CommMPI,SolverCuDSS}(
+    DeviceCUDA(), CommMPI(MPI.COMM_WORLD), SolverCuDSS())
 
 # ============================================================================
 # Backend Factory Functions
 # ============================================================================
 
 """
-    backend_cuda_serial() -> HPCBackend
+    backend_cuda_serial(::Type{T}=Float64, ::Type{Ti}=Int) where {T,Ti} -> HPCBackend
 
-Return the pre-constructed CUDA backend with serial communication and cuDSS solver.
+Create a CUDA backend with serial communication and cuDSS solver.
+
+# Arguments
+- `T`: Element type for array values (default: Float64)
+- `Ti`: Index type for sparse matrix indices (default: Int)
 """
-function HPCLinearAlgebra.backend_cuda_serial()
-    return BACKEND_CUDA_SERIAL
+function HPCLinearAlgebra.backend_cuda_serial(::Type{T}=Float64, ::Type{Ti}=Int) where {T,Ti<:Integer}
+    return HPCLinearAlgebra.HPCBackend{T,Ti,DeviceCUDA,CommSerial,SolverCuDSS}(
+        DeviceCUDA(), CommSerial(), SolverCuDSS())
 end
 
 """
-    backend_cuda_mpi() -> HPCBackend
-    backend_cuda_mpi(comm::MPI.Comm) -> HPCBackend
+    backend_cuda_mpi(::Type{T}=Float64, ::Type{Ti}=Int; comm=MPI.COMM_WORLD) where {T,Ti} -> HPCBackend
 
-Return a CUDA GPU backend with MPI communication and cuDSS solver (MGMN mode).
+Create a CUDA GPU backend with MPI communication and cuDSS solver (MGMN mode).
 
-The zero-argument form returns the pre-constructed backend (using COMM_WORLD).
-The one-argument form creates a new backend with the specified communicator.
+# Arguments
+- `T`: Element type for array values (default: Float64)
+- `Ti`: Index type for sparse matrix indices (default: Int)
+- `comm`: MPI communicator (default: MPI.COMM_WORLD)
 """
-function HPCLinearAlgebra.backend_cuda_mpi()
-    return BACKEND_CUDA_MPI
+function HPCLinearAlgebra.backend_cuda_mpi(::Type{T}=Float64, ::Type{Ti}=Int; comm::MPI.Comm=MPI.COMM_WORLD) where {T,Ti<:Integer}
+    return HPCLinearAlgebra.HPCBackend{T,Ti,DeviceCUDA,CommMPI,SolverCuDSS}(
+        DeviceCUDA(), CommMPI(comm), SolverCuDSS())
 end
 
-function HPCLinearAlgebra.backend_cuda_mpi(comm)
-    return HPCLinearAlgebra.HPCBackend(DeviceCUDA(), CommMPI(comm), SolverCuDSS())
+# Legacy overload for backward compatibility (comm as positional argument)
+function HPCLinearAlgebra.backend_cuda_mpi(comm::MPI.Comm)
+    return HPCLinearAlgebra.backend_cuda_mpi(Float64, Int; comm=comm)
 end
 
 
@@ -166,9 +177,12 @@ end
 Convert a HPCVector to CUDA GPU device.
 Used by MUMPS factorization for GPU reconstruction after solve.
 """
-function HPCLinearAlgebra._convert_vector_to_device(v::HPCLinearAlgebra.HPCVector, device::HPCLinearAlgebra.DeviceCUDA)
-    # Create CUDA backend preserving comm and solver
-    cuda_backend = HPCLinearAlgebra.HPCBackend(device, v.backend.comm, v.backend.solver)
+function HPCLinearAlgebra._convert_vector_to_device(v::HPCLinearAlgebra.HPCVector{T,B}, device::HPCLinearAlgebra.DeviceCUDA) where {T, B}
+    # Create CUDA backend preserving T, Ti, comm, and solver from source backend
+    Ti = indextype_backend(B)
+    C = typeof(v.backend.comm)
+    S = typeof(v.backend.solver)
+    cuda_backend = HPCLinearAlgebra.HPCBackend{T,Ti,DeviceCUDA,C,S}(device, v.backend.comm, v.backend.solver)
     return HPCLinearAlgebra.to_backend(v, cuda_backend)
 end
 

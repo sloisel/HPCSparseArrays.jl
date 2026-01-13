@@ -96,8 +96,9 @@ function Base.cat(As::HPCSparseMatrix{T,Ti,Bk}...; dims) where {T,Ti,Bk<:HPCBack
     local_nrows = my_out_row_end - my_out_row_start + 1
 
     # Step 2: For each block row that overlaps our output, gather needed rows
-    local_I = Int[]
-    local_J = Int[]
+    # Ti is from the function's type parameter (matches the input matrices)
+    local_I = Ti[]
+    local_J = Ti[]
     local_V = T[]
 
     for bi in 1:nblock_rows
@@ -140,8 +141,8 @@ function Base.cat(As::HPCSparseMatrix{T,Ti,Bk}...; dims) where {T,Ti,Bk<:HPCBack
     # Step 3: Build M^T directly as CSC (swap I↔J), then wrap in lazy transpose for CSR
     # This avoids an unnecessary physical transpose operation
     AT_local = isempty(local_I) ?
-        SparseMatrixCSC(total_cols, local_nrows, ones(Int, local_nrows + 1), Int[], T[]) :
-        sparse(local_J, local_I, local_V, total_cols, local_nrows)
+        SparseMatrixCSC{T,Ti}(total_cols, local_nrows, ones(Ti, local_nrows + 1), Ti[], T[]) :
+        SparseMatrixCSC{T,Ti}(sparse(local_J, local_I, local_V, total_cols, local_nrows))
 
     result = HPCSparseMatrix_local(transpose(AT_local), backend)
 
@@ -496,8 +497,9 @@ function blockdiag(As::HPCSparseMatrix{T,Ti,Bk}...) where {T,Ti,Bk<:HPCBackend}
 
     # Step 3: For each block, determine if it overlaps our output rows
     # and gather the needed rows
-    local_I = Int[]
-    local_J = Int[]
+    # Ti is from the function's type parameter (matches the input matrices)
+    local_I = Ti[]
+    local_J = Ti[]
     local_V = T[]
 
     for (k, A) in enumerate(As)
@@ -535,8 +537,8 @@ function blockdiag(As::HPCSparseMatrix{T,Ti,Bk}...) where {T,Ti,Bk<:HPCBackend}
     # Step 4: Build M^T directly as CSC (swap I↔J), then wrap in lazy transpose for CSR
     # This avoids an unnecessary physical transpose operation
     AT_local = isempty(local_I) ?
-        SparseMatrixCSC(total_cols, local_nrows, ones(Int, local_nrows + 1), Int[], T[]) :
-        sparse(local_J, local_I, local_V, total_cols, local_nrows)
+        SparseMatrixCSC{T,Ti}(total_cols, local_nrows, ones(Ti, local_nrows + 1), Ti[], T[]) :
+        SparseMatrixCSC{T,Ti}(sparse(local_J, local_I, local_V, total_cols, local_nrows))
 
     result = HPCSparseMatrix_local(transpose(AT_local), backend)
 

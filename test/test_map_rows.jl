@@ -32,7 +32,7 @@ ts = @testset QuietTestSet "map_rows" begin
 
 for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     TOL = TestUtils.tolerance(T)
-    backend = get_backend()
+    backend = get_backend(T)
 
     # Skip complex for some tests that use real-only operations
     is_complex = T <: Complex

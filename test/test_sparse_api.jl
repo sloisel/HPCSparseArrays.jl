@@ -32,8 +32,11 @@ ts = @testset QuietTestSet "Sparse API" begin
 
 for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     TOL = TestUtils.tolerance(T)
-    backend = get_backend()
+    RT = real(T)
+    backend = get_backend(T)
+    backend_real = TestUtils.real_backend(backend)
     VT, ST, MT = TestUtils.expected_types(T, backend)
+    VT_real, ST_real, MT_real = TestUtils.expected_types(RT, backend_real)
 
     println(io0(), "[test] Structural queries ($T, $backend_name)")
 
@@ -67,8 +70,7 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     println(io0(), "[test] Element-wise operations ($T, $backend_name)")
 
     # abs and abs2 return real types (Float64 for ComplexF64, Float32 for ComplexF32)
-    RT = real(T)  # Real type for abs/abs2 results
-    _, ST_real, _ = TestUtils.expected_types(RT, backend)
+    # ST_real is defined at the top of the loop using backend_real
 
     ref_abs_sum = sum(abs.(A_global))
     B = assert_type(abs(Adist), ST_real)
@@ -197,9 +199,7 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     v_global = T.(collect(1.0:Float64(n)))
     v = HPCVector(v_global, backend)
 
-    # abs and abs2 return real types
-    VT_real, _, _ = TestUtils.expected_types(RT, backend)
-
+    # abs and abs2 return real types - VT_real is defined at the top of the loop using backend_real
     abs_sum = sum(assert_type(abs(v), VT_real))
     @test abs_sum ≈ sum(abs.(v_global)) atol=TOL
 
@@ -374,7 +374,7 @@ println(io0(), "[test] Complex element-wise operations (ComplexF64)")
 T_cpx = ComplexF64
 TOL_cpx = TestUtils.tolerance(T_cpx)
 n_cpx = 20
-backend_cpx = BACKEND_CPU_MPI
+backend_cpx = backend_cpu_mpi(T_cpx)  # Need a ComplexF64 backend for complex matrices
 
 A_complex = sparse([1, 2, 3, 4, 5, 1, 2, 3],
                    [1, 2, 3, 4, 5, 6, 7, 8],

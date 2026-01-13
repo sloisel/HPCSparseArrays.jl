@@ -97,7 +97,7 @@ ts = @testset QuietTestSet "Block Matrices" begin
 
 for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     TOL = TestUtils.tolerance(T)
-    backend = get_backend()
+    backend = get_backend(T)
     VT, ST, MT = TestUtils.expected_types(T, backend)
 
     println(io0(), "[test] cat dims=1 (vcat) ($T, $backend_name)")

@@ -712,7 +712,7 @@ function Base.getindex(A::HPCSparseMatrix{T,Ti,Bk}, row_rng::UnitRange{Int}, col
         new_col_partition = uniform_partition(new_ncols, nranks)
         my_local_rows = new_row_partition[rank + 2] - new_row_partition[rank + 1]
         # SparseMatrixCSC(ncols, nrows, colptr, rowval, nzval) - transposed storage
-        empty_AT = SparseMatrixCSC(new_ncols, my_local_rows, ones(Int, my_local_rows + 1), Int[], T[])
+        empty_AT = SparseMatrixCSC{T,Ti}(new_ncols, my_local_rows, ones(Ti, my_local_rows + 1), Ti[], T[])
         hash = compute_structural_hash(new_row_partition, Int[], empty_AT, comm)
         # Convert to target backend
         empty_nzval = _values_to_backend(empty_AT.nzval, A.nzval)
@@ -750,7 +750,7 @@ function Base.getindex(A::HPCSparseMatrix{T,Ti,Bk}, row_rng::UnitRange{Int}, col
 
         # Build new sparse structure for the extracted rows
         # AT has columns for each local row, rows indexed by compressed col_indices
-        new_colptr = Vector{Int}(undef, local_nrows + 1)
+        new_colptr = Vector{Ti}(undef, local_nrows + 1)
         new_colptr[1] = 1
 
         # First pass: count entries per extracted row that fall in col_rng
@@ -773,7 +773,7 @@ function Base.getindex(A::HPCSparseMatrix{T,Ti,Bk}, row_rng::UnitRange{Int}, col
         end
 
         # Count entries and collect data
-        rowval_list = Int[]
+        rowval_list = Ti[]
         nzval_list = T[]
 
         for local_row in local_row_start:local_row_end
@@ -809,20 +809,20 @@ function Base.getindex(A::HPCSparseMatrix{T,Ti,Bk}, row_rng::UnitRange{Int}, col
         if !isempty(rowval_list)
             unique_positions = sort(unique(rowval_list))
             # Map positions to compressed indices: unique_positions is sorted, use binary search
-            compressed_rowval = [searchsortedfirst(unique_positions, r) for r in rowval_list]
+            compressed_rowval = Ti[searchsortedfirst(unique_positions, r) for r in rowval_list]
             # final_col_indices maps compressed index to global column in result
             # new_col_indices contains the shifted global column indices
             final_col_indices = new_col_indices[unique_positions]
         else
-            compressed_rowval = Int[]
+            compressed_rowval = Ti[]
             final_col_indices = Int[]
         end
 
-        new_AT = SparseMatrixCSC(length(final_col_indices), local_nrows, new_colptr, compressed_rowval, nzval_list)
+        new_AT = SparseMatrixCSC{T,Ti}(length(final_col_indices), local_nrows, new_colptr, compressed_rowval, nzval_list)
     else
         # No local rows in range
         local_nrows = 0
-        new_AT = SparseMatrixCSC(0, 0, Int[1], Int[], T[])
+        new_AT = SparseMatrixCSC{T,Ti}(0, 0, Ti[1], Ti[], T[])
         final_col_indices = Int[]
     end
 

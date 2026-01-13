@@ -4,13 +4,13 @@ using Adapt
 using KernelAbstractions
 
 """
-    HPCVector{T, B<:HPCBackend}
+    HPCVector{T, B<:HPCBackend{T}}
 
 A distributed dense vector partitioned across MPI ranks.
 
 # Type Parameters
 - `T`: Element type (e.g., `Float64`, `ComplexF64`)
-- `B<:HPCBackend`: Backend configuration (device, communication, solver)
+- `B<:HPCBackend{T}`: Backend configuration with matching element type
 
 # Fields
 - `structural_hash::Blake3Hash`: 256-bit Blake3 hash of the partition
@@ -18,28 +18,28 @@ A distributed dense vector partitioned across MPI ranks.
 - `v::AbstractVector{T}`: Local vector elements owned by this rank
 - `backend::B`: The HPC backend configuration
 """
-struct HPCVector{T, B<:HPCBackend} <: AbstractVector{T}
+struct HPCVector{T, B<:HPCBackend{T}} <: AbstractVector{T}
     structural_hash::Blake3Hash
     partition::Vector{Int}
     v::AbstractVector{T}
     backend::B
     # Inner constructor that takes all arguments
-    function HPCVector{T,B}(hash::Blake3Hash, partition::Vector{Int}, v::AbstractVector{T}, backend::B) where {T, B<:HPCBackend}
+    function HPCVector{T,B}(hash::Blake3Hash, partition::Vector{Int}, v::AbstractVector{T}, backend::B) where {T, B<:HPCBackend{T}}
         new{T,B}(hash, partition, v, backend)
     end
 end
 
-# Type aliases for common backend configurations
-const HPCVector_CPU{T} = HPCVector{T, HPCBackend{DeviceCPU, CommMPI, SolverMUMPS}}
-const HPCVector_CPU_Serial{T} = HPCVector{T, HPCBackend{DeviceCPU, CommSerial, SolverMUMPS}}
+# Type aliases for common backend configurations (using Int as default index type)
+const HPCVector_CPU{T} = HPCVector{T, HPCBackend_CPU_MPI{T,Int}}
+const HPCVector_CPU_Serial{T} = HPCVector{T, HPCBackend_CPU_Serial{T,Int}}
 
 # Convenience constructor that infers B from the backend type
-function HPCVector{T}(hash::Blake3Hash, partition::Vector{Int}, v::AbstractVector{T}, backend::B) where {T, B<:HPCBackend}
+function HPCVector{T}(hash::Blake3Hash, partition::Vector{Int}, v::AbstractVector{T}, backend::B) where {T, B<:HPCBackend{T}}
     HPCVector{T,B}(hash, partition, v, backend)
 end
 
 # Constructor that infers T from the vector
-function HPCVector(hash::Blake3Hash, partition::Vector{Int}, v::AbstractVector{T}, backend::B) where {T, B<:HPCBackend}
+function HPCVector(hash::Blake3Hash, partition::Vector{Int}, v::AbstractVector{T}, backend::B) where {T, B<:HPCBackend{T}}
     HPCVector{T,B}(hash, partition, v, backend)
 end
 
@@ -199,58 +199,59 @@ end
 Convert CPU index array to same device as specified by the device type.
 Falls back to CPU if device is CPU.
 """
-_to_gpu_indices(::DeviceCPU, indices::Vector{Int}) = indices
-_to_gpu_indices(device::AbstractDevice, indices::Vector{Int}) = _to_target_device(indices, device)
+_to_gpu_indices(::DeviceCPU, indices::Vector{<:Integer}) = indices
+_to_gpu_indices(device::AbstractDevice, indices::Vector{<:Integer}) = _to_target_device(indices, device)
 
 """
-    VectorPlan{T,AV}
+    VectorPlan{T,Ti,AV}
 
 A communication plan for gathering vector elements needed for A * x.
 
 # Type Parameters
 - `T`: Element type
+- `Ti<:Integer`: Index type (e.g., Int32 or Int64)
 - `AV<:AbstractVector{T}`: Storage type for gathered buffer (matches input HPCVector)
 
 # Fields
 - `send_rank_ids::Vector{Int}`: Ranks we send elements to (0-indexed)
-- `send_indices::Vector{Vector{Int}}`: For each rank, local indices to send
+- `send_indices::Vector{Vector{Ti}}`: For each rank, local indices to send
 - `send_bufs::Vector{Vector{T}}`: Pre-allocated CPU send buffers (for MPI)
 - `send_reqs::Vector{MPI.Request}`: Pre-allocated send request handles
 - `recv_rank_ids::Vector{Int}`: Ranks we receive elements from (0-indexed)
 - `recv_bufs::Vector{Vector{T}}`: Pre-allocated CPU receive buffers (for MPI)
 - `recv_reqs::Vector{MPI.Request}`: Pre-allocated receive request handles
-- `recv_perm::Vector{Vector{Int}}`: For each recv rank, indices into gathered
-- `local_src_indices::Vector{Int}`: Source indices for local copy (into x.v)
-- `local_dst_indices::Vector{Int}`: Destination indices for local copy (into gathered)
+- `recv_perm::Vector{Vector{Ti}}`: For each recv rank, indices into gathered
+- `local_src_indices::Vector{Ti}`: Source indices for local copy (into x.v)
+- `local_dst_indices::Vector{Ti}`: Destination indices for local copy (into gathered)
 - `gathered::AV`: Pre-allocated buffer for gathered elements (same type as input)
 - `gathered_cpu::Vector{T}`: CPU staging buffer (used when AV is GPU array)
 """
-mutable struct VectorPlan{T,AV<:AbstractVector{T}}
-    send_rank_ids::Vector{Int}
-    send_indices::Vector{Vector{Int}}
+mutable struct VectorPlan{T,Ti<:Integer,AV<:AbstractVector{T}}
+    send_rank_ids::Vector{Int}        # MPI rank IDs (always Int)
+    send_indices::Vector{Vector{Ti}}  # Element indices use Ti
     send_bufs::Vector{Vector{T}}      # Always CPU for MPI
     send_reqs::Vector{Any}            # MPI.Request or nothing for CommSerial
-    recv_rank_ids::Vector{Int}
+    recv_rank_ids::Vector{Int}        # MPI rank IDs (always Int)
     recv_bufs::Vector{Vector{T}}      # Always CPU for MPI
     recv_reqs::Vector{Any}            # MPI.Request or nothing for CommSerial
-    recv_perm::Vector{Vector{Int}}
-    local_src_indices::Vector{Int}
-    local_dst_indices::Vector{Int}
+    recv_perm::Vector{Vector{Ti}}     # Element indices use Ti
+    local_src_indices::Vector{Ti}     # Element indices use Ti
+    local_dst_indices::Vector{Ti}     # Element indices use Ti
     gathered::AV                       # Same type as input vector
     gathered_cpu::Vector{T}            # CPU staging buffer
     # Cached partition hash for result vector (computed lazily on first use)
     result_partition_hash::OptionalBlake3Hash
-    result_partition::Union{Nothing, Vector{Int}}
+    result_partition::Union{Nothing, Vector{Int}}  # Partition boundaries (always Int)
     # Cached GPU buffers for SpMV (lazily allocated on first use)
     cached_gathered_target::Union{Nothing, AbstractVector{T}}  # Gathered in matrix backend
     cached_y_local::Union{Nothing, AbstractVector{T}}          # Result buffer
     # Cached GPU index arrays for gather kernel (lazily allocated on first use)
-    cached_local_src_gpu::Union{Nothing, AbstractVector{Int}}
-    cached_local_dst_gpu::Union{Nothing, AbstractVector{Int}}
+    cached_local_src_gpu::Union{Nothing, AbstractVector{Ti}}
+    cached_local_dst_gpu::Union{Nothing, AbstractVector{Ti}}
 end
 
 # Type alias for CPU-backed VectorPlan (backwards compatible)
-const VectorPlan_CPU{T} = VectorPlan{T,Vector{T}}
+const VectorPlan_CPU{T,Ti} = VectorPlan{T,Ti,Vector{T}}
 
 """
     VectorPlan(target_partition::Vector{Int}, source::HPCVector{T,AV}) where {T,AV}
@@ -266,6 +267,7 @@ MPI communication always uses CPU staging buffers.
 function VectorPlan(target_partition::Vector{Int}, source::HPCVector{T,B}) where {T,B<:HPCBackend}
     # Get actual array type from the vector for VectorPlan type parameter
     AV = typeof(source.v)
+    Ti = indextype_backend(source.backend)
     comm = source.backend.comm
     rank = comm_rank(comm)
     nranks = comm_size(comm)
@@ -297,13 +299,13 @@ function VectorPlan(target_partition::Vector{Int}, source::HPCVector{T,B}) where
     struct_send_bufs = Dict{Int,Vector{Int}}()
     struct_send_reqs = Any[]
     recv_rank_ids = Int[]
-    recv_perm_map = Dict{Int,Vector{Int}}()
+    recv_perm_map = Dict{Int,Vector{Ti}}()
 
     for r in 0:(nranks-1)
         if send_counts[r+1] > 0 && r != rank
             push!(recv_rank_ids, r)
             indices = [t[1] for t in needed_from[r+1]]
-            dst_indices = [t[2] for t in needed_from[r+1]]
+            dst_indices = Ti[t[2] for t in needed_from[r+1]]
             recv_perm_map[r] = dst_indices
             struct_send_bufs[r] = indices
             req = comm_isend(comm, indices, r, 22)
@@ -330,20 +332,20 @@ function VectorPlan(target_partition::Vector{Int}, source::HPCVector{T,B}) where
     comm_waitall(comm, struct_send_reqs)
 
     # Step 5: Convert received global indices to local indices for sending
-    send_indices_map = Dict{Int,Vector{Int}}()
+    send_indices_map = Dict{Int,Vector{Ti}}()
     for r in send_rank_ids
         global_indices = struct_recv_bufs[r]
-        local_indices = [idx - my_x_start + 1 for idx in global_indices]
+        local_indices = Ti[idx - my_x_start + 1 for idx in global_indices]
         send_indices_map[r] = local_indices
     end
 
     # Step 6: Handle local elements (elements we own in source)
-    local_src_indices = Int[]
-    local_dst_indices = Int[]
+    local_src_indices = Ti[]
+    local_dst_indices = Ti[]
     for (global_idx, dst_idx) in needed_from[rank+1]
-        local_idx = global_idx - my_x_start + 1
+        local_idx = Ti(global_idx - my_x_start + 1)
         push!(local_src_indices, local_idx)
-        push!(local_dst_indices, dst_idx)
+        push!(local_dst_indices, Ti(dst_idx))
     end
 
     # Step 7: Build final arrays and buffers
@@ -367,7 +369,7 @@ function VectorPlan(target_partition::Vector{Int}, source::HPCVector{T,B}) where
     # Use similar() to create same type, or adapt for GPU arrays
     gathered = similar(source.v, n_gathered)
 
-    return VectorPlan{T,AV}(
+    return VectorPlan{T,Ti,AV}(
         send_rank_ids, send_indices_final, send_bufs, send_reqs,
         recv_rank_ids, recv_bufs, recv_reqs, recv_perm_final,
         local_src_indices, local_dst_indices, gathered, gathered_cpu,
@@ -378,7 +380,7 @@ function VectorPlan(target_partition::Vector{Int}, source::HPCVector{T,B}) where
 end
 
 """
-    execute_plan!(plan::VectorPlan{T,AV}, x::HPCVector{T,B}) where {T,AV,B}
+    execute_plan!(plan::VectorPlan{T,Ti,AV}, x::HPCVector{T,B}) where {T,Ti,AV,B}
 
 Execute a vector communication plan to gather elements from x.
 Returns plan.gathered containing x[A.col_indices] for the associated matrix A.
@@ -389,7 +391,7 @@ buffers, with automatic staging for GPU arrays.
 GPU optimization: When no MPI communication is needed (all data is local),
 uses a GPU gather kernel to avoid copying entire arrays to CPU.
 """
-function execute_plan!(plan::VectorPlan{T,AV}, x::HPCVector{T,B}) where {T,AV,B}
+function execute_plan!(plan::VectorPlan{T,Ti,AV}, x::HPCVector{T,B}) where {T,Ti,AV,B}
     comm = x.backend.comm
 
     # Check if we can use GPU-optimized path (no MPI communication needed)
@@ -1016,7 +1018,9 @@ Return a new HPCVector with absolute values of all elements.
 """
 function Base.abs(v::HPCVector{T,B}) where {T,B}
     RT = real(T)
-    return HPCVector{RT,B}(v.structural_hash, v.partition, abs.(v.v), v.backend)
+    new_backend = retype_backend(v.backend, RT)
+    BNew = typeof(new_backend)
+    return HPCVector{RT,BNew}(v.structural_hash, v.partition, abs.(v.v), new_backend)
 end
 
 """
@@ -1026,7 +1030,9 @@ Return a new HPCVector with squared absolute values of all elements.
 """
 function Base.abs2(v::HPCVector{T,B}) where {T,B}
     RT = real(T)
-    return HPCVector{RT,B}(v.structural_hash, v.partition, abs2.(v.v), v.backend)
+    new_backend = retype_backend(v.backend, RT)
+    BNew = typeof(new_backend)
+    return HPCVector{RT,BNew}(v.structural_hash, v.partition, abs2.(v.v), new_backend)
 end
 
 """
@@ -1036,7 +1042,9 @@ Return a new HPCVector containing the real parts of all elements.
 """
 function Base.real(v::HPCVector{T,B}) where {T,B}
     RT = real(T)
-    return HPCVector{RT,B}(v.structural_hash, v.partition, real.(v.v), v.backend)
+    new_backend = retype_backend(v.backend, RT)
+    BNew = typeof(new_backend)
+    return HPCVector{RT,BNew}(v.structural_hash, v.partition, real.(v.v), new_backend)
 end
 
 """
@@ -1046,7 +1054,9 @@ Return a new HPCVector containing the imaginary parts of all elements.
 """
 function Base.imag(v::HPCVector{T,B}) where {T,B}
     RT = real(T)
-    return HPCVector{RT,B}(v.structural_hash, v.partition, imag.(v.v), v.backend)
+    new_backend = retype_backend(v.backend, RT)
+    BNew = typeof(new_backend)
+    return HPCVector{RT,BNew}(v.structural_hash, v.partition, imag.(v.v), new_backend)
 end
 
 """

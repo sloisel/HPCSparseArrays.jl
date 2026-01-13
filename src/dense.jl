@@ -34,13 +34,13 @@ function compute_dense_structural_hash(row_partition::Vector{Int}, col_partition
 end
 
 """
-    HPCMatrix{T, B<:HPCBackend}
+    HPCMatrix{T, B<:HPCBackend{T}}
 
 A distributed dense matrix partitioned by rows across MPI ranks.
 
 # Type Parameters
 - `T`: Element type (e.g., `Float64`, `ComplexF64`)
-- `B<:HPCBackend`: Backend configuration (device, communication, solver)
+- `B<:HPCBackend{T}`: Backend configuration with matching element type
 
 # Fields
 - `structural_hash::Blake3Hash`: 256-bit Blake3 hash of the structural pattern
@@ -56,29 +56,29 @@ A distributed dense matrix partitioned by rows across MPI ranks.
 - `size(A, 1) == row_partition[rank+2] - row_partition[rank+1]`
 - `size(A, 2) == col_partition[end] - 1`
 """
-mutable struct HPCMatrix{T, B<:HPCBackend} <: AbstractMatrix{T}
+mutable struct HPCMatrix{T, B<:HPCBackend{T}} <: AbstractMatrix{T}
     structural_hash::OptionalBlake3Hash
     row_partition::Vector{Int}
     col_partition::Vector{Int}
     A::AbstractMatrix{T}
     backend::B
     # Inner constructor that takes all arguments
-    function HPCMatrix{T,B}(hash::OptionalBlake3Hash, row_partition::Vector{Int}, col_partition::Vector{Int}, A::AbstractMatrix{T}, backend::B) where {T, B<:HPCBackend}
+    function HPCMatrix{T,B}(hash::OptionalBlake3Hash, row_partition::Vector{Int}, col_partition::Vector{Int}, A::AbstractMatrix{T}, backend::B) where {T, B<:HPCBackend{T}}
         new{T,B}(hash, row_partition, col_partition, A, backend)
     end
 end
 
-# Type aliases for common backend configurations
-const HPCMatrix_CPU{T} = HPCMatrix{T, HPCBackend{DeviceCPU, CommMPI, SolverMUMPS}}
-const HPCMatrix_CPU_Serial{T} = HPCMatrix{T, HPCBackend{DeviceCPU, CommSerial, SolverMUMPS}}
+# Type aliases for common backend configurations (using Int as default index type)
+const HPCMatrix_CPU{T} = HPCMatrix{T, HPCBackend_CPU_MPI{T,Int}}
+const HPCMatrix_CPU_Serial{T} = HPCMatrix{T, HPCBackend_CPU_Serial{T,Int}}
 
 # Convenience constructor that infers B from the backend type
-function HPCMatrix{T}(hash::OptionalBlake3Hash, row_partition::Vector{Int}, col_partition::Vector{Int}, A::AbstractMatrix{T}, backend::B) where {T, B<:HPCBackend}
+function HPCMatrix{T}(hash::OptionalBlake3Hash, row_partition::Vector{Int}, col_partition::Vector{Int}, A::AbstractMatrix{T}, backend::B) where {T, B<:HPCBackend{T}}
     HPCMatrix{T,B}(hash, row_partition, col_partition, A, backend)
 end
 
 # Constructor that infers T from the matrix
-function HPCMatrix(hash::OptionalBlake3Hash, row_partition::Vector{Int}, col_partition::Vector{Int}, A::AbstractMatrix{T}, backend::B) where {T, B<:HPCBackend}
+function HPCMatrix(hash::OptionalBlake3Hash, row_partition::Vector{Int}, col_partition::Vector{Int}, A::AbstractMatrix{T}, backend::B) where {T, B<:HPCBackend{T}}
     HPCMatrix{T,B}(hash, row_partition, col_partition, A, backend)
 end
 

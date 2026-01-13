@@ -31,7 +31,7 @@ ts = @testset QuietTestSet "Local Constructors" begin
 
 for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     TOL = TestUtils.tolerance(T)
-    backend = get_backend()
+    backend = get_backend(T)
     VT, ST, MT = TestUtils.expected_types(T, backend)
 
     println(io0(), "[test] HPCVector_local basic ($T, $backend_name)")
@@ -168,7 +168,7 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
         S_from_global.nrows_local,  # number of local rows
         copy(S_from_global.rowptr),  # becomes colptr in CSC
         [col_indices[r] for r in S_from_global.colval],  # map local to global indices
-        copy(nzval_cpu)
+        nzval_cpu
     )
 
     # Rebuild from local

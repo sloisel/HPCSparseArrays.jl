@@ -48,8 +48,11 @@ ts = @testset QuietTestSet "Dense Matrix" begin
 
 for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     TOL = TestUtils.tolerance(T)
-    backend = get_backend()
+    RT = real(T)
+    backend = get_backend(T)
+    backend_real = TestUtils.real_backend(backend)
     cpu_backend = TestUtils.cpu_version(backend)
+    cpu_backend_real = TestUtils.cpu_version(backend_real)
     VT, ST, MT = TestUtils.expected_types(T, backend)
 
     println(io0(), "[test] HPCMatrix construction ($T, $backend_name)")
@@ -304,10 +307,10 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     println(io0(), "[test] HPCMatrix norms ($T, $backend_name)")
 
     m, n = 8, 6
-    A = TestUtils.dense_matrix(real(T), m, n)  # Use real type for norm tests
+    A = TestUtils.dense_matrix(RT, m, n)  # Use real type for norm tests
 
-    Adist = HPCMatrix(A, backend)
-    Adist_cpu = to_backend(Adist, cpu_backend)
+    Adist = HPCMatrix(A, backend_real)
+    Adist_cpu = to_backend(Adist, cpu_backend_real)
 
     # Frobenius norm (2-norm)
     norm2 = assert_uniform(norm(Adist_cpu), name="norm2")
@@ -328,10 +331,10 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     println(io0(), "[test] HPCMatrix operator norms ($T, $backend_name)")
 
     m, n = 8, 6
-    A = TestUtils.dense_matrix(real(T), m, n)
+    A = TestUtils.dense_matrix(RT, m, n)
 
-    Adist = HPCMatrix(A, backend)
-    Adist_cpu = to_backend(Adist, cpu_backend)
+    Adist = HPCMatrix(A, backend_real)
+    Adist_cpu = to_backend(Adist, cpu_backend_real)
 
     # 1-norm (max column sum)
     opnorm1 = assert_uniform(opnorm(Adist_cpu, 1), name="opnorm1")
@@ -379,14 +382,16 @@ end  # for (T, get_backend, backend_name)
 # mapslices tests
 for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     TOL = TestUtils.tolerance(T)
-    backend = get_backend()
+    RT = real(T)
+    backend = get_backend(T)
+    backend_real = TestUtils.real_backend(backend)
 
     println(io0(), "[test] mapslices dims=2 row-wise ($T, $backend_name)")
 
     m, n = 8, 5
-    A = TestUtils.dense_matrix(real(T), m, n)
+    A = TestUtils.dense_matrix(RT, m, n)
 
-    Adist = HPCMatrix(A, backend)
+    Adist = HPCMatrix(A, backend_real)
 
     # Function that transforms each row: 5 elements -> 3 elements
     f_row = x -> [norm(x), maximum(x), sum(x)]
@@ -404,9 +409,9 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     println(io0(), "[test] mapslices dims=1 column-wise ($T, $backend_name)")
 
     m, n = 8, 5
-    A = TestUtils.dense_matrix(real(T), m, n)
+    A = TestUtils.dense_matrix(RT, m, n)
 
-    Adist = HPCMatrix(A, backend)
+    Adist = HPCMatrix(A, backend_real)
 
     # Function that transforms each column: 8 elements -> 2 elements
     f_col = x -> [norm(x), maximum(x)]
@@ -424,9 +429,9 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     println(io0(), "[test] mapslices dims=2 preserves row partition ($T, $backend_name)")
 
     m, n = 8, 5
-    A = TestUtils.dense_matrix(real(T), m, n)
+    A = TestUtils.dense_matrix(RT, m, n)
 
-    Adist = HPCMatrix(A, backend)
+    Adist = HPCMatrix(A, backend_real)
 
     f_partition = x -> [norm(x), maximum(x)]
     Bdist = mapslices(f_partition, Adist; dims=2)

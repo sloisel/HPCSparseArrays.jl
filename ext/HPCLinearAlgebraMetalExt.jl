@@ -9,24 +9,37 @@ module HPCLinearAlgebraMetalExt
 using HPCLinearAlgebra
 using Metal
 using Adapt
+using MPI
 
 # Import HPCBackend types for type-based dispatch
 using HPCLinearAlgebra: HPCBackend, DeviceCPU, DeviceMetal, DeviceCUDA,
                         CommSerial, CommMPI, AbstractComm, AbstractDevice,
-                        SolverMUMPS
+                        SolverMUMPS,
+                        eltype_backend, indextype_backend
 
-# Backend type aliases for Metal
-const MtlBackend{C,S} = HPCLinearAlgebra.HPCBackend{HPCLinearAlgebra.DeviceMetal, C, S}
-const CPUBackend{C,S} = HPCLinearAlgebra.HPCBackend{HPCLinearAlgebra.DeviceCPU, C, S}
+# Backend type aliases for Metal (with T and Ti type parameters)
+const MtlBackend{T,Ti,C,S} = HPCLinearAlgebra.HPCBackend{T, Ti, HPCLinearAlgebra.DeviceMetal, C, S}
+const CPUBackend{T,Ti,C,S} = HPCLinearAlgebra.HPCBackend{T, Ti, HPCLinearAlgebra.DeviceCPU, C, S}
 
 """
-    backend_metal_mpi(comm::MPI.Comm) -> HPCBackend
+    backend_metal_mpi(::Type{T}=Float64, ::Type{Ti}=Int; comm=MPI.COMM_WORLD) where {T,Ti} -> HPCBackend
 
 Create a Metal GPU backend with MPI communication and MUMPS solver.
 Metal doesn't have a native sparse direct solver, so MUMPS is used (data staged via CPU).
+
+# Arguments
+- `T`: Element type for array values (default: Float64)
+- `Ti`: Index type for sparse matrix indices (default: Int)
+- `comm`: MPI communicator (default: MPI.COMM_WORLD)
 """
-function HPCLinearAlgebra.backend_metal_mpi(comm)
-    return HPCLinearAlgebra.HPCBackend(DeviceMetal(), CommMPI(comm), SolverMUMPS())
+function HPCLinearAlgebra.backend_metal_mpi(::Type{T}=Float64, ::Type{Ti}=Int; comm=MPI.COMM_WORLD) where {T,Ti<:Integer}
+    return HPCLinearAlgebra.HPCBackend{T,Ti,DeviceMetal,CommMPI,SolverMUMPS}(
+        DeviceMetal(), CommMPI(comm), SolverMUMPS())
+end
+
+# Legacy overload for backward compatibility (comm as positional argument)
+function HPCLinearAlgebra.backend_metal_mpi(comm::MPI.Comm)
+    return HPCLinearAlgebra.backend_metal_mpi(Float64, Int; comm=comm)
 end
 
 # ============================================================================
@@ -61,9 +74,12 @@ end
 Convert a CPU HPCVector to GPU (Metal) backend.
 Used by MUMPS factorization for GPU reconstruction after solve.
 """
-function HPCLinearAlgebra._convert_vector_to_device(v::HPCLinearAlgebra.HPCVector, device::HPCLinearAlgebra.DeviceMetal)
-    # Create Metal backend preserving comm and solver
-    metal_backend = HPCLinearAlgebra.HPCBackend(device, v.backend.comm, v.backend.solver)
+function HPCLinearAlgebra._convert_vector_to_device(v::HPCLinearAlgebra.HPCVector{T,B}, device::HPCLinearAlgebra.DeviceMetal) where {T, B}
+    # Create Metal backend preserving T, Ti, comm, and solver from source backend
+    Ti = indextype_backend(B)
+    C = typeof(v.backend.comm)
+    S = typeof(v.backend.solver)
+    metal_backend = HPCLinearAlgebra.HPCBackend{T,Ti,DeviceMetal,C,S}(device, v.backend.comm, v.backend.solver)
     return HPCLinearAlgebra.to_backend(v, metal_backend)
 end
 

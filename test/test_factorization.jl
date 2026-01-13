@@ -136,10 +136,12 @@ ts = @testset QuietTestSet "Distributed Factorization Tests" begin
 for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     TOL = TestUtils.tolerance(T)
     RT = real(T)  # Real type for creating real-valued test data
-    backend = get_backend()
+    backend = get_backend(T)
+    backend_real = TestUtils.real_backend(backend)  # Backend for real-valued data
     cpu_backend = TestUtils.cpu_version(backend)
+    cpu_backend_real = TestUtils.cpu_version(backend_real)
     VT, ST, MT = TestUtils.expected_types(T, backend)
-    VT_real, ST_real, MT_real = TestUtils.expected_types(RT, backend)
+    VT_real, ST_real, MT_real = TestUtils.expected_types(RT, backend_real)
 
     # Skip tridiagonal tests for CUDA - cuDSS MGMN has a bug with narrow-band matrices
     # See bug/ folder for minimal reproducer
@@ -176,17 +178,17 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
 
     n = 10
     A_full = create_spd_tridiagonal(RT, n)  # SPD matrices are real
-    A_cpu = HPCSparseMatrix(A_full, backend)
+    A_cpu = HPCSparseMatrix(A_full, backend_real)
     A = assert_type(A_cpu, ST_real)
 
     F = ldlt(A)
     @test size(F) == (n, n)
 
     b_full = ones(RT, n)
-    b = assert_type(HPCVector(b_full, backend), VT_real)
+    b = assert_type(HPCVector(b_full, backend_real), VT_real)
     x = assert_type(F \ b, VT_real)
 
-    x_cpu = to_backend(x, cpu_backend)
+    x_cpu = to_backend(x, cpu_backend_real)
     x_full = Vector(x_cpu)
     residual = A_full * x_full - b_full
     err = norm(residual, Inf)
@@ -199,16 +201,16 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
 
     n = 8
     A_full = create_symmetric_indefinite(RT, n)  # Symmetric indefinite is real
-    A_cpu = HPCSparseMatrix(A_full, backend)
+    A_cpu = HPCSparseMatrix(A_full, backend_real)
     A = assert_type(A_cpu, ST_real)
 
     F = ldlt(A)
 
     b_full = RT.(1:n)
-    b = assert_type(HPCVector(b_full, backend), VT_real)
+    b = assert_type(HPCVector(b_full, backend_real), VT_real)
     x = assert_type(solve(F, b), VT_real)
 
-    x_cpu = to_backend(x, cpu_backend)
+    x_cpu = to_backend(x, cpu_backend_real)
     x_full = Vector(x_cpu)
     residual = A_full * x_full - b_full
     err = norm(residual, Inf)
@@ -221,20 +223,20 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
 
     n = 8
     A_full = create_spd_tridiagonal(RT, n)
-    A_cpu = HPCSparseMatrix(A_full, backend)
+    A_cpu = HPCSparseMatrix(A_full, backend_real)
     A = assert_type(A_cpu, ST_real)
     F = ldlt(A)
 
     b1_full = ones(RT, n)
-    b1 = assert_type(HPCVector(b1_full, backend), VT_real)
+    b1 = assert_type(HPCVector(b1_full, backend_real), VT_real)
     x1 = assert_type(solve(F, b1), VT_real)
 
     b2_full = RT.(1:n)
-    b2 = assert_type(HPCVector(b2_full, backend), VT_real)
+    b2 = assert_type(HPCVector(b2_full, backend_real), VT_real)
     x2 = assert_type(solve(F, b2), VT_real)
 
-    x1_cpu = to_backend(x1, cpu_backend)
-    x2_cpu = to_backend(x2, cpu_backend)
+    x1_cpu = to_backend(x1, cpu_backend_real)
+    x2_cpu = to_backend(x2, cpu_backend_real)
     x1_full = Vector(x1_cpu)
     x2_full = Vector(x2_cpu)
 
@@ -312,16 +314,16 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     println(io0(), "[test] LDLT factorization - 2D Laplacian ($T, $backend_name)")
 
     A_2d_full = create_2d_laplacian(RT, 6, 6)  # 36-element grid
-    A_2d_cpu = HPCSparseMatrix(A_2d_full, backend)
+    A_2d_cpu = HPCSparseMatrix(A_2d_full, backend_real)
     A_2d = assert_type(A_2d_cpu, ST_real)
 
     F_2d = ldlt(A_2d)
 
     b_2d_full = ones(RT, 36)
-    b_2d = assert_type(HPCVector(b_2d_full, backend), VT_real)
+    b_2d = assert_type(HPCVector(b_2d_full, backend_real), VT_real)
     x_2d = assert_type(solve(F_2d, b_2d), VT_real)
 
-    x_2d_cpu = to_backend(x_2d, cpu_backend)
+    x_2d_cpu = to_backend(x_2d, cpu_backend_real)
     x_2d_full = Vector(x_2d_cpu)
     residual_2d = A_2d_full * x_2d_full - b_2d_full
     err_2d = norm(residual_2d, Inf)
@@ -368,15 +370,15 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
             end
         end
     end
-    A_multi_cpu = HPCSparseMatrix(A_multi, backend)
+    A_multi_cpu = HPCSparseMatrix(A_multi, backend_real)
     A_multi_mpi = assert_type(A_multi_cpu, ST_real)
 
     F_multi = ldlt(A_multi_mpi)
 
     b_multi_full = ones(RT, n_multi)
-    b_multi = assert_type(HPCVector(b_multi_full, backend), VT_real)
+    b_multi = assert_type(HPCVector(b_multi_full, backend_real), VT_real)
     x_multi = assert_type(solve(F_multi, b_multi), VT_real)
-    x_multi_cpu = to_backend(x_multi, cpu_backend)
+    x_multi_cpu = to_backend(x_multi, cpu_backend_real)
     x_multi_full = Vector(x_multi_cpu)
     err_multi = norm(A_multi * x_multi_full - b_multi_full, Inf)
 
@@ -388,16 +390,16 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     println(io0(), "[test] Larger problem size (100x100 grid) ($T, $backend_name)")
 
     A_large_full = create_2d_laplacian(RT, 10, 10)  # 100 DOF
-    A_large_cpu = HPCSparseMatrix(A_large_full, backend)
+    A_large_cpu = HPCSparseMatrix(A_large_full, backend_real)
     A_large = assert_type(A_large_cpu, ST_real)
 
     F_large = ldlt(A_large)
 
     b_large_full = ones(RT, 100)
-    b_large = assert_type(HPCVector(b_large_full, backend), VT_real)
+    b_large = assert_type(HPCVector(b_large_full, backend_real), VT_real)
     x_large = assert_type(solve(F_large, b_large), VT_real)
 
-    x_large_cpu = to_backend(x_large, cpu_backend)
+    x_large_cpu = to_backend(x_large, cpu_backend_real)
     x_large_full = Vector(x_large_cpu)
     residual_large = A_large_full * x_large_full - b_large_full
     err_large = norm(residual_large, Inf)
@@ -412,17 +414,17 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
 
     n = 8
     A_full = create_spd_tridiagonal(RT, n)
-    A_cpu = HPCSparseMatrix(A_full, backend)
+    A_cpu = HPCSparseMatrix(A_full, backend_real)
     A = assert_type(A_cpu, ST_real)
     F = ldlt(A)
 
     b_full = ones(RT, n)
-    b = assert_type(HPCVector(b_full, backend), VT_real)
-    x = assert_type(HPCVector(zeros(RT, n), backend), VT_real)
+    b = assert_type(HPCVector(b_full, backend_real), VT_real)
+    x = assert_type(HPCVector(zeros(RT, n), backend_real), VT_real)
 
     solve!(x, F, b)
 
-    x_cpu = to_backend(x, cpu_backend)
+    x_cpu = to_backend(x, cpu_backend_real)
     x_full = Vector(x_cpu)
     err = norm(A_full * x_full - b_full, Inf)
 
@@ -453,7 +455,7 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
             rp
         end
 
-        A_asym = HPCSparseMatrix(A_sym_full_asym, backend; row_partition=row_part, col_partition=col_part)
+        A_asym = HPCSparseMatrix(A_sym_full_asym, backend_real; row_partition=row_part, col_partition=col_part)
         @test issymmetric(A_asym) == true
         println(io0(), "  Symmetric matrix with asymmetric partitions: passed")
 
@@ -461,7 +463,7 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
         println(io0(), "[test] issymmetric with asymmetric partitions - non-symmetric matrix ($T, $backend_name)")
 
         A_nonsym_full_asym = create_general_tridiagonal(RT, n_asym)
-        A_nonsym_asym = HPCSparseMatrix(A_nonsym_full_asym, backend; row_partition=row_part, col_partition=col_part)
+        A_nonsym_asym = HPCSparseMatrix(A_nonsym_full_asym, backend_real; row_partition=row_part, col_partition=col_part)
         @test issymmetric(A_nonsym_asym) == false
         println(io0(), "  Non-symmetric matrix with asymmetric partitions: passed")
     end

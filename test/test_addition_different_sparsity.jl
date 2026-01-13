@@ -32,7 +32,7 @@ ts = @testset QuietTestSet "Addition Different Sparsity" begin
 
 for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     TOL = TestUtils.tolerance(T)
-    backend = get_backend()
+    backend = get_backend(T)
 
     println(io0(), "[test] Matrix addition with different sparsity patterns ($T, $backend_name)")
 

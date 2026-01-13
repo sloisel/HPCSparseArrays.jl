@@ -41,37 +41,38 @@ using HPCLinearAlgebra
 # Backend configurations for parameterized testing
 # ============================================================================
 
-# Backend getters - return pre-constructed singletons (available after MPI.Init)
-function get_cpu_backend()
-    HPCLinearAlgebra.BACKEND_CPU_MPI
+# Backend getters - now parameterized by element type T (and index type Ti)
+# These return fresh backends with matching T, Ti type parameters
+function get_cpu_backend(::Type{T}=Float64, ::Type{Ti}=Int) where {T,Ti}
+    HPCLinearAlgebra.backend_cpu_mpi(T, Ti)
 end
 
-function get_metal_backend()
+function get_metal_backend(::Type{T}=Float32, ::Type{Ti}=Int32) where {T,Ti}
     @assert METAL_AVAILABLE "Metal is not available"
-    HPCLinearAlgebra.backend_metal_mpi(MPI.COMM_WORLD)  # Metal still uses function with comm
+    HPCLinearAlgebra.backend_metal_mpi(T, Ti)
 end
 
-function get_cuda_backend()
+function get_cuda_backend(::Type{T}=Float64, ::Type{Ti}=Int) where {T,Ti}
     @assert CUDA_AVAILABLE "CUDA is not available"
-    HPCLinearAlgebra.backend_cuda_mpi()  # Zero-arg returns singleton
+    HPCLinearAlgebra.backend_cuda_mpi(T, Ti)
 end
 
 # Backend configurations: (ScalarType, backend_getter, backend_name)
-# The backend_getter is a function that returns the backend (deferred to after MPI.Init)
+# The backend_getter is a function T -> backend that creates the backend with the right T
 const CPU_CONFIGS = [
-    (Float64, get_cpu_backend, "CPU"),
-    (ComplexF64, get_cpu_backend, "CPU")
+    (Float64, T -> get_cpu_backend(T), "CPU"),
+    (ComplexF64, T -> get_cpu_backend(T), "CPU")
 ]
 
 const GPU_CONFIGS = begin
     configs = Tuple{Type, Function, String}[]
     if METAL_AVAILABLE
-        push!(configs, (Float32, get_metal_backend, "Metal"))
+        push!(configs, (Float32, T -> get_metal_backend(T), "Metal"))
         # ComplexF32 skipped - Julia's complex ops use Float64 internally, unsupported on Metal
     end
     if CUDA_AVAILABLE
-        push!(configs, (Float32, get_cuda_backend, "CUDA"))
-        push!(configs, (Float64, get_cuda_backend, "CUDA"))  # CUDA supports Float64
+        push!(configs, (Float32, T -> get_cuda_backend(T), "CUDA"))
+        push!(configs, (Float64, T -> get_cuda_backend(T), "CUDA"))  # CUDA supports Float64
     end
     configs
 end
@@ -199,9 +200,29 @@ Use with `to_backend(x, cpu_version(x.backend))` to convert GPU data to CPU for 
 Note: Always uses SolverMUMPS since GPU solvers (cuDSS) don't work on CPU.
 The solver choice only matters for lu()/ldlt(), not for data comparison.
 """
-function cpu_version(backend::HPCLinearAlgebra.HPCBackend)
-    HPCLinearAlgebra.HPCBackend(
+function cpu_version(backend::HPCLinearAlgebra.HPCBackend{T,Ti,D,C,S}) where {T,Ti,D,C,S}
+    HPCLinearAlgebra.HPCBackend{T,Ti,HPCLinearAlgebra.DeviceCPU,typeof(backend.comm),HPCLinearAlgebra.SolverMUMPS}(
         HPCLinearAlgebra.DeviceCPU(), backend.comm, HPCLinearAlgebra.SolverMUMPS()
+    )
+end
+
+"""
+    real_backend(backend::HPCBackend) -> HPCBackend
+
+Create a real-valued version of the given backend (T -> real(T)).
+Preserves device, comm, and solver. Useful for tests that need real-valued
+matrices (e.g., SPD matrices for LDLT) when iterating over complex configs.
+
+For real T, returns the same backend unchanged.
+For complex T (e.g., ComplexF64), returns a backend with real(T) (e.g., Float64).
+"""
+function real_backend(backend::HPCLinearAlgebra.HPCBackend{T,Ti,D,C,S}) where {T,Ti,D,C,S}
+    RT = real(T)
+    if RT === T
+        return backend  # Already real
+    end
+    HPCLinearAlgebra.HPCBackend{RT,Ti,D,C,S}(
+        backend.device, backend.comm, backend.solver
     )
 end
 
@@ -270,7 +291,7 @@ Returns fully concrete types for exact matching.
 
 Example:
     for (T, get_backend, backend_name) in ALL_CONFIGS
-        backend = get_backend()
+        backend = get_backend(T)
         VT, ST, MT = expected_types(T, backend)
         result = assert_type(A * x, VT)  # Assert exact type match
     end
@@ -284,7 +305,7 @@ end
 
 export METAL_AVAILABLE, CUDA_AVAILABLE, CPU_CONFIGS, GPU_CONFIGS, ALL_CONFIGS, CPU_ONLY_CONFIGS
 export tridiagonal_matrix, dense_matrix, test_vector, test_vector_pair
-export tolerance, cpu_version, local_values, expected_types, assert_type, assert_uniform
+export tolerance, cpu_version, real_backend, local_values, expected_types, assert_type, assert_uniform
 export get_cpu_backend, get_metal_backend, get_cuda_backend
 
 end # module

@@ -64,10 +64,9 @@ end
 
 
 # Parameterized tests for type conversions
-cpu_backend = TestUtils.get_cpu_backend()
-
 for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
-    backend = get_backend()
+    backend = get_backend(T)
+    cpu_backend = TestUtils.cpu_version(backend)  # CPU backend with correct type T
     TOL = TestUtils.tolerance(T)
     VT, ST, MT = TestUtils.expected_types(T, backend)
 
@@ -123,10 +122,12 @@ end  # for (T, get_backend, backend_name)
 
 
 # Show method tests (CPU only, display behavior)
+# These tests use Float64 explicitly, so we use a Float64 backend
+cpu_backend_f64 = backend_cpu_mpi(Float64)
 println(io0(), "[test] HPCVector show methods")
 
 # Test show methods for HPCVector
-v_test = HPCVector(Float64[1.0, 2.0, 3.0, 4.0], cpu_backend)
+v_test = HPCVector(Float64[1.0, 2.0, 3.0, 4.0], cpu_backend_f64)
 io = IOBuffer()
 show(io, v_test)
 s = String(take!(io))
@@ -147,7 +148,7 @@ s_interp = "$v_test"
 println(io0(), "[test] HPCMatrix show methods")
 
 # Test show methods for HPCMatrix
-M_test = HPCMatrix(Float64[1.0 2.0; 3.0 4.0; 5.0 6.0], cpu_backend)
+M_test = HPCMatrix(Float64[1.0 2.0; 3.0 4.0; 5.0 6.0], cpu_backend_f64)
 io = IOBuffer()
 show(io, M_test)
 s = String(take!(io))
@@ -167,7 +168,7 @@ s_interp = "$M_test"
 println(io0(), "[test] HPCSparseMatrix show methods")
 
 # Test show methods for HPCSparseMatrix
-S_test = HPCSparseMatrix{Float64}(sparse([1, 2, 3], [1, 2, 3], [1.0, 2.0, 3.0], 5, 5), cpu_backend)
+S_test = HPCSparseMatrix{Float64}(sparse([1, 2, 3], [1, 2, 3], [1.0, 2.0, 3.0], 5, 5), cpu_backend_f64)
 io = IOBuffer()
 show(io, S_test)
 s = String(take!(io))

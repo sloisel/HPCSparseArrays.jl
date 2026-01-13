@@ -32,7 +32,7 @@ ts = @testset QuietTestSet "Repartition" begin
 
 for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     TOL = TestUtils.tolerance(T)
-    backend = get_backend()
+    backend = get_backend(T)
 
     println(io0(), "[test] HPCVector repartition ($T, $backend_name)")
 

@@ -32,7 +32,7 @@ ts = @testset QuietTestSet "Matrix-Vector Multiplication" begin
 
 for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     TOL = TestUtils.tolerance(T)
-    backend = get_backend()
+    backend = get_backend(T)
     cpu_backend = TestUtils.cpu_version(backend)
     VT, ST, MT = TestUtils.expected_types(T, backend)
 
@@ -198,29 +198,30 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     println(io0(), "[test] Vector reductions ($T, $backend_name)")
 
     n = 8
-    # Use real values for reductions (prod can overflow with complex)
-    x_global_real = real(T).(collect(1.0:n))
-    xdist = HPCVector(x_global_real, backend)
+    # Use small real values cast to T for reductions (prod can overflow with large values)
+    # Values are real-valued (zero imaginary part for complex T) to avoid overflow
+    x_global_vals = T.(collect(1.0:n))
+    xdist = HPCVector(x_global_vals, backend)
     xdist_cpu = to_backend(xdist, cpu_backend)
 
     # sum
     s = assert_uniform(sum(xdist_cpu), name="sum")
-    s_ref = sum(x_global_real)
+    s_ref = sum(x_global_vals)
     @test abs(s - s_ref) < TOL
 
     # prod
     p = assert_uniform(prod(xdist_cpu), name="prod")
-    p_ref = prod(x_global_real)
+    p_ref = prod(x_global_vals)
     @test abs(p - p_ref) < TOL
 
-    # maximum
+    # maximum (for complex, maximum uses real part)
     mx = assert_uniform(maximum(xdist_cpu), name="maximum")
-    mx_ref = maximum(x_global_real)
+    mx_ref = maximum(real, x_global_vals)
     @test abs(mx - mx_ref) < TOL
 
-    # minimum
+    # minimum (for complex, minimum uses real part)
     mn = assert_uniform(minimum(xdist_cpu), name="minimum")
-    mn_ref = minimum(x_global_real)
+    mn_ref = minimum(real, x_global_vals)
     @test abs(mn - mn_ref) < TOL
 
 
