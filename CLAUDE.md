@@ -103,9 +103,9 @@ Sparse matrices remain on CPU (Julia's `SparseMatrixCSC` doesn't support GPU arr
 
 ### Extension Files
 
-- `ext/HPCLinearAlgebraMetalExt.jl` - Metal extension with DeviceMetal backend support
-- `ext/HPCLinearAlgebraCUDAExt.jl` - CUDA extension with DeviceCUDA backend support and cuDSS multi-GPU solver
-- Loaded automatically when `using Metal` or `using CUDA` before `using HPCLinearAlgebra`
+- `ext/HPCSparseArraysMetalExt.jl` - Metal extension with DeviceMetal backend support
+- `ext/HPCSparseArraysCUDAExt.jl` - CUDA extension with DeviceCUDA backend support and cuDSS multi-GPU solver
+- Loaded automatically when `using Metal` or `using CUDA` before `using HPCSparseArrays`
 - Use `to_backend(obj, target_backend)` to convert between backends
 
 ### CUDA-Specific: cuDSS Multi-GPU Solver
@@ -115,7 +115,7 @@ The CUDA extension includes `CuDSSFactorizationMPI` for distributed sparse direc
 ```julia
 using CUDA, MPI
 MPI.Init()
-using HPCLinearAlgebra
+using HPCSparseArrays
 
 # Each MPI rank should use a different GPU
 CUDA.device!(MPI.Comm_rank(MPI.COMM_WORLD) % length(CUDA.devices()))
@@ -183,7 +183,7 @@ end
 
 ## Architecture
 
-HPCLinearAlgebra implements distributed sparse and dense matrix operations using MPI for parallel computing across multiple ranks. Supports both `Float64` and `ComplexF64` element types.
+HPCSparseArrays implements distributed sparse and dense matrix operations using MPI for parallel computing across multiple ranks. Supports both `Float64` and `ComplexF64` element types.
 
 ### Core design principle
 

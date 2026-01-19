@@ -13,7 +13,18 @@ end
 using MPI
 MPI.Init()
 
-using HPCLinearAlgebra
+# Check CUDA availability BEFORE loading HPCSparseArrays
+const CUDA_AVAILABLE = try
+    using CUDA
+    CUDA.device!(MPI.Comm_rank(MPI.COMM_WORLD) % length(CUDA.devices()))
+    using NCCL_jll
+    using CUDSS_jll
+    CUDA.functional()
+catch e
+    false
+end
+
+using HPCSparseArrays
 using SparseArrays
 using LinearAlgebra
 using Test
@@ -320,7 +331,7 @@ if nranks < 2
     @test true  # Pass trivially
 else
     # Clear cache to avoid interference from previous tests
-    HPCLinearAlgebra.clear_plan_cache!()
+    HPCSparseArrays.clear_plan_cache!()
 
     # Use Float64 for this test (partition logic is type-independent)
     T = Float64
@@ -346,7 +357,7 @@ else
     end
     custom_partition[end] = n + 1
 
-    v_hash = HPCLinearAlgebra.compute_partition_hash(custom_partition)
+    v_hash = HPCSparseArrays.compute_partition_hash(custom_partition)
     local_v_range = custom_partition[rank+1]:(custom_partition[rank+2]-1)
     vdist = HPCVector{T}(v_hash, copy(custom_partition), v_global[local_v_range], backend)
 

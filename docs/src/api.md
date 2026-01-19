@@ -1,6 +1,6 @@
 # API Reference
 
-This page provides detailed documentation for all exported types and functions in HPCLinearAlgebra.jl.
+This page provides detailed documentation for all exported types and functions in HPCSparseArrays.jl.
 
 !!! note "MPI Collective Operations"
     Unless otherwise noted, all functions are MPI collective operations. Every MPI rank must call these functions together.
@@ -139,7 +139,7 @@ The `B<:HPCBackend` type parameter specifies the backend configuration (device, 
 
 ## Factorization Types
 
-HPCLinearAlgebra uses MUMPS for sparse direct solves:
+HPCSparseArrays uses MUMPS for sparse direct solves:
 
 - `lu(A)`: LU factorization (general matrices)
 - `ldlt(A)`: LDLT factorization (symmetric matrices, faster)

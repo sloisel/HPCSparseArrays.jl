@@ -12,7 +12,18 @@ end
 using MPI
 MPI.Init()
 
-using HPCLinearAlgebra
+# Check CUDA availability BEFORE loading HPCSparseArrays
+const CUDA_AVAILABLE = try
+    using CUDA
+    CUDA.device!(MPI.Comm_rank(MPI.COMM_WORLD) % length(CUDA.devices()))
+    using NCCL_jll
+    using CUDSS_jll
+    CUDA.functional()
+catch e
+    false
+end
+
+using HPCSparseArrays
 using SparseArrays
 using LinearAlgebra
 using Test
@@ -75,7 +86,7 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     # Test Vector conversion: native -> MPI -> native (bit-for-bit)
     v_original = T.([1.5, -2.3, 3.7, 4.1, -5.9, 6.2, 7.8, -8.4, 9.0, 10.1])
     v_cpu = HPCVector(v_original, cpu_backend)
-    v_mpi = assert_type(HPCLinearAlgebra.to_backend(v_cpu, backend), VT)
+    v_mpi = assert_type(HPCSparseArrays.to_backend(v_cpu, backend), VT)
     v_back = Vector(v_mpi)
     @test norm(v_back - v_original) < TOL
     @test eltype(v_back) == T
@@ -92,7 +103,7 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
                      17.7 18.8 19.9 20.0;
                      21.1 22.2 23.3 24.4])
     M_cpu = HPCMatrix(M_original, cpu_backend)
-    M_mpi = assert_type(HPCLinearAlgebra.to_backend(M_cpu, backend), MT)
+    M_mpi = assert_type(HPCSparseArrays.to_backend(M_cpu, backend), MT)
     M_back = Matrix(M_mpi)
     @test norm(M_back - M_original) < TOL
     @test eltype(M_back) == T
@@ -110,7 +121,7 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     S_original = sparse(I_sp, J_sp, V_sp, 15, 20)
 
     S_cpu = HPCSparseMatrix{T}(S_original, cpu_backend)
-    S_mpi = assert_type(HPCLinearAlgebra.to_backend(S_cpu, backend), ST)
+    S_mpi = assert_type(HPCSparseArrays.to_backend(S_cpu, backend), ST)
     S_back = SparseMatrixCSC(S_mpi)
 
     @test norm(S_back - S_original, Inf) < TOL

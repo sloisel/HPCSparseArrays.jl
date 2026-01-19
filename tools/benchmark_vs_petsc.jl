@@ -1,6 +1,6 @@
 #!/usr/bin/env julia
 #
-# Benchmark HPCLinearAlgebra.jl vs SafePETSc.jl for sparse operations.
+# Benchmark HPCSparseArrays.jl vs SafePETSc.jl for sparse operations.
 #
 # This script compares performance on:
 # 1. Matrix-matrix multiplication (A * A)
@@ -20,12 +20,12 @@ using Printf
 using Statistics
 using Dates
 using BenchmarkTools
-using HPCLinearAlgebra
+using HPCSparseArrays
 using SafePETSc
 
 SafePETSc.Init()
 
-# Configure PETSc to use MUMPS direct solver for fair comparison with HPCLinearAlgebra's direct solver
+# Configure PETSc to use MUMPS direct solver for fair comparison with HPCSparseArrays's direct solver
 # MUMPS is bundled with petsc_jll
 SafePETSc.petsc_options_insert_string("-MPIAIJ_ksp_type preonly -MPIAIJ_pc_type lu -MPIAIJ_pc_factor_mat_solver_type mumps")
 
@@ -51,7 +51,7 @@ end
 """
     benchmark_matmat_linearalgebrampi(A_local, n_samples)
 
-Benchmark HPCLinearAlgebra.jl matrix-matrix multiplication (A * A).
+Benchmark HPCSparseArrays.jl matrix-matrix multiplication (A * A).
 Returns median time in seconds.
 """
 function benchmark_matmat_linearalgebrampi(A_local, n_samples)
@@ -105,7 +105,7 @@ end
 """
     benchmark_linearalgebrampi(A_local, b_local, n_samples)
 
-Benchmark HPCLinearAlgebra.jl solve time.
+Benchmark HPCSparseArrays.jl solve time.
 Returns median time in seconds for the solve phase only.
 """
 function benchmark_linearalgebrampi(A_local, b_local, n_samples)
@@ -120,7 +120,7 @@ function benchmark_linearalgebrampi(A_local, b_local, n_samples)
     # Verify solution
     residual = norm(Vector(A_mpi * x - b_mpi)) / norm(b_local)
     if rank == 0 && residual > 1e-10
-        println("  Warning: HPCLinearAlgebra residual = $residual")
+        println("  Warning: HPCSparseArrays residual = $residual")
     end
     finalize!(F)  # Clean up warmup factorization
 
@@ -232,7 +232,7 @@ function run_benchmarks()
 
     if rank == 0
         println("=" ^ 70)
-        println("HPCLinearAlgebra.jl vs SafePETSc.jl Benchmark")
+        println("HPCSparseArrays.jl vs SafePETSc.jl Benchmark")
         println("=" ^ 70)
         println("Date: $(Dates.now())")
         println("MPI ranks: $nranks")
@@ -263,9 +263,9 @@ function run_benchmarks()
         println()
     end
 
-    # Benchmark HPCLinearAlgebra.jl matmat
+    # Benchmark HPCSparseArrays.jl matmat
     if rank == 0
-        println("Benchmarking HPCLinearAlgebra.jl (A * A)...")
+        println("Benchmarking HPCSparseArrays.jl (A * A)...")
     end
     lampi_matmat_time = benchmark_matmat_linearalgebrampi(A_local, n_samples)
     if rank == 0
@@ -286,7 +286,7 @@ function run_benchmarks()
     # Matmat summary
     if rank == 0
         matmat_speedup = petsc_matmat_time / lampi_matmat_time
-        println(@sprintf("Matrix-Matrix Speedup (HPCLinearAlgebra vs SafePETSc): %.2fx", matmat_speedup))
+        println(@sprintf("Matrix-Matrix Speedup (HPCSparseArrays vs SafePETSc): %.2fx", matmat_speedup))
         println()
     end
 
@@ -300,9 +300,9 @@ function run_benchmarks()
         println()
     end
 
-    # Benchmark HPCLinearAlgebra.jl
+    # Benchmark HPCSparseArrays.jl
     if rank == 0
-        println("Benchmarking HPCLinearAlgebra.jl (LDLT)...")
+        println("Benchmarking HPCSparseArrays.jl (LDLT)...")
     end
     lampi_fact_time, lampi_solve_time = benchmark_linearalgebrampi(A_local, b_local, n_samples)
 
@@ -339,7 +339,7 @@ function run_benchmarks()
         baseline = petsc_solve_time
         println(@sprintf("%-25s %15s %15s", "SafePETSc.jl", format_time(petsc_solve_time), "1.00x"))
         speedup = petsc_solve_time / lampi_solve_time
-        println(@sprintf("%-25s %15s %15.2fx", "HPCLinearAlgebra.jl", format_time(lampi_solve_time), speedup))
+        println(@sprintf("%-25s %15s %15.2fx", "HPCSparseArrays.jl", format_time(lampi_solve_time), speedup))
 
         println()
         println("=" ^ 70)
@@ -354,12 +354,12 @@ function run_benchmarks()
 
         println(@sprintf("%-25s %15s %15s %15s", "SafePETSc.jl",
                         format_time(petsc_setup_time), format_time(petsc_solve_time), format_time(petsc_total)))
-        println(@sprintf("%-25s %15s %15s %15s", "HPCLinearAlgebra.jl",
+        println(@sprintf("%-25s %15s %15s %15s", "HPCSparseArrays.jl",
                         format_time(lampi_fact_time), format_time(lampi_solve_time), format_time(lampi_total)))
 
         total_speedup = petsc_total / lampi_total
         println()
-        println(@sprintf("Total speedup (HPCLinearAlgebra vs SafePETSc): %.2fx", total_speedup))
+        println(@sprintf("Total speedup (HPCSparseArrays vs SafePETSc): %.2fx", total_speedup))
         println()
     end
 
@@ -367,7 +367,7 @@ function run_benchmarks()
     if rank == 0
         results_file = joinpath(@__DIR__, "benchmark_vs_petsc_results.txt")
         open(results_file, "w") do f
-            println(f, "# HPCLinearAlgebra.jl vs SafePETSc.jl Benchmark Results")
+            println(f, "# HPCSparseArrays.jl vs SafePETSc.jl Benchmark Results")
             println(f, "# Date: $(Dates.now())")
             println(f, "# MPI ranks: $nranks")
             println(f, "# Julia threads: $(Threads.nthreads())")
@@ -376,12 +376,12 @@ function run_benchmarks()
             println(f, "# Matrix-Matrix Multiplication (A * A)")
             println(f, "# library,matmat_time")
             println(f, "SafePETSc,$petsc_matmat_time")
-            println(f, "HPCLinearAlgebra,$lampi_matmat_time")
+            println(f, "HPCSparseArrays,$lampi_matmat_time")
             println(f, "#")
             println(f, "# Sparse Direct Solve (LDLT)")
             println(f, "# library,factorization_time,solve_time,total_time")
             println(f, "SafePETSc,$petsc_setup_time,$petsc_solve_time,$(petsc_setup_time + petsc_solve_time)")
-            println(f, "HPCLinearAlgebra,$lampi_fact_time,$lampi_solve_time,$(lampi_fact_time + lampi_solve_time)")
+            println(f, "HPCSparseArrays,$lampi_fact_time,$lampi_solve_time,$(lampi_fact_time + lampi_solve_time)")
         end
         println("Results saved to: $results_file")
     end

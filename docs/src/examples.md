@@ -1,6 +1,6 @@
 # Examples
 
-This page provides detailed examples of using HPCLinearAlgebra.jl for various distributed sparse matrix operations.
+This page provides detailed examples of using HPCSparseArrays.jl for various distributed sparse matrix operations.
 
 ## Matrix Multiplication
 
@@ -9,7 +9,7 @@ This page provides detailed examples of using HPCLinearAlgebra.jl for various di
 ```julia
 using MPI
 MPI.Init()
-using HPCLinearAlgebra
+using HPCSparseArrays
 using SparseArrays
 using LinearAlgebra
 
@@ -47,7 +47,7 @@ println(io0(), "Multiplication error: $err")
 ```julia
 using MPI
 MPI.Init()
-using HPCLinearAlgebra
+using HPCSparseArrays
 using SparseArrays
 using LinearAlgebra
 
@@ -82,7 +82,7 @@ println(io0(), "Result size: $(size(Cdist))")
 ```julia
 using MPI
 MPI.Init()
-using HPCLinearAlgebra
+using HPCSparseArrays
 using SparseArrays
 using LinearAlgebra
 
@@ -125,7 +125,7 @@ println(io0(), "Complex matrix operations completed")
 ```julia
 using MPI
 MPI.Init()
-using HPCLinearAlgebra
+using HPCSparseArrays
 using SparseArrays
 using LinearAlgebra
 
@@ -172,7 +172,7 @@ The `transpose` function creates a lazy wrapper without transposing the data. Th
 ```julia
 using MPI
 MPI.Init()
-using HPCLinearAlgebra
+using HPCSparseArrays
 using SparseArrays
 using LinearAlgebra
 
@@ -205,7 +205,7 @@ println(io0(), "Lazy transpose multiplication completed")
 ```julia
 using MPI
 MPI.Init()
-using HPCLinearAlgebra
+using HPCSparseArrays
 using SparseArrays
 using LinearAlgebra
 
@@ -245,7 +245,7 @@ println(io0(), "transpose(A) * B error: $err")
 ```julia
 using MPI
 MPI.Init()
-using HPCLinearAlgebra
+using HPCSparseArrays
 using SparseArrays
 using LinearAlgebra
 
@@ -282,7 +282,7 @@ println(io0(), "Scalar multiplication errors: $err1, $err2")
 ```julia
 using MPI
 MPI.Init()
-using HPCLinearAlgebra
+using HPCSparseArrays
 using SparseArrays
 using LinearAlgebra
 
@@ -317,12 +317,12 @@ println(io0(), "Operator Inf-norm: $op_inf")
 
 ## Iterative Methods Example
 
-Here's an example of using HPCLinearAlgebra.jl for power iteration to find the dominant eigenvalue:
+Here's an example of using HPCSparseArrays.jl for power iteration to find the dominant eigenvalue:
 
 ```julia
 using MPI
 MPI.Init()
-using HPCLinearAlgebra
+using HPCSparseArrays
 using SparseArrays
 using LinearAlgebra
 
@@ -338,7 +338,7 @@ A = sparse(I, J, V, n, n)
 Adist = HPCSparseMatrix(A, backend)
 
 # For power iteration, we need matrix-vector products
-# Currently HPCLinearAlgebra focuses on matrix-matrix products
+# Currently HPCSparseArrays focuses on matrix-matrix products
 # This example shows how to use A*A for related computations
 
 # Compute A^2
@@ -354,14 +354,14 @@ println(io0(), "||A^2||_F = $norm_A2")
 
 ## Solving Linear Systems
 
-HPCLinearAlgebra provides distributed sparse direct solvers using the multifrontal method.
+HPCSparseArrays provides distributed sparse direct solvers using the multifrontal method.
 
 ### LDLT Factorization (Symmetric Matrices)
 
 ```julia
 using MPI
 MPI.Init()
-using HPCLinearAlgebra
+using HPCSparseArrays
 using SparseArrays
 using LinearAlgebra
 
@@ -402,7 +402,7 @@ println(io0(), "LDLT solve residual: $residual")
 ```julia
 using MPI
 MPI.Init()
-using HPCLinearAlgebra
+using HPCSparseArrays
 using SparseArrays
 using LinearAlgebra
 
@@ -438,7 +438,7 @@ LDLT uses Bunch-Kaufman pivoting to handle symmetric indefinite matrices:
 ```julia
 using MPI
 MPI.Init()
-using HPCLinearAlgebra
+using HPCSparseArrays
 using SparseArrays
 using LinearAlgebra
 
@@ -472,7 +472,7 @@ For sequences of matrices with the same sparsity pattern, the symbolic factoriza
 ```julia
 using MPI
 MPI.Init()
-using HPCLinearAlgebra
+using HPCSparseArrays
 using SparseArrays
 using LinearAlgebra
 
@@ -515,7 +515,7 @@ println(io0(), "F2 residual: ", norm(A2 * x2_full - ones(n), Inf))
 ```julia
 using MPI
 MPI.Init()
-using HPCLinearAlgebra
+using HPCSparseArrays
 using SparseArrays
 
 backend = BACKEND_CPU_MPI
@@ -558,7 +558,7 @@ Row-wise operations are local - no MPI communication is needed since rows are al
 ```julia
 using MPI
 MPI.Init()
-using HPCLinearAlgebra
+using HPCSparseArrays
 using LinearAlgebra
 
 backend = BACKEND_CPU_MPI
@@ -585,7 +585,7 @@ Column-wise operations require MPI communication to gather each full column:
 ```julia
 using MPI
 MPI.Init()
-using HPCLinearAlgebra
+using HPCSparseArrays
 using LinearAlgebra
 
 backend = BACKEND_CPU_MPI
@@ -611,7 +611,7 @@ The standard Julia pattern `vcat(f.(eachrow(A))...)` doesn't work with distribut
 ```julia
 using MPI
 MPI.Init()
-using HPCLinearAlgebra
+using HPCSparseArrays
 using LinearAlgebra
 
 backend = BACKEND_CPU_MPI

@@ -1287,8 +1287,8 @@ function Base.setindex!(A::HPCSparseMatrix{T,Ti,Bk}, src::HPCSparseMatrix{T,Ti,B
         A.ncols_compressed = length(new_col_indices)
     end
 
-    # Invalidate structural hash (will be recomputed lazily on next use)
-    A.structural_hash = nothing
+    # Recompute structural hash after modification
+    A.structural_hash = compute_structural_hash(A.row_partition, A.col_indices, A.rowptr, A.colval, A.backend.comm)
 
     # Invalidate cached transpose bidirectionally
     _invalidate_cached_transpose!(A)
@@ -2329,8 +2329,8 @@ function Base.setindex!(A::HPCSparseMatrix{T,Ti,Bk}, src::HPCMatrix{T}, row_idx:
         A.ncols_compressed = length(new_col_indices)
     end
 
-    # Invalidate structural hash (will be recomputed lazily on next use)
-    A.structural_hash = nothing
+    # Recompute structural hash after modification
+    A.structural_hash = compute_structural_hash(A.row_partition, A.col_indices, A.rowptr, A.colval, A.backend.comm)
 
     # Invalidate cached transpose bidirectionally
     _invalidate_cached_transpose!(A)
@@ -3954,8 +3954,8 @@ function Base.setindex!(A::HPCSparseMatrix{T,Ti,Bk}, src::HPCMatrix{T}, row_idx:
         A.ncols_compressed = length(new_col_indices)
     end
 
-    # Invalidate structural hash (will be recomputed lazily on next use)
-    A.structural_hash = nothing
+    # Recompute structural hash after modification
+    A.structural_hash = compute_structural_hash(A.row_partition, A.col_indices, A.rowptr, A.colval, A.backend.comm)
 
     # Invalidate cached transpose bidirectionally
     _invalidate_cached_transpose!(A)
@@ -4127,8 +4127,8 @@ function Base.setindex!(A::HPCSparseMatrix{T,Ti,Bk}, src::HPCMatrix{T}, row_rng:
         A.ncols_compressed = length(new_col_indices)
     end
 
-    # Invalidate structural hash (will be recomputed lazily on next use)
-    A.structural_hash = nothing
+    # Recompute structural hash after modification
+    A.structural_hash = compute_structural_hash(A.row_partition, A.col_indices, A.rowptr, A.colval, A.backend.comm)
 
     # Invalidate cached transpose bidirectionally
     _invalidate_cached_transpose!(A)
@@ -4282,8 +4282,8 @@ function Base.setindex!(A::HPCSparseMatrix{T,Ti,Bk}, src::HPCVector{T}, row_idx:
         A.ncols_compressed = length(new_col_indices)
     end
 
-    # Invalidate structural hash (will be recomputed lazily on next use)
-    A.structural_hash = nothing
+    # Recompute structural hash after modification
+    A.structural_hash = compute_structural_hash(A.row_partition, A.col_indices, A.rowptr, A.colval, A.backend.comm)
 
     # Invalidate cached transpose bidirectionally
     _invalidate_cached_transpose!(A)
@@ -4352,8 +4352,8 @@ function Base.setindex!(A::HPCSparseMatrix{T,Ti,Bk}, src::HPCVector{T}, i::Integ
         end
     end
 
-    # Invalidate structural hash (will be recomputed lazily on next use)
-    A.structural_hash = nothing
+    # Recompute structural hash after modification
+    A.structural_hash = compute_structural_hash(A.row_partition, A.col_indices, A.rowptr, A.colval, A.backend.comm)
 
     # Invalidate cached transpose bidirectionally
     _invalidate_cached_transpose!(A)

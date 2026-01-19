@@ -15,7 +15,18 @@ end
 using MPI
 MPI.Init()
 
-using HPCLinearAlgebra
+# Check CUDA availability BEFORE loading HPCSparseArrays
+const CUDA_AVAILABLE = try
+    using CUDA
+    CUDA.device!(MPI.Comm_rank(MPI.COMM_WORLD) % length(CUDA.devices()))
+    using NCCL_jll
+    using CUDSS_jll
+    CUDA.functional()
+catch e
+    false
+end
+
+using HPCSparseArrays
 using SparseArrays
 using LinearAlgebra
 using Test
@@ -440,7 +451,7 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
         # Use size that guarantees different partitions with 4 ranks
         n_asym = 12
         A_sym_full_asym = create_spd_tridiagonal(RT, n_asym)
-        row_part = HPCLinearAlgebra.uniform_partition(n_asym, nranks)
+        row_part = HPCSparseArrays.uniform_partition(n_asym, nranks)
         # Create a different valid partition
         col_part = if nranks == 4
             [1, 3, 6, 9, 13]

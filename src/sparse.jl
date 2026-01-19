@@ -94,7 +94,7 @@ Compute a structural hash that is identical across all ranks.
 2. Allgather all local hashes
 3. Hash the gathered hashes to produce a global hash
 """
-function compute_structural_hash(row_partition::Vector{Int}, col_indices::Vector{Int},
+function compute_structural_hash(row_partition::Vector{Int}, col_indices::Vector{<:Integer},
     rowptr::Vector{<:Integer}, colval::Vector{<:Integer}, comm::AbstractComm)::Blake3Hash
     # Step 1: Compute rank-local hash
     # IMPORTANT: Prefix each vector with its length to disambiguate boundaries.
@@ -121,7 +121,7 @@ function compute_structural_hash(row_partition::Vector{Int}, col_indices::Vector
 end
 
 # Backwards-compatible overload that takes SparseMatrixCSC
-function compute_structural_hash(row_partition::Vector{Int}, col_indices::Vector{Int},
+function compute_structural_hash(row_partition::Vector{Int}, col_indices::Vector{<:Integer},
     AT::SparseMatrixCSC, comm::AbstractComm)::Blake3Hash
     return compute_structural_hash(row_partition, col_indices, AT.colptr, AT.rowval, comm)
 end
@@ -317,7 +317,7 @@ Only `nzval` can live on GPU, with type determined by the backend device:
 Use `to_backend(A, target_backend)` to convert between backends.
 """
 mutable struct HPCSparseMatrix{T,Ti,B<:HPCBackend{T,Ti}} <: AbstractMatrix{T}
-    structural_hash::OptionalBlake3Hash
+    structural_hash::Blake3Hash
     row_partition::Vector{Int}      # Always CPU
     col_partition::Vector{Int}      # Always CPU
     col_indices::Vector{Int}        # Always CPU (local→global column mapping)
@@ -519,8 +519,9 @@ function HPCSparseMatrix_local(A_local::SparseMatrixCSR{T,Timat}, backend::B;
     rowptr_target = _to_target_device(rowptr, device)
     colval_target = _to_target_device(colval, device)
 
-    # Structural hash computed lazily on first use via _ensure_hash
-    return HPCSparseMatrix{T,Ti,B}(nothing, row_partition, col_partition, col_indices,
+    # Compute structural hash eagerly
+    structural_hash = compute_structural_hash(row_partition, col_indices, rowptr, colval, backend.comm)
+    return HPCSparseMatrix{T,Ti,B}(structural_hash, row_partition, col_partition, col_indices,
         rowptr, colval, nzval, nrows_local, ncols_compressed, nothing, nothing, rowptr_target, colval_target, backend)
 end
 
@@ -562,21 +563,30 @@ mutable struct MatrixPlan{T,Ti,AIV<:AbstractVector{Ti}}
     recv_offsets::Vector{Int}
     local_ranges::Vector{Tuple{UnitRange{Int},Int}}
     AT::SparseMatrixCSC{T,Ti}
+    # Result structure (computed at plan creation via symbolic multiply)
+    result_row_partition::Vector{Int}
+    result_col_partition::Vector{Int}
+    result_col_indices::Vector{Int}
+    result_colptr::Vector{Ti}
+    result_colval::Vector{Ti}  # Compressed local column indices
+    result_structural_hash::Blake3Hash
+    # Cached GPU arrays for result construction
+    cached_rowptr_target::Union{Nothing, AIV}
+    cached_colval_target::Union{Nothing, AIV}
 end
 
 """
-    MatrixPlan(row_indices::Vector{Int}, B::HPCSparseMatrix{T,Ti,B_backend}, ::Type{AIV}) where {T,Ti,B_backend,AIV}
+    _create_comm_plan(row_indices::Vector{Int}, B::HPCSparseMatrix{T,Ti,B_backend}, ::Type{AIV}) where {T,Ti,B_backend,AIV}
 
-Create a communication plan to gather rows specified by row_indices from B.
-Assumes row_indices is sorted. AIV is the index array type for symbolic multiply
-(Vector{Ti} for CPU, MtlVector{Ti} for GPU).
+Create the communication infrastructure for gathering rows specified by row_indices from B.
+Returns a named tuple with the communication data, used by MatrixPlan constructor.
 
 The plan proceeds in 3 steps:
 1. For each row i in row_indices, determine owner. If remote, use isend to request structure.
 2. Receive requests from other ranks, add to rank_ids, isend structure responses.
 3. Receive structure info, build plan.AT with zeros (sparsity pattern of B[row_indices,:]).
 """
-function MatrixPlan(row_indices::Vector{Int}, B::HPCSparseMatrix{T,Ti,B_backend}, ::Type{AIV}) where {T,Ti,B_backend<:HPCBackend,AIV<:AbstractVector{Ti}}
+function _create_comm_plan(row_indices::Vector{Int}, B::HPCSparseMatrix{T,Ti,B_backend}, ::Type{AIV}) where {T,Ti,B_backend<:HPCBackend,AIV<:AbstractVector{Ti}}
     comm = B.backend.comm
     rank = comm_rank(comm)
     nranks = comm_size(comm)
@@ -841,11 +851,17 @@ function MatrixPlan(row_indices::Vector{Int}, B::HPCSparseMatrix{T,Ti,B_backend}
 
     plan_AT = SparseMatrixCSC(nrows_AT, n_total_cols, combined_colptr, combined_rowval, combined_nzval)
 
-    return MatrixPlan{T,Ti,AIV}(
-        rank_ids, send_ranges_vec, send_bufs, send_reqs,
-        recv_rank_ids, recv_bufs, recv_reqs, recv_offsets_vec,
-        local_ranges,
-        plan_AT
+    return (
+        rank_ids = rank_ids,
+        send_ranges = send_ranges_vec,
+        send_bufs = send_bufs,
+        send_reqs = send_reqs,
+        recv_rank_ids = recv_rank_ids,
+        recv_bufs = recv_bufs,
+        recv_reqs = recv_reqs,
+        recv_offsets = recv_offsets_vec,
+        local_ranges = local_ranges,
+        AT = plan_AT
     )
 end
 
@@ -896,15 +912,59 @@ _matrix_to_backend(cpu_matrix::Matrix{T}, template::AbstractMatrix) where T = co
 
 Create a memoized communication plan for A * B.
 The plan is cached based on the structural hashes of A, B, and the array type AV.
+
+The plan includes pre-computed result structure from symbolic multiply,
+so the actual multiply only needs to compute values, not structure.
 """
-function MatrixPlan(A::HPCSparseMatrix{T,Ti,B}, B_mat::HPCSparseMatrix{T,Ti,B}) where {T,Ti,B<:HPCBackend}
+function MatrixPlan(A::HPCSparseMatrix{T,Ti,Bk}, B_mat::HPCSparseMatrix{T,Ti,Bk}) where {T,Ti,Bk<:HPCBackend}
     device = A.backend.device
+    comm = A.backend.comm
     AIV = _index_array_type(device, Ti)
-    key = (_ensure_hash(A), _ensure_hash(B_mat), T, Ti, B)
+    key = (A.structural_hash, B_mat.structural_hash, T, Ti, Bk)
     if haskey(_plan_cache, key)
         return _plan_cache[key]::MatrixPlan{T,Ti,AIV}
     end
-    plan = MatrixPlan(A.col_indices, B_mat, AIV)
+
+    # Create communication plan for gathering B rows
+    base_plan = _create_comm_plan(A.col_indices, B_mat, AIV)
+
+    # Do symbolic multiply to pre-compute result structure
+    # C^T = plan.AT * A^T, where A^T is our local CSC (A stored as CSR)
+    A_csc = _get_csc(A)
+    # Use zeros for symbolic multiply - structure is the same regardless of values
+    CT = base_plan.AT * A_csc
+
+    # Extract result structure
+    nrows_local = CT.n
+    if isempty(CT.rowval)
+        result_col_indices = Int[]
+        compressed_colval = Ti[]
+    else
+        result_col_indices = unique(sort(Int.(CT.rowval)))
+        # Build compress_map: compress_map[global_col] = local_col
+        max_col = maximum(result_col_indices)
+        compress_map = zeros(Int, max_col)
+        for (local_idx, global_idx) in enumerate(result_col_indices)
+            compress_map[global_idx] = local_idx
+        end
+        compressed_colval = Ti[compress_map[r] for r in CT.rowval]
+    end
+
+    result_colptr = Ti.(CT.colptr)
+
+    # Compute structural hash for result
+    ncols_compressed = length(result_col_indices)
+    temp_csc = SparseMatrixCSC(ncols_compressed, nrows_local, result_colptr, compressed_colval, CT.nzval)
+    result_hash = compute_structural_hash(A.row_partition, result_col_indices, temp_csc, comm)
+
+    plan = MatrixPlan{T,Ti,AIV}(
+        base_plan.rank_ids, base_plan.send_ranges, base_plan.send_bufs, base_plan.send_reqs,
+        base_plan.recv_rank_ids, base_plan.recv_bufs, base_plan.recv_reqs, base_plan.recv_offsets,
+        base_plan.local_ranges, base_plan.AT,
+        A.row_partition, B_mat.col_partition, result_col_indices,
+        result_colptr, compressed_colval, result_hash,
+        nothing, nothing  # cached GPU arrays
+    )
     _plan_cache[key] = plan
     return plan
 end
@@ -978,84 +1038,53 @@ function execute_plan!(plan::MatrixPlan{T,Ti,AIV}, B::HPCSparseMatrix{T,Ti,B_bac
 end
 
 """
-    Base.*(A::HPCSparseMatrix{T,Ti,AV}, B::HPCSparseMatrix{T,Ti,AV}) where {T,Ti,AV}
+    Base.*(A::HPCSparseMatrix{T,Ti,B}, B_mat::HPCSparseMatrix{T,Ti,B}) where {T,Ti,B<:HPCBackendCPU}
 
 Multiply two distributed sparse matrices A * B using native Julia sparse multiply.
 
 MPI communication gathers the required rows of B, then Julia's native
 SparseMatrixCSC multiplication computes the local result.
 
-Note: A and B must have the same storage type (both CPU or both GPU).
-For GPU backends, data is copied to CPU for the multiply, then back to GPU.
-"""
-function Base.:*(A::HPCSparseMatrix{T,Ti,BK}, B::HPCSparseMatrix{T,Ti,BK}) where {T,Ti,BK}
-    comm = A.backend.comm
+This method is for CPU backends only. GPU backends (CUDA) use the
+specialized cuSPARSE implementation in the extension module.
 
-    # Get memoized communication plan (handles MPI communication for gathering B rows)
+The result structure is pre-computed in MatrixPlan, so this only computes values.
+"""
+function Base.:*(A::HPCSparseMatrix{T,Ti,BK}, B::HPCSparseMatrix{T,Ti,BK}) where {T,Ti,BK<:HPCBackendCPU}
+    # Get memoized plan (includes pre-computed result structure)
     plan = MatrixPlan(A, B)
 
     # Gather B values into plan.AT
-    # execute_plan! fills plan.AT.nzval with the actual values from B
     execute_plan!(plan, B)
 
     # Get local A as CSC (copies nzval to CPU if on GPU)
     A_csc = _get_csc(A)
 
     # Native Julia sparse multiply: C^T = plan.AT * A^T
-    # plan.AT has the gathered rows of B (as CSC, representing B^T)
-    # A_csc is A^T (local part)
-    # Result CT is C^T (local part)
     CT = plan.AT * A_csc
 
-    # Extract result structure
-    # CT is SparseMatrixCSC with:
-    #   CT.m = number of rows (= number of unique columns in result)
-    #   CT.n = number of columns (= number of local rows in result)
-    #   CT.colptr = row pointers for CSR of result
-    #   CT.rowval = global column indices
-    #   CT.nzval = values
-
+    # Use pre-computed structure from plan, just take values from CT
     nrows_local = CT.n
-
-    # Build col_indices from unique global column indices in CT.rowval
-    if isempty(CT.rowval)
-        result_col_indices = Int[]
-        compressed_rowval = Ti[]
-    else
-        result_col_indices = unique(sort(Int.(CT.rowval)))
-
-        # Build compress_map: compress_map[global_col] = local_col
-        max_col = maximum(result_col_indices)
-        compress_map = zeros(Int, max_col)
-        for (local_idx, global_idx) in enumerate(result_col_indices)
-            compress_map[global_idx] = local_idx
-        end
-
-        # Compress rowval: convert global to local indices
-        compressed_rowval = Ti[compress_map[r] for r in CT.rowval]
-    end
-
-    ncols_compressed = length(result_col_indices)
-
-    # Convert colptr to Ti
-    result_colptr = Ti.(CT.colptr)
-
-    # Compute structural hash
-    temp_csc = SparseMatrixCSC(ncols_compressed, nrows_local, result_colptr, compressed_rowval, CT.nzval)
-    structural_hash = compute_structural_hash(A.row_partition, result_col_indices, temp_csc, comm)
+    ncols_compressed = length(plan.result_col_indices)
 
     # Convert nzval to target backend (no-op for CPU, copy for GPU)
     nzval = _values_to_backend(CT.nzval, A.nzval)
 
-    # Convert structure arrays to target backend
+    # Use cached GPU arrays from plan, or create them on first use
     device = A.backend.device
-    rowptr_target = _to_target_device(result_colptr, device)
-    colval_target = _to_target_device(compressed_rowval, device)
+    if plan.cached_rowptr_target === nothing
+        plan.cached_rowptr_target = _to_target_device(plan.result_colptr, device)
+    end
+    if plan.cached_colval_target === nothing
+        plan.cached_colval_target = _to_target_device(plan.result_colval, device)
+    end
 
-    return HPCSparseMatrix{T,Ti,BK}(structural_hash, A.row_partition, B.col_partition,
-        result_col_indices, result_colptr, compressed_rowval, nzval,
+    return HPCSparseMatrix{T,Ti,BK}(
+        plan.result_structural_hash,
+        plan.result_row_partition, plan.result_col_partition,
+        plan.result_col_indices, plan.result_colptr, plan.result_colval, nzval,
         nrows_local, ncols_compressed, nothing, nothing,
-        rowptr_target, colval_target, A.backend)
+        plan.cached_rowptr_target, plan.cached_colval_target, A.backend)
 end
 
 # Note: Mixed-backend matrix multiplication (different B1, B2) is not supported.
@@ -1091,8 +1120,8 @@ mutable struct AdditionPlan{T,Ti,AIV<:AbstractVector{Ti}}
     col_partition::Vector{Int}
     col_indices::Vector{Int}
 
-    # Cached structural hash (computed lazily)
-    structural_hash::OptionalBlake3Hash
+    # Structural hash for result (computed at plan creation)
+    structural_hash::Blake3Hash
 
     # Cached GPU arrays for result construction (lazily populated on first GPU execution)
     cached_rowptr_target::Union{Nothing, AIV}  # GPU copy of colptr (same size each time)
@@ -1406,10 +1435,6 @@ function Base.:+(A::HPCSparseMatrix{T,Ti,Bk}, B::HPCSparseMatrix{T,Ti,Bk}) where
     # Repartition B to match A's row partition (uses CPU staging for MPI, returns CPU)
     B_repart = repartition(B, A.row_partition)
 
-    # Ensure both have structural hashes (uses CPU nzval for hashing)
-    _ensure_hash(A)
-    _ensure_hash(B_repart)
-
     # Get or create plan (computed from CPU structures)
     plan = _get_addition_plan(A, B_repart)
 
@@ -1454,10 +1479,6 @@ Uses unified KernelAbstractions kernels that work on both CPU and GPU.
 function Base.:-(A::HPCSparseMatrix{T,Ti,Bk}, B::HPCSparseMatrix{T,Ti,Bk}) where {T,Ti,Bk<:HPCBackend}
     # Repartition B to match A's row partition (uses CPU staging for MPI, returns CPU)
     B_repart = repartition(B, A.row_partition)
-
-    # Ensure both have structural hashes (uses CPU nzval for hashing)
-    _ensure_hash(A)
-    _ensure_hash(B_repart)
 
     # Get or create plan (computed from CPU structures)
     plan = _get_addition_plan(A, B_repart)
@@ -1533,8 +1554,8 @@ mutable struct TransposePlan{T,Ti}
     col_indices::Vector{Int}
     # Precomputed compress_map: compress_map[global_col] = local_col
     compress_map::Vector{Int}
-    # Cached structural hash for transpose result (computed lazily on first execution)
-    structural_hash::OptionalBlake3Hash
+    # Structural hash for transpose result (computed at plan creation)
+    structural_hash::Blake3Hash
 end
 
 """
@@ -1733,13 +1754,19 @@ function TransposePlan(A::HPCSparseMatrix{T,Ti,B}) where {T,Ti,B<:HPCBackend}
         end
     end
 
+    # Compute compressed rowval for hash (global indices -> local indices)
+    compressed_rowval = isempty(rowval) ? Ti[] : Ti[compress_map[r] for r in rowval]
+
+    # Compute structural hash eagerly
+    structural_hash = compute_structural_hash(result_row_partition, result_col_indices, colptr, compressed_rowval, comm)
+
     return TransposePlan{T,Ti}(
         rank_ids, send_indices_final, send_bufs, send_reqs,
         recv_rank_ids, recv_bufs, recv_reqs, recv_perm,
         local_src_indices, local_dst_indices,
         result_AT, result_row_partition, result_col_partition, result_col_indices,
         compress_map,
-        nothing  # structural_hash (computed lazily on first execution)
+        structural_hash
     )
 end
 
@@ -1806,11 +1833,6 @@ function execute_plan!(plan::TransposePlan{T,Ti}, A::HPCSparseMatrix{T,Ti,B}) wh
 
     # Compress result_AT: convert global column indices to local indices (using precomputed map)
     compressed_result_AT = compress_AT_cached(result_AT, plan.compress_map, length(plan.col_indices))
-
-    # Use cached hash if available, otherwise compute and cache
-    if plan.structural_hash === nothing
-        plan.structural_hash = compute_structural_hash(plan.row_partition, plan.col_indices, compressed_result_AT, comm)
-    end
 
     # Extract CSR components from compressed_result_AT
     nrows_local = compressed_result_AT.n
@@ -1971,13 +1993,17 @@ function VectorPlan(A::HPCSparseMatrix{T,Ti,B}, x::HPCVector{T,Bx}) where {T,Ti,
     # Gathered buffer matches source vector's storage type
     gathered = similar(x.v, n_gathered)
 
+    # Compute result partition hash eagerly
+    result_partition = copy(A.row_partition)
+    result_partition_hash = compute_partition_hash(result_partition)
+
     # Determine the array type for VectorPlan based on input vector's storage
     AV = typeof(x.v)
     return VectorPlan{T,Ti,AV}(
         send_rank_ids, send_indices_final, send_bufs, send_reqs,
         recv_rank_ids, recv_bufs, recv_reqs, recv_perm_final,
         local_src_indices, local_dst_indices, gathered, gathered_cpu,
-        nothing, nothing,  # result_partition_hash, result_partition (computed lazily)
+        result_partition_hash, result_partition,
         nothing, nothing,  # cached_gathered_target, cached_y_local (for SpMV)
         nothing, nothing   # cached_local_src_gpu, cached_local_dst_gpu (for GPU gather)
     )
@@ -1991,7 +2017,7 @@ The plan is cached based on the structural hashes of A and x, plus the array typ
 """
 function get_vector_plan(A::HPCSparseMatrix{T,Ti}, x::HPCVector{T,B}) where {T,Ti,B<:HPCBackend}
     AV = typeof(x.v)  # Get actual array type from the vector
-    key = (_ensure_hash(A), x.structural_hash, T, Ti, AV)
+    key = (A.structural_hash, x.structural_hash, T, Ti, AV)
     if haskey(_vector_plan_cache, key)
         return _vector_plan_cache[key]::VectorPlan{T,Ti,AV}
     end
@@ -2098,12 +2124,8 @@ function Base.:*(A::HPCSparseMatrix{T,Ti,BA}, x::HPCVector{T,BX}) where {T,Ti,BA
     rank = comm_rank(comm)
     local_rows = A.row_partition[rank+2] - A.row_partition[rank+1]
 
-    # Get the plan and use cached partition hash if available
+    # Get the plan
     plan = get_vector_plan(A, x)
-    if plan.result_partition_hash === nothing
-        plan.result_partition_hash = compute_partition_hash(A.row_partition)
-        plan.result_partition = copy(A.row_partition)
-    end
 
     # Execute the plan to gather vector elements
     # After execute_plan!, plan.gathered always contains the data in x's backend (= A's backend)
@@ -3787,11 +3809,8 @@ function IdentityAdditionPlan(A::HPCSparseMatrix{T,Ti,B}) where {T,Ti,B}
             end
         end
 
-        # Compute structural hash (same as A since structure unchanged)
+        # Structural hash is same as A since structure unchanged
         structural_hash = A.structural_hash
-        if structural_hash === nothing
-            structural_hash = compute_structural_hash(A.row_partition, col_indices, AT, comm)
-        end
 
         return IdentityAdditionPlan{T,Ti}(
             AT.colptr, AT.rowval, A_src, dst, diag_indices, true,
@@ -3906,7 +3925,7 @@ end
 Get or create a cached identity addition plan for A + λI.
 """
 function _get_identity_addition_plan(A::HPCSparseMatrix{T,Ti}) where {T,Ti}
-    _ensure_hash(A)
+    A.structural_hash
     key = (A.structural_hash, T, Ti)
     if haskey(_identity_addition_plan_cache, key)
         return _identity_addition_plan_cache[key]::IdentityAdditionPlan{T,Ti}
@@ -4543,7 +4562,7 @@ The plan is cached based on the structural hash of A and the target partition ha
 """
 function get_repartition_plan(A::HPCSparseMatrix{T,Ti}, p::Vector{Int}) where {T,Ti}
     target_hash = compute_partition_hash(p)
-    key = (_ensure_hash(A), target_hash, T, Ti)
+    key = (A.structural_hash, target_hash, T, Ti)
     if haskey(_repartition_plan_cache, key)
         return _repartition_plan_cache[key]::SparseRepartitionPlan{T,Ti}
     end

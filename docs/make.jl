@@ -6,14 +6,14 @@ if !MPI.Initialized()
     MPI.Init()
 end
 
-using HPCLinearAlgebra
+using HPCSparseArrays
 
 makedocs(
-    sitename = "HPCLinearAlgebra.jl",
-    modules = [HPCLinearAlgebra],
+    sitename = "HPCSparseArrays.jl",
+    modules = [HPCSparseArrays],
     format = Documenter.HTML(
         prettyurls = get(ENV, "CI", nothing) == "true",
-        canonical = "https://sloisel.github.io/HPCLinearAlgebra.jl",
+        canonical = "https://sloisel.github.io/HPCSparseArrays.jl",
     ),
     pages = [
         "Home" => "index.md",
@@ -26,7 +26,7 @@ makedocs(
 )
 
 deploydocs(
-    repo = "github.com/sloisel/HPCLinearAlgebra.jl.git",
+    repo = "github.com/sloisel/HPCSparseArrays.jl.git",
     devbranch = "main",
     push_preview = true,
 )

@@ -1,20 +1,20 @@
 ```@meta
-CurrentModule = HPCLinearAlgebra
+CurrentModule = HPCSparseArrays
 ```
 
 ```@eval
 using Markdown
 using Pkg
-using HPCLinearAlgebra
-v = string(pkgversion(HPCLinearAlgebra))
-md"# HPCLinearAlgebra.jl $v"
+using HPCSparseArrays
+v = string(pkgversion(HPCSparseArrays))
+md"# HPCSparseArrays.jl $v"
 ```
 
 **Pure Julia distributed linear algebra with MPI.**
 
 ## Overview
 
-HPCLinearAlgebra.jl provides distributed matrix and vector types for parallel computing with MPI. It offers a pure Julia implementation of distributed linear algebra, with MUMPS for sparse direct solves.
+HPCSparseArrays.jl provides distributed matrix and vector types for parallel computing with MPI. It offers a pure Julia implementation of distributed linear algebra, with MUMPS for sparse direct solves.
 
 ## Key Features
 
@@ -29,7 +29,7 @@ HPCLinearAlgebra.jl provides distributed matrix and vector types for parallel co
 ```julia
 using MPI
 MPI.Init()
-using HPCLinearAlgebra
+using HPCSparseArrays
 using SparseArrays
 
 # Use the default MPI backend
@@ -63,7 +63,7 @@ Depth = 2
 
 ## Related Packages
 
-- **[MultiGridBarrierMPI.jl](https://github.com/sloisel/MultiGridBarrierMPI.jl)**: Multigrid barrier methods using HPCLinearAlgebra
+- **[MultiGridBarrierMPI.jl](https://github.com/sloisel/MultiGridBarrierMPI.jl)**: Multigrid barrier methods using HPCSparseArrays
 - **[MultiGridBarrier.jl](https://github.com/sloisel/MultiGridBarrier.jl)**: Core multigrid barrier method implementation
 - **MPI.jl**: Julia MPI bindings
 

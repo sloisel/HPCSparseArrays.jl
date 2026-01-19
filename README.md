@@ -1,9 +1,9 @@
-# HPCLinearAlgebra.jl
+# HPCSparseArrays.jl
 
-[![Stable](https://img.shields.io/badge/docs-stable-blue.svg)](https://sloisel.github.io/HPCLinearAlgebra.jl/stable/)
-[![Dev](https://img.shields.io/badge/docs-dev-blue.svg)](https://sloisel.github.io/HPCLinearAlgebra.jl/dev/)
-[![Build Status](https://github.com/sloisel/HPCLinearAlgebra.jl/actions/workflows/CI.yml/badge.svg?branch=main)](https://github.com/sloisel/HPCLinearAlgebra.jl/actions/workflows/CI.yml?query=branch%3Amain)
-[![codecov](https://codecov.io/gh/sloisel/HPCLinearAlgebra.jl/branch/main/graph/badge.svg)](https://codecov.io/gh/sloisel/HPCLinearAlgebra.jl)
+[![Stable](https://img.shields.io/badge/docs-stable-blue.svg)](https://sloisel.github.io/HPCSparseArrays.jl/stable/)
+[![Dev](https://img.shields.io/badge/docs-dev-blue.svg)](https://sloisel.github.io/HPCSparseArrays.jl/dev/)
+[![Build Status](https://github.com/sloisel/HPCSparseArrays.jl/actions/workflows/CI.yml/badge.svg?branch=main)](https://github.com/sloisel/HPCSparseArrays.jl/actions/workflows/CI.yml?query=branch%3Amain)
+[![codecov](https://codecov.io/gh/sloisel/HPCSparseArrays.jl/branch/main/graph/badge.svg)](https://codecov.io/gh/sloisel/HPCSparseArrays.jl)
 
 **Author:** S. Loisel
 
@@ -27,7 +27,7 @@ Distributed sparse matrix and vector operations using MPI for Julia. This packag
 
 ```julia
 using Pkg
-Pkg.add("HPCLinearAlgebra")
+Pkg.add("HPCSparseArrays")
 ```
 
 ## Quick Start
@@ -36,7 +36,7 @@ Pkg.add("HPCLinearAlgebra")
 using MPI
 MPI.Init()
 
-using HPCLinearAlgebra
+using HPCSparseArrays
 using SparseArrays
 
 # Create a sparse matrix (must be identical on all ranks)
@@ -69,7 +69,7 @@ x_sol = solve(F, y)   # Solve A_sym * x_sol = y
 
 ## GPU Support
 
-HPCLinearAlgebra supports GPU acceleration via Metal.jl (macOS) or CUDA.jl (Linux/Windows). GPU support is optional - extensions are loaded as weak dependencies.
+HPCSparseArrays supports GPU acceleration via Metal.jl (macOS) or CUDA.jl (Linux/Windows). GPU support is optional - extensions are loaded as weak dependencies.
 
 ### Metal (macOS)
 
@@ -77,7 +77,7 @@ HPCLinearAlgebra supports GPU acceleration via Metal.jl (macOS) or CUDA.jl (Linu
 using Metal  # Load Metal BEFORE MPI for GPU detection
 using MPI
 MPI.Init()
-using HPCLinearAlgebra
+using HPCSparseArrays
 
 # Define backends
 cpu_backend = HPCBackend(DeviceCPU(), CommMPI(), SolverMUMPS())
@@ -101,7 +101,7 @@ y_cpu = to_backend(y_gpu, cpu_backend)
 using CUDA  # Load CUDA BEFORE MPI
 using MPI
 MPI.Init()
-using HPCLinearAlgebra
+using HPCSparseArrays
 
 # Define backends
 cpu_backend = HPCBackend(DeviceCPU(), CommMPI(), SolverMUMPS())
@@ -125,7 +125,7 @@ For multi-GPU distributed sparse direct solves, use `CuDSSFactorizationMPI`:
 ```julia
 using CUDA, MPI
 MPI.Init()
-using HPCLinearAlgebra
+using HPCSparseArrays
 
 # Each rank uses one GPU
 CUDA.device!(MPI.Comm_rank(MPI.COMM_WORLD) % length(CUDA.devices()))
@@ -170,4 +170,4 @@ mpiexec -n 4 julia your_script.jl
 
 ## Documentation
 
-For detailed documentation, see the [stable docs](https://sloisel.github.io/HPCLinearAlgebra.jl/stable/) or [dev docs](https://sloisel.github.io/HPCLinearAlgebra.jl/dev/).
+For detailed documentation, see the [stable docs](https://sloisel.github.io/HPCSparseArrays.jl/stable/) or [dev docs](https://sloisel.github.io/HPCSparseArrays.jl/dev/).

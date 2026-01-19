@@ -57,13 +57,13 @@ A distributed dense matrix partitioned by rows across MPI ranks.
 - `size(A, 2) == col_partition[end] - 1`
 """
 mutable struct HPCMatrix{T, B<:HPCBackend{T}} <: AbstractMatrix{T}
-    structural_hash::OptionalBlake3Hash
+    structural_hash::Blake3Hash
     row_partition::Vector{Int}
     col_partition::Vector{Int}
     A::AbstractMatrix{T}
     backend::B
     # Inner constructor that takes all arguments
-    function HPCMatrix{T,B}(hash::OptionalBlake3Hash, row_partition::Vector{Int}, col_partition::Vector{Int}, A::AbstractMatrix{T}, backend::B) where {T, B<:HPCBackend{T}}
+    function HPCMatrix{T,B}(hash::Blake3Hash, row_partition::Vector{Int}, col_partition::Vector{Int}, A::AbstractMatrix{T}, backend::B) where {T, B<:HPCBackend{T}}
         new{T,B}(hash, row_partition, col_partition, A, backend)
     end
 end
@@ -73,12 +73,12 @@ const HPCMatrix_CPU{T} = HPCMatrix{T, HPCBackend_CPU_MPI{T,Int}}
 const HPCMatrix_CPU_Serial{T} = HPCMatrix{T, HPCBackend_CPU_Serial{T,Int}}
 
 # Convenience constructor that infers B from the backend type
-function HPCMatrix{T}(hash::OptionalBlake3Hash, row_partition::Vector{Int}, col_partition::Vector{Int}, A::AbstractMatrix{T}, backend::B) where {T, B<:HPCBackend{T}}
+function HPCMatrix{T}(hash::Blake3Hash, row_partition::Vector{Int}, col_partition::Vector{Int}, A::AbstractMatrix{T}, backend::B) where {T, B<:HPCBackend{T}}
     HPCMatrix{T,B}(hash, row_partition, col_partition, A, backend)
 end
 
 # Constructor that infers T from the matrix
-function HPCMatrix(hash::OptionalBlake3Hash, row_partition::Vector{Int}, col_partition::Vector{Int}, A::AbstractMatrix{T}, backend::B) where {T, B<:HPCBackend{T}}
+function HPCMatrix(hash::Blake3Hash, row_partition::Vector{Int}, col_partition::Vector{Int}, A::AbstractMatrix{T}, backend::B) where {T, B<:HPCBackend{T}}
     HPCMatrix{T,B}(hash, row_partition, col_partition, A, backend)
 end
 
@@ -151,8 +151,10 @@ function HPCMatrix_local(A_local::AbstractMatrix{T}, backend::B;
 
     # Convert to target device (no-op for CPU, copies to GPU for GPU backends)
     A_target = _convert_array(A_local isa Matrix ? A_local : Matrix(A_local), backend.device)
-    # Structural hash computed lazily on first use via _ensure_hash
-    return HPCMatrix{T,B}(nothing, row_partition, col_partition, A_target, backend)
+
+    # Compute structural hash eagerly
+    structural_hash = compute_dense_structural_hash(row_partition, col_partition, size(A_target), backend.comm)
+    return HPCMatrix{T,B}(structural_hash, row_partition, col_partition, A_target, backend)
 end
 
 """
@@ -196,8 +198,9 @@ function HPCMatrix(M::Matrix{T}, backend::B;
     # Convert to target device (no-op for CPU, copies to GPU for GPU backends)
     A = _convert_array(A_cpu, backend.device)
 
-    # Structural hash computed lazily on first use via _ensure_hash
-    return HPCMatrix{T,B}(nothing, row_partition, col_partition, A, backend)
+    # Compute structural hash eagerly
+    structural_hash = compute_dense_structural_hash(row_partition, col_partition, size(A), backend.comm)
+    return HPCMatrix{T,B}(structural_hash, row_partition, col_partition, A, backend)
 end
 
 # ============================================================================
@@ -407,9 +410,9 @@ mutable struct DenseMatrixVectorPlan{T,AV<:AbstractVector{T}}
     local_dst_indices::Vector{Int}
     gathered::AV                       # Same type as input vector
     gathered_cpu::Vector{T}            # CPU staging buffer
-    # Cached partition hash for result vector (computed lazily on first use)
-    result_partition_hash::OptionalBlake3Hash
-    result_partition::Union{Nothing, Vector{Int}}
+    # Partition for result vector (computed at plan creation)
+    result_partition_hash::Blake3Hash
+    result_partition::Vector{Int}
 end
 
 # Type alias for CPU-backed DenseMatrixVectorPlan (backwards compatible)
@@ -520,11 +523,15 @@ function DenseMatrixVectorPlan(A::HPCMatrix{T,B}, x::HPCVector{T,B}) where {T,B<
     # Gathered buffer matches source vector's storage type
     gathered = similar(x.v, n_gathered)
 
+    # Compute result partition hash eagerly
+    result_partition = copy(A.row_partition)
+    result_partition_hash = compute_partition_hash(result_partition)
+
     return DenseMatrixVectorPlan{T,typeof(gathered)}(
         send_rank_ids, send_indices_final, send_bufs, send_reqs,
         recv_rank_ids, recv_bufs, recv_reqs, recv_perm_final,
         local_src_indices, local_dst_indices, gathered, gathered_cpu,
-        nothing, nothing  # result_partition_hash, result_partition (computed lazily)
+        result_partition_hash, result_partition
     )
 end
 
@@ -594,7 +601,7 @@ Get a memoized DenseMatrixVectorPlan for A * x.
 The plan is cached based on the structural hashes of A and x, plus the backend type.
 """
 function get_dense_vector_plan(A::HPCMatrix{T,B}, x::HPCVector{T,B}) where {T,B<:HPCBackend}
-    key = (_ensure_hash(A), x.structural_hash, T, B)
+    key = (A.structural_hash, x.structural_hash, T, B)
     if haskey(_dense_vector_plan_cache, key)
         return _dense_vector_plan_cache[key]::DenseMatrixVectorPlan{T}
     end
@@ -635,12 +642,8 @@ function Base.:*(A::HPCMatrix{T,B}, x::HPCVector{T,B}) where {T,B<:HPCBackend}
     rank = comm_rank(A.backend.comm)
     local_rows = A.row_partition[rank + 2] - A.row_partition[rank + 1]
 
-    # Get the plan and use cached partition hash if available
+    # Get the plan
     plan = get_dense_vector_plan(A, x)
-    if plan.result_partition_hash === nothing
-        plan.result_partition_hash = compute_partition_hash(A.row_partition)
-        plan.result_partition = copy(A.row_partition)
-    end
 
     # Execute the plan to gather vector elements
     execute_plan!(plan, x)
@@ -703,8 +706,8 @@ mutable struct DenseTransposePlan{T}
     AT::Matrix{T}
     row_partition::Vector{Int}
     col_partition::Vector{Int}
-    # Cached structural hash for transpose result (computed lazily on first execution)
-    structural_hash::OptionalBlake3Hash
+    # Structural hash for transpose result (computed at plan creation)
+    structural_hash::Blake3Hash
 end
 
 """
@@ -828,12 +831,15 @@ function DenseTransposePlan(A::HPCMatrix{T,B}) where {T,B}
     send_reqs = Vector{Any}(undef, length(rank_ids))
     recv_reqs = Vector{Any}(undef, length(recv_rank_ids))
 
+    # Compute structural hash eagerly
+    structural_hash = compute_dense_structural_hash(result_row_partition, result_col_partition, size(AT), comm)
+
     return DenseTransposePlan{T}(
         rank_ids, send_row_ranges, send_col_ranges, send_bufs, send_reqs,
         recv_rank_ids, recv_row_ranges, recv_col_ranges, recv_bufs, recv_reqs,
         local_row_range, local_col_range,
         AT, result_row_partition, result_col_partition,
-        nothing  # structural_hash (computed lazily on first execution)
+        structural_hash
     )
 end
 
@@ -915,12 +921,6 @@ function execute_plan!(plan::DenseTransposePlan{T}, A::HPCMatrix{T,B}) where {T,
     # Create result with a copy of AT
     result_AT = copy(plan.AT)
 
-    # Use cached hash if available, otherwise compute and cache
-    if plan.structural_hash === nothing
-        plan.structural_hash = compute_dense_structural_hash(
-            plan.row_partition, plan.col_partition, size(result_AT), comm)
-    end
-
     # Unified CPU/GPU path: _convert_array is no-op for CPU, copies for GPU
     result_A = _convert_array(result_AT, A.backend.device)
     return HPCMatrix{T,B}(plan.structural_hash, plan.row_partition, plan.col_partition, result_A, A.backend)
@@ -933,7 +933,7 @@ Get a memoized DenseTransposePlan for A^T.
 The plan is cached based on the structural hash of A and the element type.
 """
 function get_dense_transpose_plan(A::HPCMatrix{T,B}) where {T,B}
-    key = (_ensure_hash(A), T, B)
+    key = (A.structural_hash, T, B)
     if haskey(_dense_transpose_plan_cache, key)
         return _dense_transpose_plan_cache[key]::DenseTransposePlan{T}
     end
@@ -1010,9 +1010,9 @@ mutable struct DenseTransposeVectorPlan{T,AV<:AbstractVector{T}}
     local_dst_indices::Vector{Int}
     gathered::AV                       # Same type as input vector
     gathered_cpu::Vector{T}            # CPU staging buffer
-    # Cached partition hash for result vector (computed lazily on first use)
-    result_partition_hash::OptionalBlake3Hash
-    result_partition::Union{Nothing, Vector{Int}}
+    # Partition for result vector (computed at plan creation)
+    result_partition_hash::Blake3Hash
+    result_partition::Vector{Int}
 end
 
 # Cache for DenseTransposeVectorPlans (includes backend type in key)
@@ -1120,11 +1120,15 @@ function DenseTransposeVectorPlan(A::HPCMatrix{T,B}, x::HPCVector{T,B}) where {T
     gathered_cpu = Vector{T}(undef, n_gathered)
     gathered = similar(x.v, n_gathered)
 
+    # Compute result partition hash eagerly
+    result_partition = copy(A.col_partition)
+    result_partition_hash = compute_partition_hash(result_partition)
+
     return DenseTransposeVectorPlan{T,typeof(gathered)}(
         send_rank_ids, send_indices_final, send_bufs, send_reqs,
         recv_rank_ids, recv_bufs, recv_reqs, recv_perm_final,
         local_src_indices, local_dst_indices, gathered, gathered_cpu,
-        nothing, nothing  # result_partition_hash, result_partition (computed lazily)
+        result_partition_hash, result_partition
     )
 end
 
@@ -1193,7 +1197,7 @@ Get a memoized DenseTransposeVectorPlan for transpose(A) * x.
 Cache key includes backend type for GPU/CPU separation.
 """
 function get_dense_transpose_vector_plan(A::HPCMatrix{T,B}, x::HPCVector{T,B}) where {T,B}
-    key = (_ensure_hash(A), x.structural_hash, T, B)
+    key = (A.structural_hash, x.structural_hash, T, B)
     if haskey(_dense_transpose_vector_plan_cache, key)
         return _dense_transpose_vector_plan_cache[key]::DenseTransposeVectorPlan{T}
     end
@@ -1215,12 +1219,6 @@ function Base.:*(At::Transpose{T,HPCMatrix{T,B}}, x::HPCVector{T,B}) where {T,B<
     rank = comm_rank(comm)
 
     plan = get_dense_transpose_vector_plan(A, x)
-
-    # Use cached partition hash if available
-    if plan.result_partition_hash === nothing
-        plan.result_partition_hash = compute_partition_hash(A.col_partition)
-        plan.result_partition = copy(A.col_partition)
-    end
 
     execute_plan!(plan, x)
 
@@ -1768,7 +1766,7 @@ The plan is cached based on the structural hash of A and the target partition ha
 """
 function get_repartition_plan(A::HPCMatrix{T,B}, p::Vector{Int}) where {T,B}
     target_hash = compute_partition_hash(p)
-    key = (_ensure_hash(A), target_hash, T, B)
+    key = (A.structural_hash, target_hash, T, B)
     if haskey(_repartition_plan_cache, key)
         return _repartition_plan_cache[key]::DenseRepartitionPlan{T}
     end
@@ -1817,7 +1815,7 @@ multiplication which dispatches to GPU kernels.
 """
 function Base.:*(α::Number, A::HPCMatrix{T,B}) where {T,B<:HPCBackend}
     new_A = T(α) * A.A
-    HPCMatrix{T,B}(nothing, A.row_partition, A.col_partition, new_A, A.backend)
+    HPCMatrix{T,B}(A.structural_hash, A.row_partition, A.col_partition, new_A, A.backend)
 end
 
 """
@@ -1827,7 +1825,7 @@ Matrix-scalar multiplication. GPU-compatible.
 """
 function Base.:*(A::HPCMatrix{T,B}, α::Number) where {T,B<:HPCBackend}
     new_A = A.A * T(α)
-    HPCMatrix{T,B}(nothing, A.row_partition, A.col_partition, new_A, A.backend)
+    HPCMatrix{T,B}(A.structural_hash, A.row_partition, A.col_partition, new_A, A.backend)
 end
 
 """
@@ -1837,7 +1835,7 @@ Matrix-scalar division. GPU-compatible.
 """
 function Base.:/(A::HPCMatrix{T,B}, α::Number) where {T,B<:HPCBackend}
     new_A = A.A / T(α)
-    HPCMatrix{T,B}(nothing, A.row_partition, A.col_partition, new_A, A.backend)
+    HPCMatrix{T,B}(A.structural_hash, A.row_partition, A.col_partition, new_A, A.backend)
 end
 
 # Broadcasting: scalar .* matrix - redirect to scalar * matrix

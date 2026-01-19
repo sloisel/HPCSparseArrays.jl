@@ -13,7 +13,18 @@ end
 using MPI
 MPI.Init()
 
-using HPCLinearAlgebra
+# Check CUDA availability BEFORE loading HPCSparseArrays
+const CUDA_AVAILABLE = try
+    using CUDA
+    CUDA.device!(MPI.Comm_rank(MPI.COMM_WORLD) % length(CUDA.devices()))
+    using NCCL_jll
+    using CUDSS_jll
+    CUDA.functional()
+catch e
+    false
+end
+
+using HPCSparseArrays
 using SparseArrays
 using LinearAlgebra: norm
 using Test
@@ -41,7 +52,7 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     v_global = T.(collect(1.0:n))
     v = HPCVector(v_global, backend)
     # Create non-uniform partition
-    new_p = HPCLinearAlgebra.uniform_partition(n, nranks)
+    new_p = HPCSparseArrays.uniform_partition(n, nranks)
     # Shift elements: first rank gets fewer, last gets more
     if nranks >= 2
         new_p = [1]
@@ -73,7 +84,7 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     println(io0(), "[test] HPCVector plan caching ($T, $backend_name)")
 
     v_cache = HPCVector(v_global, backend)
-    HPCLinearAlgebra.clear_plan_cache!()
+    HPCSparseArrays.clear_plan_cache!()
     v3_repart = repartition(v_cache, new_p)
     v4_repart = repartition(v_cache, new_p)
     @test v3_repart.structural_hash == v4_repart.structural_hash
@@ -87,7 +98,7 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     M = HPCMatrix(M_global, backend)
 
     # Create new partition for rows
-    new_row_p = HPCLinearAlgebra.uniform_partition(m, nranks)
+    new_row_p = HPCSparseArrays.uniform_partition(m, nranks)
     if nranks >= 2
         # Create uneven partition
         new_row_p = [1]
@@ -152,7 +163,7 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
         end
         p
     else
-        HPCLinearAlgebra.uniform_partition(m_sparse, nranks)
+        HPCSparseArrays.uniform_partition(m_sparse, nranks)
     end
 
     A_repart = repartition(A, new_sparse_p)
@@ -190,7 +201,7 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     println(io0(), "[test] Repartition plan caching ($T, $backend_name)")
 
     A_cache = HPCSparseMatrix(A_global, backend)
-    HPCLinearAlgebra.clear_plan_cache!()
+    HPCSparseArrays.clear_plan_cache!()
     A3_repart = repartition(A_cache, new_sparse_p)
     A4_repart = repartition(A_cache, new_sparse_p)
     @test A3_repart.structural_hash == A4_repart.structural_hash

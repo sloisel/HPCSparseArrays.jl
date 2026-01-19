@@ -6,7 +6,7 @@ module TestUtils
 using SparseArrays
 using MPI
 
-# Detect Metal availability BEFORE loading HPCLinearAlgebra
+# Detect Metal availability BEFORE loading HPCSparseArrays
 # (Metal must be loaded first for GPU detection to work)
 const METAL_AVAILABLE = try
     using Metal
@@ -19,11 +19,11 @@ if METAL_AVAILABLE
     @info "Metal is available for GPU tests"
 end
 
-# Detect CUDA availability BEFORE loading HPCLinearAlgebra
+# Detect CUDA availability BEFORE loading HPCSparseArrays
 # (CUDA/NCCL/CUDSS_jll must be loaded first for GPU extension to work)
 const CUDA_AVAILABLE = try
     using CUDA
-    using NCCL
+    using NCCL_jll
     using CUDSS_jll
     CUDA.functional()
 catch e
@@ -34,8 +34,8 @@ if CUDA_AVAILABLE
     @info "CUDA is available for GPU tests"
 end
 
-# Import HPCLinearAlgebra after GPU checks
-using HPCLinearAlgebra
+# Import HPCSparseArrays after GPU checks
+using HPCSparseArrays
 
 # ============================================================================
 # Backend configurations for parameterized testing
@@ -44,17 +44,17 @@ using HPCLinearAlgebra
 # Backend getters - now parameterized by element type T (and index type Ti)
 # These return fresh backends with matching T, Ti type parameters
 function get_cpu_backend(::Type{T}=Float64, ::Type{Ti}=Int) where {T,Ti}
-    HPCLinearAlgebra.backend_cpu_mpi(T, Ti)
+    HPCSparseArrays.backend_cpu_mpi(T, Ti)
 end
 
 function get_metal_backend(::Type{T}=Float32, ::Type{Ti}=Int32) where {T,Ti}
     @assert METAL_AVAILABLE "Metal is not available"
-    HPCLinearAlgebra.backend_metal_mpi(T, Ti)
+    HPCSparseArrays.backend_metal_mpi(T, Ti)
 end
 
 function get_cuda_backend(::Type{T}=Float64, ::Type{Ti}=Int) where {T,Ti}
     @assert CUDA_AVAILABLE "CUDA is not available"
-    HPCLinearAlgebra.backend_cuda_mpi(T, Ti)
+    HPCSparseArrays.backend_cuda_mpi(T, Ti)
 end
 
 # Backend configurations: (ScalarType, backend_getter, backend_name)
@@ -200,9 +200,9 @@ Use with `to_backend(x, cpu_version(x.backend))` to convert GPU data to CPU for 
 Note: Always uses SolverMUMPS since GPU solvers (cuDSS) don't work on CPU.
 The solver choice only matters for lu()/ldlt(), not for data comparison.
 """
-function cpu_version(backend::HPCLinearAlgebra.HPCBackend{T,Ti,D,C,S}) where {T,Ti,D,C,S}
-    HPCLinearAlgebra.HPCBackend{T,Ti,HPCLinearAlgebra.DeviceCPU,typeof(backend.comm),HPCLinearAlgebra.SolverMUMPS}(
-        HPCLinearAlgebra.DeviceCPU(), backend.comm, HPCLinearAlgebra.SolverMUMPS()
+function cpu_version(backend::HPCSparseArrays.HPCBackend{T,Ti,D,C,S}) where {T,Ti,D,C,S}
+    HPCSparseArrays.HPCBackend{T,Ti,HPCSparseArrays.DeviceCPU,typeof(backend.comm),HPCSparseArrays.SolverMUMPS}(
+        HPCSparseArrays.DeviceCPU(), backend.comm, HPCSparseArrays.SolverMUMPS()
     )
 end
 
@@ -216,12 +216,12 @@ matrices (e.g., SPD matrices for LDLT) when iterating over complex configs.
 For real T, returns the same backend unchanged.
 For complex T (e.g., ComplexF64), returns a backend with real(T) (e.g., Float64).
 """
-function real_backend(backend::HPCLinearAlgebra.HPCBackend{T,Ti,D,C,S}) where {T,Ti,D,C,S}
+function real_backend(backend::HPCSparseArrays.HPCBackend{T,Ti,D,C,S}) where {T,Ti,D,C,S}
     RT = real(T)
     if RT === T
         return backend  # Already real
     end
-    HPCLinearAlgebra.HPCBackend{RT,Ti,D,C,S}(
+    HPCSparseArrays.HPCBackend{RT,Ti,D,C,S}(
         backend.device, backend.comm, backend.solver
     )
 end
@@ -234,7 +234,7 @@ Works for both CPU and GPU vectors by checking the backend device type.
 """
 function local_values(v::HPCVector)
     # Check if data is on GPU by looking at backend device type
-    if v.backend.device isa HPCLinearAlgebra.DeviceCPU
+    if v.backend.device isa HPCSparseArrays.DeviceCPU
         return v.v
     else
         # GPU case: convert to Array
@@ -296,7 +296,7 @@ Example:
         result = assert_type(A * x, VT)  # Assert exact type match
     end
 """
-function expected_types(::Type{T}, backend::HPCLinearAlgebra.HPCBackend) where T
+function expected_types(::Type{T}, backend::HPCSparseArrays.HPCBackend) where T
     BK = typeof(backend)
     (HPCVector{T, BK},
      HPCSparseMatrix{T, Int, BK},

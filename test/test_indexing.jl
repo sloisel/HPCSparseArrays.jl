@@ -3,7 +3,18 @@
 using MPI
 MPI.Init()
 
-using HPCLinearAlgebra
+# Check CUDA availability BEFORE loading HPCSparseArrays
+const CUDA_AVAILABLE = try
+    using CUDA
+    CUDA.device!(MPI.Comm_rank(MPI.COMM_WORLD) % length(CUDA.devices()))
+    using NCCL_jll
+    using CUDSS_jll
+    CUDA.functional()
+catch e
+    false
+end
+
+using HPCSparseArrays
 using SparseArrays
 using LinearAlgebra
 using Test

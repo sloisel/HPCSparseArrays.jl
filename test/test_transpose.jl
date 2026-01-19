@@ -13,7 +13,18 @@ end
 using MPI
 MPI.Init()
 
-using HPCLinearAlgebra
+# Check CUDA availability BEFORE loading HPCSparseArrays
+const CUDA_AVAILABLE = try
+    using CUDA
+    CUDA.device!(MPI.Comm_rank(MPI.COMM_WORLD) % length(CUDA.devices()))
+    using NCCL_jll
+    using CUDSS_jll
+    CUDA.functional()
+catch e
+    false
+end
+
+using HPCSparseArrays
 using SparseArrays
 using LinearAlgebra: norm
 using Test
@@ -43,8 +54,8 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     A = sparse(I_idx, J_idx, V, m, n)
 
     Adist = HPCSparseMatrix(A, backend)
-    plan = HPCLinearAlgebra.TransposePlan(Adist)
-    ATdist = assert_type(HPCLinearAlgebra.execute_plan!(plan, Adist), ST)
+    plan = HPCSparseArrays.TransposePlan(Adist)
+    ATdist = assert_type(HPCSparseArrays.execute_plan!(plan, Adist), ST)
     AT_ref = sparse(transpose(A))
     AT_ref_dist = HPCSparseMatrix(AT_ref, backend)
 
@@ -68,8 +79,8 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     A2 = sparse(I_idx2, J_idx2, V2, n2, n2)
 
     Adist2 = HPCSparseMatrix(A2, backend)
-    plan2 = HPCLinearAlgebra.TransposePlan(Adist2)
-    ATdist2 = assert_type(HPCLinearAlgebra.execute_plan!(plan2, Adist2), ST)
+    plan2 = HPCSparseArrays.TransposePlan(Adist2)
+    ATdist2 = assert_type(HPCSparseArrays.execute_plan!(plan2, Adist2), ST)
     AT_ref2 = sparse(transpose(A2))
     AT_ref_dist2 = HPCSparseMatrix(AT_ref2, backend)
 

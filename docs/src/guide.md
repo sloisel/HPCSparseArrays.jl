@@ -1,10 +1,10 @@
 # User Guide
 
-This guide covers the essential workflows for using HPCLinearAlgebra.jl.
+This guide covers the essential workflows for using HPCSparseArrays.jl.
 
 ## Core Types
 
-HPCLinearAlgebra provides three distributed types:
+HPCSparseArrays provides three distributed types:
 
 | Type | Description | Storage |
 |------|-------------|---------|
@@ -47,7 +47,7 @@ In Julia, `SparseMatrixCSR{T,Ti}` is a type alias for `Transpose{T, SparseMatrix
 ```julia
 using MPI
 MPI.Init()
-using HPCLinearAlgebra
+using HPCSparseArrays
 using SparseArrays
 
 # Use the default MPI backend
@@ -163,7 +163,7 @@ C = A * B
 ```julia
 using MPI
 MPI.Init()
-using HPCLinearAlgebra
+using HPCSparseArrays
 using SparseArrays
 
 backend = BACKEND_CPU_MPI
@@ -217,14 +217,14 @@ finalize!(F)
 
 ## Threading
 
-HPCLinearAlgebra uses two threading mechanisms for the MUMPS sparse direct solver:
+HPCSparseArrays uses two threading mechanisms for the MUMPS sparse direct solver:
 
 1. **OpenMP threads** (`OMP_NUM_THREADS`) - Affects MUMPS algorithm-level parallelism
 2. **BLAS threads** (`OPENBLAS_NUM_THREADS`) - Affects dense matrix operations in both Julia and MUMPS
 
 ### MUMPS Solver Threading
 
-HPCLinearAlgebra uses the MUMPS (MUltifrontal Massively Parallel Solver) library for sparse direct solves via `lu()` and `ldlt()`. MUMPS has two independent threading mechanisms that can be tuned for performance.
+HPCSparseArrays uses the MUMPS (MUltifrontal Massively Parallel Solver) library for sparse direct solves via `lu()` and `ldlt()`. MUMPS has two independent threading mechanisms that can be tuned for performance.
 
 **OpenMP threads (`OMP_NUM_THREADS`)**
 - Controls MUMPS's algorithm-level parallelism
@@ -279,7 +279,7 @@ export OPENBLAS_NUM_THREADS=10  # or your number of CPU cores
 julia your_script.jl
 ```
 
-Environment variables must be set before starting Julia because OpenBLAS creates its thread pool during library initialization. HPCLinearAlgebra attempts to set sensible defaults programmatically, but this may not always take effect if the thread pool is already initialized.
+Environment variables must be set before starting Julia because OpenBLAS creates its thread pool during library initialization. HPCSparseArrays attempts to set sensible defaults programmatically, but this may not always take effect if the thread pool is already initialized.
 
 You can also add these to your shell profile (`.bashrc`, `.zshrc`, etc.) or Julia's `startup.jl`:
 
@@ -392,7 +392,7 @@ v_new = repartition(v, new_partition)
 
 ## GPU Support
 
-HPCLinearAlgebra supports GPU acceleration via Metal.jl (macOS) or CUDA.jl (Linux/Windows). GPU support is optional and loaded as package extensions.
+HPCSparseArrays supports GPU acceleration via Metal.jl (macOS) or CUDA.jl (Linux/Windows). GPU support is optional and loaded as package extensions.
 
 ### Setup
 
@@ -403,13 +403,13 @@ Load the GPU package **before** MPI for proper detection:
 using Metal
 using MPI
 MPI.Init()
-using HPCLinearAlgebra
+using HPCSparseArrays
 
 # For CUDA (Linux/Windows)
 using CUDA, NCCL, CUDSS_jll
 using MPI
 MPI.Init()
-using HPCLinearAlgebra
+using HPCSparseArrays
 ```
 
 ### Creating GPU Backends
@@ -519,7 +519,7 @@ y_gpu = A * x_gpu  # Returns HPCVector with CuVector storage
 
 ## cuDSS Multi-GPU Solver (CUDA only)
 
-For multi-GPU distributed sparse direct solves, HPCLinearAlgebra provides `CuDSSFactorizationMPI` using NVIDIA's cuDSS library with NCCL inter-GPU communication.
+For multi-GPU distributed sparse direct solves, HPCSparseArrays provides `CuDSSFactorizationMPI` using NVIDIA's cuDSS library with NCCL inter-GPU communication.
 
 ### Basic Usage
 
@@ -527,7 +527,7 @@ For multi-GPU distributed sparse direct solves, HPCLinearAlgebra provides `CuDSS
 using CUDA, NCCL, CUDSS_jll
 using MPI
 MPI.Init()
-using HPCLinearAlgebra
+using HPCSparseArrays
 
 # Each MPI rank should use a different GPU
 CUDA.device!(MPI.Comm_rank(MPI.COMM_WORLD) % length(CUDA.devices()))
@@ -575,7 +575,7 @@ cuDSS MGMN mode crashes with `status=5` on certain sparse matrix patterns, notab
 
 ## Cache Management
 
-HPCLinearAlgebra caches communication plans for efficiency. Clear caches when needed:
+HPCSparseArrays caches communication plans for efficiency. Clear caches when needed:
 
 ```julia
 clear_plan_cache!()  # Clears all plan caches including MUMPS analysis cache
@@ -584,7 +584,7 @@ clear_plan_cache!()  # Clears all plan caches including MUMPS analysis cache
 ## MPI Collective Operations
 
 !!! warning "All Operations Are Collective"
-    Most HPCLinearAlgebra functions are MPI collective operations. All ranks must:
+    Most HPCSparseArrays functions are MPI collective operations. All ranks must:
     - Call the function together
     - Use the same parameters
     - Avoid conditional execution based on rank

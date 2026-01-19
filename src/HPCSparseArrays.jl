@@ -1,4 +1,4 @@
-module HPCLinearAlgebra
+module HPCSparseArrays
 
 using MPI
 using Blake3Hash
@@ -37,9 +37,8 @@ export comm_rank, comm_size
 export array_type, matrix_type
 export backends_compatible, assert_backends_compatible
 
-# Type alias for 256-bit Blake3 hash
+# Type alias for 256-bit Blake3 hash (always mandatory, never Nothing)
 const Blake3Hash = NTuple{32,UInt8}
-const OptionalBlake3Hash = Union{Nothing, Blake3Hash}
 
 # ============================================================================
 # SparseMatrixCSR Type Alias and Constructors
@@ -642,7 +641,7 @@ specialized backslash methods defined in the CUDA extension.
 """
 function Base.:\(A::HPCSparseMatrix{T,Ti,HPCBackend{T,Ti,D,C,SolverMUMPS}},
                  b::HPCVector{T,HPCBackend{T,Ti,D,C,SolverMUMPS}}) where {T,Ti,D,C}
-    structural_hash = _ensure_hash(A)
+    structural_hash = A.structural_hash
     cache_key = (structural_hash, false, T)  # false = not symmetric (LU)
 
     if haskey(_mumps_backslash_cache, cache_key)
@@ -674,7 +673,7 @@ specialized backslash methods defined in the CUDA extension.
 function Base.:\(A::Symmetric{T,<:HPCSparseMatrix{T,Ti,HPCBackend{T,Ti,D,C,SolverMUMPS}}},
                  b::HPCVector{T,HPCBackend{T,Ti,D,C,SolverMUMPS}}) where {T,Ti,D,C}
     A_inner = parent(A)
-    structural_hash = _ensure_hash(A_inner)
+    structural_hash = A_inner.structural_hash
     cache_key = (structural_hash, true, T)  # true = symmetric (LDLT)
 
     if haskey(_mumps_backslash_cache, cache_key)
@@ -741,42 +740,6 @@ function Base.:/(vt::Transpose{T,HPCVector{T,HPCBackend{T,Ti,D,C,SolverMUMPS}}},
     A = At.parent
     x = A \ v
     return transpose(x)
-end
-
-# ============================================================================
-# Lazy Hash Computation
-# ============================================================================
-
-"""
-    _ensure_hash(A::HPCSparseMatrix) -> Blake3Hash
-
-Ensure that the structural hash is computed. If `A.structural_hash` is `nothing`,
-compute it and cache it in the struct. Returns the hash.
-
-Note: This function calls `compute_structural_hash` which uses MPI.Allgather,
-so all ranks must call this together.
-"""
-function _ensure_hash(A::HPCSparseMatrix)::Blake3Hash
-    if A.structural_hash === nothing
-        A.structural_hash = compute_structural_hash(A.row_partition, A.col_indices, A.rowptr, A.colval, A.backend.comm)
-    end
-    return A.structural_hash
-end
-
-"""
-    _ensure_hash(A::HPCMatrix{T}) -> Blake3Hash
-
-Ensure that the structural hash is computed. If `A.structural_hash` is `nothing`,
-compute it and cache it in the struct. Returns the hash.
-
-Note: This function calls `compute_dense_structural_hash` which uses MPI.Allgather,
-so all ranks must call this together.
-"""
-function _ensure_hash(A::HPCMatrix{T})::Blake3Hash where T
-    if A.structural_hash === nothing
-        A.structural_hash = compute_dense_structural_hash(A.row_partition, A.col_partition, size(A.A), A.backend.comm)
-    end
-    return A.structural_hash
 end
 
 # ============================================================================
@@ -1393,9 +1356,11 @@ function Base.zeros(::Type{T}, ::Type{HPCMatrix}, backend::HPCBackend, m::Intege
     local_nrows = row_partition[rank + 2] - row_partition[rank + 1]
 
     local_A = _zeros_device(backend.device, T, local_nrows, n)
-    # Structural hash computed lazily
 
-    return HPCMatrix{T, typeof(backend)}(nothing, row_partition, col_partition, local_A, backend)
+    # Compute structural hash eagerly
+    structural_hash = compute_dense_structural_hash(row_partition, col_partition, size(local_A), backend.comm)
+
+    return HPCMatrix{T, typeof(backend)}(structural_hash, row_partition, col_partition, local_A, backend)
 end
 
 """
@@ -1441,8 +1406,11 @@ function Base.zeros(::Type{T}, ::Type{Ti}, ::Type{HPCSparseMatrix}, backend::HPC
     rowptr_target = _to_target_device(rowptr, backend.device)
     colval_target = _to_target_device(colval, backend.device)
 
+    # Compute structural hash eagerly
+    structural_hash = compute_structural_hash(row_partition, col_indices, rowptr, colval, backend.comm)
+
     return HPCSparseMatrix{T, Ti, typeof(backend)}(
-        nothing,  # Hash computed lazily
+        structural_hash,
         row_partition,
         col_partition,
         col_indices,
@@ -1606,4 +1574,4 @@ using PrecompileTools
 end
 =#
 
-end # module HPCLinearAlgebra
+end # module HPCSparseArrays

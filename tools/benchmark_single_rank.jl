@@ -1,6 +1,6 @@
 #!/usr/bin/env julia
 #
-# Benchmark HPCLinearAlgebra types vs native Julia types (single rank)
+# Benchmark HPCSparseArrays types vs native Julia types (single rank)
 #
 # This script identifies performance bottlenecks in the distributed code path
 # by comparing against native Julia operations with 1 MPI rank.
@@ -17,7 +17,7 @@ using Printf
 using Dates
 using Random
 using BenchmarkTools
-using HPCLinearAlgebra
+using HPCSparseArrays
 
 const comm = MPI.COMM_WORLD
 const rank = MPI.Comm_rank(comm)
@@ -256,7 +256,7 @@ end
 
 function run_benchmarks()
     println("=" ^ 75)
-    println("HPCLinearAlgebra Single-Rank Performance Benchmark")
+    println("HPCSparseArrays Single-Rank Performance Benchmark")
     println("=" ^ 75)
     println("Date: $(Dates.now())")
     println("MPI ranks: $nranks")

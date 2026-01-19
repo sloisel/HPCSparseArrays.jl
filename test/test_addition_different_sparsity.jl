@@ -13,8 +13,8 @@ using Test
 using MPI
 MPI.Init()
 
-using HPCLinearAlgebra
-using HPCLinearAlgebra: HPCSparseMatrix, HPCVector, io0, clear_plan_cache!
+using HPCSparseArrays
+using HPCSparseArrays: HPCSparseMatrix, HPCVector, io0, clear_plan_cache!
 using SparseArrays
 using LinearAlgebra
 

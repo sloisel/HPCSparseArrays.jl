@@ -1,25 +1,25 @@
 """
-    HPCLinearAlgebraMetalExt
+    HPCSparseArraysMetalExt
 
-Extension module for Metal GPU support in HPCLinearAlgebra.
+Extension module for Metal GPU support in HPCSparseArrays.
 Provides constructors and operations for MtlArray-backed distributed arrays.
 """
-module HPCLinearAlgebraMetalExt
+module HPCSparseArraysMetalExt
 
-using HPCLinearAlgebra
+using HPCSparseArrays
 using Metal
 using Adapt
 using MPI
 
 # Import HPCBackend types for type-based dispatch
-using HPCLinearAlgebra: HPCBackend, DeviceCPU, DeviceMetal, DeviceCUDA,
+using HPCSparseArrays: HPCBackend, DeviceCPU, DeviceMetal, DeviceCUDA,
                         CommSerial, CommMPI, AbstractComm, AbstractDevice,
                         SolverMUMPS,
                         eltype_backend, indextype_backend
 
 # Backend type aliases for Metal (with T and Ti type parameters)
-const MtlBackend{T,Ti,C,S} = HPCLinearAlgebra.HPCBackend{T, Ti, HPCLinearAlgebra.DeviceMetal, C, S}
-const CPUBackend{T,Ti,C,S} = HPCLinearAlgebra.HPCBackend{T, Ti, HPCLinearAlgebra.DeviceCPU, C, S}
+const MtlBackend{T,Ti,C,S} = HPCSparseArrays.HPCBackend{T, Ti, HPCSparseArrays.DeviceMetal, C, S}
+const CPUBackend{T,Ti,C,S} = HPCSparseArrays.HPCBackend{T, Ti, HPCSparseArrays.DeviceCPU, C, S}
 
 """
     backend_metal_mpi(::Type{T}=Float64, ::Type{Ti}=Int; comm=MPI.COMM_WORLD) where {T,Ti} -> HPCBackend
@@ -32,14 +32,14 @@ Metal doesn't have a native sparse direct solver, so MUMPS is used (data staged 
 - `Ti`: Index type for sparse matrix indices (default: Int)
 - `comm`: MPI communicator (default: MPI.COMM_WORLD)
 """
-function HPCLinearAlgebra.backend_metal_mpi(::Type{T}=Float64, ::Type{Ti}=Int; comm=MPI.COMM_WORLD) where {T,Ti<:Integer}
-    return HPCLinearAlgebra.HPCBackend{T,Ti,DeviceMetal,CommMPI,SolverMUMPS}(
+function HPCSparseArrays.backend_metal_mpi(::Type{T}=Float64, ::Type{Ti}=Int; comm=MPI.COMM_WORLD) where {T,Ti<:Integer}
+    return HPCSparseArrays.HPCBackend{T,Ti,DeviceMetal,CommMPI,SolverMUMPS}(
         DeviceMetal(), CommMPI(comm), SolverMUMPS())
 end
 
 # Legacy overload for backward compatibility (comm as positional argument)
-function HPCLinearAlgebra.backend_metal_mpi(comm::MPI.Comm)
-    return HPCLinearAlgebra.backend_metal_mpi(Float64, Int; comm=comm)
+function HPCSparseArrays.backend_metal_mpi(comm::MPI.Comm)
+    return HPCSparseArrays.backend_metal_mpi(Float64, Int; comm=comm)
 end
 
 # ============================================================================
@@ -47,40 +47,40 @@ end
 # ============================================================================
 
 # CPU → Metal: copy to GPU
-HPCLinearAlgebra._convert_array(v::Vector, ::HPCLinearAlgebra.DeviceMetal) = MtlVector(v)
-HPCLinearAlgebra._convert_array(A::Matrix, ::HPCLinearAlgebra.DeviceMetal) = MtlMatrix(A)
+HPCSparseArrays._convert_array(v::Vector, ::HPCSparseArrays.DeviceMetal) = MtlVector(v)
+HPCSparseArrays._convert_array(A::Matrix, ::HPCSparseArrays.DeviceMetal) = MtlMatrix(A)
 
 # Metal → Metal: identity (no copy)
-HPCLinearAlgebra._convert_array(v::MtlVector, ::HPCLinearAlgebra.DeviceMetal) = v
-HPCLinearAlgebra._convert_array(A::MtlMatrix, ::HPCLinearAlgebra.DeviceMetal) = A
+HPCSparseArrays._convert_array(v::MtlVector, ::HPCSparseArrays.DeviceMetal) = v
+HPCSparseArrays._convert_array(A::MtlMatrix, ::HPCSparseArrays.DeviceMetal) = A
 
 # ============================================================================
 # MUMPS Factorization Support
 # ============================================================================
 
 """
-    _array_to_device(v::Vector{T}, ::HPCLinearAlgebra.DeviceMetal) where T
+    _array_to_device(v::Vector{T}, ::HPCSparseArrays.DeviceMetal) where T
 
 Convert a CPU vector to a Metal GPU vector.
 Used by MUMPS factorization for round-trip GPU conversion during solve.
 """
-function HPCLinearAlgebra._array_to_device(v::Vector{T}, ::HPCLinearAlgebra.DeviceMetal) where T
+function HPCSparseArrays._array_to_device(v::Vector{T}, ::HPCSparseArrays.DeviceMetal) where T
     return MtlVector(v)
 end
 
 """
-    _convert_vector_to_device(v::HPCLinearAlgebra.HPCVector, ::HPCLinearAlgebra.DeviceMetal)
+    _convert_vector_to_device(v::HPCSparseArrays.HPCVector, ::HPCSparseArrays.DeviceMetal)
 
 Convert a CPU HPCVector to GPU (Metal) backend.
 Used by MUMPS factorization for GPU reconstruction after solve.
 """
-function HPCLinearAlgebra._convert_vector_to_device(v::HPCLinearAlgebra.HPCVector{T,B}, device::HPCLinearAlgebra.DeviceMetal) where {T, B}
+function HPCSparseArrays._convert_vector_to_device(v::HPCSparseArrays.HPCVector{T,B}, device::HPCSparseArrays.DeviceMetal) where {T, B}
     # Create Metal backend preserving T, Ti, comm, and solver from source backend
     Ti = indextype_backend(B)
     C = typeof(v.backend.comm)
     S = typeof(v.backend.solver)
-    metal_backend = HPCLinearAlgebra.HPCBackend{T,Ti,DeviceMetal,C,S}(device, v.backend.comm, v.backend.solver)
-    return HPCLinearAlgebra.to_backend(v, metal_backend)
+    metal_backend = HPCSparseArrays.HPCBackend{T,Ti,DeviceMetal,C,S}(device, v.backend.comm, v.backend.solver)
+    return HPCSparseArrays.to_backend(v, metal_backend)
 end
 
 # ============================================================================
@@ -88,32 +88,32 @@ end
 # ============================================================================
 
 """
-    _zeros_device(::HPCLinearAlgebra.DeviceMetal, ::Type{T}, dims...) where T
+    _zeros_device(::HPCSparseArrays.DeviceMetal, ::Type{T}, dims...) where T
 
 Create a zero MtlVector/MtlMatrix of the specified dimensions on Metal device.
 Used by Base.zeros(HPCVector, backend, n) etc.
 """
-HPCLinearAlgebra._zeros_device(::HPCLinearAlgebra.DeviceMetal, ::Type{T}, dims...) where T = Metal.zeros(T, dims...)
+HPCSparseArrays._zeros_device(::HPCSparseArrays.DeviceMetal, ::Type{T}, dims...) where T = Metal.zeros(T, dims...)
 
 # ============================================================================
 # MatrixPlan Index Array Support
 # ============================================================================
 
 """
-    _index_array_type(::HPCLinearAlgebra.DeviceMetal, ::Type{Ti}) where Ti
+    _index_array_type(::HPCSparseArrays.DeviceMetal, ::Type{Ti}) where Ti
 
 Map DeviceMetal to MtlVector{Ti} index array type.
 Used by MatrixPlan to store symbolic index arrays on GPU.
 """
-HPCLinearAlgebra._index_array_type(::HPCLinearAlgebra.DeviceMetal, ::Type{Ti}) where Ti = MtlVector{Ti}
+HPCSparseArrays._index_array_type(::HPCSparseArrays.DeviceMetal, ::Type{Ti}) where Ti = MtlVector{Ti}
 
 """
-    _to_target_device(v::Vector{Ti}, ::HPCLinearAlgebra.DeviceMetal) where Ti
+    _to_target_device(v::Vector{Ti}, ::HPCSparseArrays.DeviceMetal) where Ti
 
 Convert a CPU index vector to Metal GPU.
 Used by HPCSparseMatrix constructors to create GPU structure arrays.
 """
-HPCLinearAlgebra._to_target_device(v::Vector{Ti}, ::HPCLinearAlgebra.DeviceMetal) where Ti = MtlVector(v)
+HPCSparseArrays._to_target_device(v::Vector{Ti}, ::HPCSparseArrays.DeviceMetal) where Ti = MtlVector(v)
 
 # ============================================================================
 # GPU map_rows_gpu implementation via Metal kernels
@@ -128,7 +128,7 @@ GPU-accelerated row-wise map for Metal arrays.
 Each thread processes one row, applying `f` to the corresponding rows of all input matrices.
 Returns a Metal matrix with the same number of rows.
 """
-function HPCLinearAlgebra._map_rows_gpu_kernel(f, arg1::MtlMatrix{T}, rest::MtlMatrix...) where T
+function HPCSparseArrays._map_rows_gpu_kernel(f, arg1::MtlMatrix{T}, rest::MtlMatrix...) where T
     n = size(arg1, 1)
 
     # Get output size by evaluating f on first row (copy to CPU to avoid scalar indexing)

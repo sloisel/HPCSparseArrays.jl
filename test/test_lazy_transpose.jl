@@ -14,9 +14,21 @@ using Test
 using MPI
 using SparseArrays
 using LinearAlgebra: Transpose, norm, opnorm
-using HPCLinearAlgebra
 
 MPI.Init()
+
+# Check CUDA availability BEFORE loading HPCSparseArrays
+const CUDA_AVAILABLE = try
+    using CUDA
+    CUDA.device!(MPI.Comm_rank(MPI.COMM_WORLD) % length(CUDA.devices()))
+    using NCCL_jll
+    using CUDSS_jll
+    CUDA.functional()
+catch e
+    false
+end
+
+using HPCSparseArrays
 
 include(joinpath(@__DIR__, "mpi_test_harness.jl"))
 using .MPITestHarness: QuietTestSet
@@ -57,8 +69,8 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     result_lazy = transpose(Cdist) * transpose(Ddist)
 
     # Materialize the result (internal API)
-    plan = HPCLinearAlgebra.TransposePlan(result_lazy.parent)
-    result_dist = assert_type(HPCLinearAlgebra.execute_plan!(plan, result_lazy.parent), ST)
+    plan = HPCSparseArrays.TransposePlan(result_lazy.parent)
+    result_dist = assert_type(HPCSparseArrays.execute_plan!(plan, result_lazy.parent), ST)
 
     # Reference: transpose(D * C)
     ref = sparse(transpose(D * C))
@@ -142,8 +154,8 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
         @test Aadj isa Transpose
 
         # Materialize and compare (internal API)
-        plan = HPCLinearAlgebra.TransposePlan(Aadj.parent)
-        result_dist = assert_type(HPCLinearAlgebra.execute_plan!(plan, Aadj.parent), ST)
+        plan = HPCSparseArrays.TransposePlan(Aadj.parent)
+        result_dist = assert_type(HPCSparseArrays.execute_plan!(plan, Aadj.parent), ST)
         ref = sparse(A')
         ref_dist = assert_type(HPCSparseMatrix(ref, backend), ST)
 
@@ -201,8 +213,8 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     # Test a * transpose(A) (internal API)
     At = transpose(Adist)
     result_lazy = a * At
-    plan = HPCLinearAlgebra.TransposePlan(result_lazy.parent)
-    result_dist = assert_type(HPCLinearAlgebra.execute_plan!(plan, result_lazy.parent), ST)
+    plan = HPCSparseArrays.TransposePlan(result_lazy.parent)
+    result_dist = assert_type(HPCSparseArrays.execute_plan!(plan, result_lazy.parent), ST)
     ref = sparse(transpose(a * A))
     ref_dist = assert_type(HPCSparseMatrix(ref, backend), ST)
     result_dist_cpu = to_backend(result_dist, cpu_backend)
@@ -212,7 +224,7 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
 
     # Test transpose(A) * a
     result_lazy = At * a
-    result_dist = assert_type(HPCLinearAlgebra.execute_plan!(plan, result_lazy.parent), ST)
+    result_dist = assert_type(HPCSparseArrays.execute_plan!(plan, result_lazy.parent), ST)
     result_dist_cpu = to_backend(result_dist, cpu_backend)
     err4 = assert_uniform(norm(result_dist_cpu - ref_dist_cpu, Inf), name="scalar_mul_Ata_err")
     @test err4 < TOL

@@ -2,7 +2,7 @@
 # Block Matrix Primitives - cat, hcat, vcat for distributed matrices
 # ============================================================================
 
-# Note: uniform_partition is defined in HPCLinearAlgebra.jl (included before this file)
+# Note: uniform_partition is defined in HPCSparseArrays.jl (included before this file)
 
 # ============================================================================
 # Core cat implementation for HPCSparseMatrix

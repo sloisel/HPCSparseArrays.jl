@@ -17,7 +17,7 @@ using Dates
 
 # Add the package
 push!(LOAD_PATH, joinpath(@__DIR__, ".."))
-using HPCLinearAlgebra
+using HPCSparseArrays
 
 const comm = MPI.COMM_WORLD
 const rank = MPI.Comm_rank(comm)

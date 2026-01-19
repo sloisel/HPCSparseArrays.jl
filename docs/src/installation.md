@@ -4,7 +4,7 @@
 
 ### MPI
 
-HPCLinearAlgebra.jl requires an MPI implementation. When you install the package, Julia automatically provides `MPI.jl` with `MPI_jll` (bundled MPI implementation).
+HPCSparseArrays.jl requires an MPI implementation. When you install the package, Julia automatically provides `MPI.jl` with `MPI_jll` (bundled MPI implementation).
 
 For HPC environments, you may want to configure MPI.jl to use your system's MPI installation. See the [MPI.jl documentation](https://juliaparallel.org/MPI.jl/stable/configuration/) for details.
 
@@ -18,14 +18,14 @@ The package uses MUMPS for sparse direct solves. MUMPS is typically available th
 
 ```julia
 using Pkg
-Pkg.add(url="https://github.com/sloisel/HPCLinearAlgebra.jl")
+Pkg.add(url="https://github.com/sloisel/HPCSparseArrays.jl")
 ```
 
 ### Development Installation
 
 ```bash
-git clone https://github.com/sloisel/HPCLinearAlgebra.jl
-cd HPCLinearAlgebra.jl
+git clone https://github.com/sloisel/HPCSparseArrays.jl
+cd HPCSparseArrays.jl
 julia --project -e 'using Pkg; Pkg.instantiate()'
 ```
 
@@ -34,7 +34,7 @@ julia --project -e 'using Pkg; Pkg.instantiate()'
 Test your installation:
 
 ```bash
-cd HPCLinearAlgebra.jl
+cd HPCSparseArrays.jl
 julia --project -e 'using Pkg; Pkg.test()'
 ```
 
@@ -43,12 +43,12 @@ The test harness automatically spawns MPI processes for each test file.
 ## Initialization Pattern
 
 !!! tip "Initialization Pattern"
-    Initialize MPI before using HPCLinearAlgebra:
+    Initialize MPI before using HPCSparseArrays:
 
 ```julia
 using MPI
 MPI.Init()
-using HPCLinearAlgebra
+using HPCSparseArrays
 # Now you can use the package with BACKEND_CPU_MPI
 ```
 
@@ -59,7 +59,7 @@ Create a script file (e.g., `my_program.jl`):
 ```julia
 using MPI
 MPI.Init()
-using HPCLinearAlgebra
+using HPCSparseArrays
 using SparseArrays
 
 # Use the default MPI backend

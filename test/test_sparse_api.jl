@@ -13,7 +13,18 @@ end
 using MPI
 MPI.Init()
 
-using HPCLinearAlgebra
+# Check CUDA availability BEFORE loading HPCSparseArrays
+const CUDA_AVAILABLE = try
+    using CUDA
+    CUDA.device!(MPI.Comm_rank(MPI.COMM_WORLD) % length(CUDA.devices()))
+    using NCCL_jll
+    using CUDSS_jll
+    CUDA.functional()
+catch e
+    false
+end
+
+using HPCSparseArrays
 using SparseArrays
 using LinearAlgebra
 using Test
@@ -345,8 +356,8 @@ for (T, get_backend, backend_name) in TestUtils.ALL_CONFIGS
     w_custom_local_start = custom_partition[rank+1]
     w_custom_local_end = custom_partition[rank+2] - 1
     w_local_part_cpu = w_global_part[w_custom_local_start:w_custom_local_end]
-    w_local_part = HPCLinearAlgebra._convert_array(w_local_part_cpu, backend.device)
-    w_hash = HPCLinearAlgebra.compute_partition_hash(custom_partition)
+    w_local_part = HPCSparseArrays._convert_array(w_local_part_cpu, backend.device)
+    w_hash = HPCSparseArrays.compute_partition_hash(custom_partition)
     # Create HPCVector with custom partition
     w_part = HPCVector(w_hash, custom_partition, w_local_part, backend)
 

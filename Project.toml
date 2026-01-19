@@ -1,5 +1,5 @@
 authors = ["S. Loisel"]
-name = "HPCLinearAlgebra"
+name = "HPCSparseArrays"
 uuid = "537374f1-5608-4525-82fb-641dce542540"
 version = "0.1.0"
 
@@ -31,8 +31,8 @@ SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
 StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
 
 [extensions]
-HPCLinearAlgebraCUDAExt = ["CUDA", "NCCL_jll", "CUDSS_jll"]
-HPCLinearAlgebraMetalExt = "Metal"
+HPCSparseArraysCUDAExt = ["CUDA", "NCCL_jll", "CUDSS_jll"]
+HPCSparseArraysMetalExt = "Metal"
 
 [extras]
 BenchmarkTools = "6e4b80f9-dd63-53aa-95a3-0cdb28fa8baf"

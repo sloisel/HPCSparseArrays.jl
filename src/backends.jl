@@ -101,7 +101,7 @@ Concrete types are defined in the CUDA extension.
 abstract type AbstractSolverCuDSS <: AbstractSolver end
 
 # Note: SolverCuDSS_Single, SolverCuDSS_MG, SolverCuDSS_MGMN are defined
-# in ext/HPCLinearAlgebraCUDAExt.jl since they depend on CUDA types.
+# in ext/HPCSparseArraysCUDAExt.jl since they depend on CUDA types.
 
 # ============================================================================
 # HPCBackend Type
@@ -265,6 +265,8 @@ _julia_op_to_mpi(::typeof(+)) = MPI.SUM
 _julia_op_to_mpi(::typeof(max)) = MPI.MAX
 _julia_op_to_mpi(::typeof(min)) = MPI.MIN
 _julia_op_to_mpi(::typeof(*)) = MPI.PROD
+_julia_op_to_mpi(::typeof(&)) = MPI.LAND  # Logical AND (for boolean reductions)
+_julia_op_to_mpi(::typeof(|)) = MPI.LOR   # Logical OR
 _julia_op_to_mpi(op::MPI.Op) = op  # Already an MPI op
 
 """

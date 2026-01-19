@@ -3,7 +3,7 @@ using MPI
 
 # Force precompilation of test dependencies
 try
-    @eval using HPCLinearAlgebra
+    @eval using HPCSparseArrays
     @eval using SparseArrays
     @eval using LinearAlgebra
     println("Precompilation complete for test environment")
@@ -33,7 +33,7 @@ function run_mpi_test(test_file::AbstractString; nprocs::Integer=2, nthreads::In
     @test ok == expect_success
 end
 
-@testset "HPCLinearAlgebra Tests" begin
+@testset "HPCSparseArrays Tests" begin
     @testset "MPI Matrix Multiplication" begin
         run_mpi_test(joinpath(@__DIR__, "test_matrix_multiplication.jl"); nprocs=2, expect_success=true)
     end

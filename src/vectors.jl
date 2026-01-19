@@ -239,9 +239,9 @@ mutable struct VectorPlan{T,Ti<:Integer,AV<:AbstractVector{T}}
     local_dst_indices::Vector{Ti}     # Element indices use Ti
     gathered::AV                       # Same type as input vector
     gathered_cpu::Vector{T}            # CPU staging buffer
-    # Cached partition hash for result vector (computed lazily on first use)
-    result_partition_hash::OptionalBlake3Hash
-    result_partition::Union{Nothing, Vector{Int}}  # Partition boundaries (always Int)
+    # Partition for result vector (computed at plan creation)
+    result_partition_hash::Blake3Hash
+    result_partition::Vector{Int}      # Partition boundaries (always Int)
     # Cached GPU buffers for SpMV (lazily allocated on first use)
     cached_gathered_target::Union{Nothing, AbstractVector{T}}  # Gathered in matrix backend
     cached_y_local::Union{Nothing, AbstractVector{T}}          # Result buffer
@@ -369,11 +369,15 @@ function VectorPlan(target_partition::Vector{Int}, source::HPCVector{T,B}) where
     # Use similar() to create same type, or adapt for GPU arrays
     gathered = similar(source.v, n_gathered)
 
+    # Compute result partition hash eagerly
+    result_partition = copy(target_partition)
+    result_partition_hash = compute_partition_hash(result_partition)
+
     return VectorPlan{T,Ti,AV}(
         send_rank_ids, send_indices_final, send_bufs, send_reqs,
         recv_rank_ids, recv_bufs, recv_reqs, recv_perm_final,
         local_src_indices, local_dst_indices, gathered, gathered_cpu,
-        nothing, nothing,  # result_partition_hash, result_partition (computed lazily)
+        result_partition_hash, result_partition,
         nothing, nothing,  # cached_gathered_target, cached_y_local (for SpMV)
         nothing, nothing   # cached_local_src_gpu, cached_local_dst_gpu (for GPU gather)
     )
